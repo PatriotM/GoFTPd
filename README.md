@@ -195,7 +195,7 @@ Edit `etc/config.yml` before starting (set sitename, IPs, roots, etc).
 
 ## License
 
-MIT
+WTF
 
 ## Credits
 
