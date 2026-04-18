@@ -414,7 +414,7 @@ func (s *Slave) handleConnect(ac *protocol.AsyncCommand) interface{} {
 	if len(ac.Args) < 1 {
 		return &protocol.AsyncResponseError{Index: ac.Index, Message: "connect: missing address"}
 	}
-	// Args[0] = "ip:port"
+	// Args[0] = "ip:port", Args[1] = "encrypted", Args[2] = "sslClientMode"
 	address := ac.Args[0]
 
 	conn, err := net.DialTimeout("tcp", address, 10*time.Second)
@@ -422,9 +422,46 @@ func (s *Slave) handleConnect(ac *protocol.AsyncCommand) interface{} {
 		return &protocol.AsyncResponseError{Index: ac.Index, Message: fmt.Sprintf("connect failed: %v", err)}
 	}
 
+	// TLS wrap if encrypted flag is set (for FXP)
+	// Args[2] = sslClientHandshake: "true" = slave acts as TLS CLIENT, "false" = slave acts as TLS SERVER
+	var finalConn net.Conn = conn
+	if len(ac.Args) > 1 && ac.Args[1] == "true" {
+		sslClientMode := len(ac.Args) > 2 && ac.Args[2] == "true"
+		if sslClientMode {
+			// Slave acts as TLS CLIENT (normal outbound)
+			tlsConfig := &tls.Config{
+				InsecureSkipVerify: true,
+			}
+			tlsConn := tls.Client(conn, tlsConfig)
+			if err := tlsConn.Handshake(); err != nil {
+				conn.Close()
+				return &protocol.AsyncResponseError{Index: ac.Index, Message: fmt.Sprintf("TLS client handshake failed: %v", err)}
+			}
+			finalConn = tlsConn
+			log.Printf("[Slave] TLS client connect to %s successful", address)
+		} else {
+			// Slave acts as TLS SERVER (CPSV FXP — other site is TLS client)
+			cert, err := tls.LoadX509KeyPair(s.tlsCert, s.tlsKey)
+			if err != nil {
+				conn.Close()
+				return &protocol.AsyncResponseError{Index: ac.Index, Message: fmt.Sprintf("load TLS cert: %v", err)}
+			}
+			tlsConfig := &tls.Config{
+				Certificates: []tls.Certificate{cert},
+			}
+			tlsConn := tls.Server(conn, tlsConfig)
+			if err := tlsConn.Handshake(); err != nil {
+				conn.Close()
+				return &protocol.AsyncResponseError{Index: ac.Index, Message: fmt.Sprintf("TLS server handshake failed: %v", err)}
+			}
+			finalConn = tlsConn
+			log.Printf("[Slave] TLS server connect to %s successful", address)
+		}
+	}
+
 	idx := atomic.AddInt32(&s.nextTransferIdx, 1)
 	port := conn.RemoteAddr().(*net.TCPAddr).Port
-	t := NewTransfer(nil, conn, idx, s)
+	t := NewTransfer(nil, finalConn, idx, s)
 	s.transfers.Store(idx, t)
 
 	return &protocol.AsyncResponseTransfer{

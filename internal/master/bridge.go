@@ -8,6 +8,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"goftpd/internal/core"
@@ -70,10 +72,13 @@ func (b *Bridge) ListDir(dirPath string) []core.MasterFileEntry {
 // Here we bridge through the master since the client already connected to us.
 // A PRET-based optimization (redirect client to slave) can be added later.
 func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group string) (int64, uint32, error) {
-	slave := b.sm.SelectSlaveForUpload()
+	slave := b.sm.SelectSlaveForUpload(filePath)
 	if slave == nil {
 		return 0, 0, fmt.Errorf("no available slave")
 	}
+
+	slave.IncActiveTransfers()
+	defer slave.DecActiveTransfers()
 
 	// Tell slave to listen
 	listenIdx, err := IssueListen(slave, false, false)
@@ -256,7 +261,7 @@ func (b *Bridge) MakeDir(dirPath, owner, group string) {
 	// This ensures empty directories survive the 'remerge' process on restart.
 	slave := b.sm.SelectSlaveForDownload(filepath.Dir(dirPath))
 	if slave == nil {
-		slave = b.sm.SelectSlaveForUpload()
+		slave = b.sm.SelectSlaveForUpload(dirPath)
 	}
 
 	if slave != nil {
@@ -339,7 +344,7 @@ func (b *Bridge) GetSFVInfo(sfvPath string) ([]core.SFVEntryInfo, error) {
 func (b *Bridge) WriteFile(filePath string, content []byte) error {
 	slave := b.sm.SelectSlaveForDownload(filePath)
 	if slave == nil {
-		slave = b.sm.SelectSlaveForUpload()
+		slave = b.sm.SelectSlaveForUpload(filePath)
 	}
 	if slave == nil {
 		return fmt.Errorf("no available slave")
@@ -505,12 +510,13 @@ func (b *Bridge) GetVFSRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFS
 	coreUsers := make([]core.VFSRaceUser, len(users))
 	for i, u := range users {
 		coreUsers[i] = core.VFSRaceUser{
-			Name:    u.Name,
-			Group:   u.Group,
-			Files:   u.Files,
-			Bytes:   u.Bytes,
-			Speed:   u.Speed,
-			Percent: u.Percent,
+			Name:      u.Name,
+			Group:     u.Group,
+			Files:     u.Files,
+			Bytes:     u.Bytes,
+			Speed:     u.Speed,
+			PeakSpeed: u.PeakSpeed,
+			Percent:   u.Percent,
 		}
 	}
 	coreGroups := make([]core.VFSRaceGroup, len(groups))
@@ -534,4 +540,231 @@ func (b *Bridge) GetSFVData(dirPath string) map[string]uint32 {
 		return nil
 	}
 	return meta.SFVEntries
+}
+
+// SlaveListenForPassthrough asks a slave to open a listener for direct client connection.
+// uploadPath may be empty if the eventual upload path is not yet known (pure PASV);
+// pass it when possible so section-affinity routing picks the right slave.
+// Returns the slave's public IP, the port it's listening on, and the transfer index.
+func (b *Bridge) SlaveListenForPassthrough(uploadPath string) (string, int, int32, string, error) {
+	slave := b.sm.SelectSlaveForUpload(uploadPath)
+	if slave == nil {
+		return "", 0, 0, "", fmt.Errorf("no available slave")
+	}
+
+	listenIdx, err := IssueListen(slave, false, false)
+	if err != nil {
+		return "", 0, 0, "", fmt.Errorf("issue listen to %s: %w", slave.Name(), err)
+	}
+
+	resp, err := slave.FetchResponse(listenIdx, 60*time.Second)
+	if err != nil {
+		return "", 0, 0, "", fmt.Errorf("slave %s listen failed: %w", slave.Name(), err)
+	}
+
+	transferResp, ok := resp.(*protocol.AsyncResponseTransfer)
+	if !ok {
+		return "", 0, 0, "", fmt.Errorf("unexpected response from slave")
+	}
+
+	return slave.GetPASVIP(), transferResp.Info.Port, transferResp.Info.TransferIndex, slave.Name(), nil
+}
+
+// SlaveReceivePassthrough tells a slave to receive a file (client already connected directly).
+// Waits for the slave to finish and returns size, checksum, duration.
+func (b *Bridge) SlaveReceivePassthrough(filePath string, transferIdx int32, slaveName string, owner, group string) (int64, uint32, int64, error) {
+	slave := b.sm.GetSlave(slaveName)
+	if slave == nil {
+		return 0, 0, 0, fmt.Errorf("slave %s not found", slaveName)
+	}
+
+	slave.IncActiveTransfers()
+	defer slave.DecActiveTransfers()
+
+	recvIdx, err := IssueReceive(slave, filePath, 'I', 0, "master", transferIdx, 0, 0)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("issue receive: %w", err)
+	}
+
+	// Wait for receive ACK
+	_, err = slave.FetchResponse(recvIdx, 60*time.Second)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("receive ack: %w", err)
+	}
+
+	// Wait for transfer to complete — poll the RemoteTransfer status
+	rt, ok := slave.GetTransfer(transferIdx)
+	if !ok {
+		// Transfer might have already completed, check for a short time
+		for i := 0; i < 600; i++ { // 5 minutes max
+			time.Sleep(500 * time.Millisecond)
+			rt, ok = slave.GetTransfer(transferIdx)
+			if ok && rt.IsFinished() {
+				break
+			}
+			if !ok {
+				// Transfer was deleted because it finished — need status from somewhere else
+				break
+			}
+		}
+	}
+
+	if rt != nil {
+		// Poll until finished
+		for !rt.IsFinished() {
+			time.Sleep(100 * time.Millisecond)
+		}
+		status := rt.GetStatus()
+
+		// Add to VFS
+		b.sm.GetVFS().AddFile(filePath, VFSFile{
+			Path:         filePath,
+			Size:         status.Transferred,
+			IsDir:        false,
+			LastModified: time.Now().Unix(),
+			SlaveName:    slaveName,
+			Owner:        owner,
+			Group:        group,
+			XferTime:     status.Elapsed,
+			Checksum:     status.Checksum,
+		})
+
+		log.Printf("[Passthrough] Upload %s on %s (%d bytes, %dms, CRC=%08X)",
+			filePath, slaveName, status.Transferred, status.Elapsed, status.Checksum)
+
+		if b.raceDB != nil {
+			if err := b.raceDB.RecordUpload(filePath, owner, group, status.Transferred, status.Elapsed, status.Checksum); err != nil {
+				log.Printf("[Passthrough] RaceDB record failed: %v", err)
+			}
+		}
+
+		return status.Transferred, status.Checksum, status.Elapsed, nil
+	}
+
+	return 0, 0, 0, fmt.Errorf("transfer status not available")
+}
+
+// SlaveSendPassthrough tells a slave to send a file (client already connected directly).
+func (b *Bridge) SlaveSendPassthrough(filePath string, transferIdx int32, slaveName string) error {
+	slave := b.sm.GetSlave(slaveName)
+	if slave == nil {
+		return fmt.Errorf("slave %s not found", slaveName)
+	}
+
+	sendIdx, err := IssueSend(slave, filePath, 'I', 0, "master", transferIdx, 0, 0)
+	if err != nil {
+		return fmt.Errorf("issue send: %w", err)
+	}
+
+	_, err = slave.FetchResponse(sendIdx, 60*time.Second)
+	if err != nil {
+		return fmt.Errorf("send ack: %w", err)
+	}
+
+	// Wait for transfer to complete
+	rt, ok := slave.GetTransfer(transferIdx)
+	if ok {
+		for !rt.IsFinished() {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+
+	return nil
+}
+
+// SlaveConnectAndReceive tells a slave to connect out to a remote address (PORT mode passthrough)
+// and receive a file. The slave connects directly to the remote site — master doesn't touch the data.
+func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group string) (int64, uint32, int64, error) {
+	slave := b.sm.SelectSlaveForUpload(filePath)
+	if slave == nil {
+		return 0, 0, 0, fmt.Errorf("no available slave")
+	}
+
+	slave.IncActiveTransfers()
+	defer slave.DecActiveTransfers()
+
+	// Parse remote address
+	parts := strings.SplitN(remoteAddr, ":", 2)
+	if len(parts) != 2 {
+		return 0, 0, 0, fmt.Errorf("invalid remote address: %s", remoteAddr)
+	}
+	remoteIP := parts[0]
+	remotePort, _ := strconv.Atoi(parts[1])
+
+	// Tell slave to connect out to the remote address (with TLS for FXP)
+	// sslClientHandshake=false: slave acts as TLS SERVER (other site did CPSV, is TLS client)
+	connectIdx, err := IssueConnect(slave, remoteIP, remotePort, true, false)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("issue connect to %s: %w", slave.Name(), err)
+	}
+
+	resp, err := slave.FetchResponse(connectIdx, 60*time.Second)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("slave %s connect failed: %w", slave.Name(), err)
+	}
+
+	transferResp, ok := resp.(*protocol.AsyncResponseTransfer)
+	if !ok {
+		return 0, 0, 0, fmt.Errorf("unexpected response from slave")
+	}
+
+	// Tell slave to receive the file on this connection
+	recvIdx, err := IssueReceive(slave, filePath, 'I', 0, remoteAddr,
+		transferResp.Info.TransferIndex, 0, 0)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("issue receive: %w", err)
+	}
+
+	// Wait for receive ACK
+	_, err = slave.FetchResponse(recvIdx, 60*time.Second)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("receive ack: %w", err)
+	}
+
+	// Wait for transfer to complete
+	rt, ok := slave.GetTransfer(transferResp.Info.TransferIndex)
+	if !ok {
+		for i := 0; i < 600; i++ {
+			time.Sleep(500 * time.Millisecond)
+			rt, ok = slave.GetTransfer(transferResp.Info.TransferIndex)
+			if ok && rt.IsFinished() {
+				break
+			}
+			if !ok {
+				break
+			}
+		}
+	}
+
+	if rt != nil {
+		for !rt.IsFinished() {
+			time.Sleep(100 * time.Millisecond)
+		}
+		status := rt.GetStatus()
+
+		b.sm.GetVFS().AddFile(filePath, VFSFile{
+			Path:         filePath,
+			Size:         status.Transferred,
+			IsDir:        false,
+			LastModified: time.Now().Unix(),
+			SlaveName:    slave.Name(),
+			Owner:        owner,
+			Group:        group,
+			XferTime:     status.Elapsed,
+			Checksum:     status.Checksum,
+		})
+
+		log.Printf("[Passthrough-PORT] Upload %s on %s (%d bytes, %dms, CRC=%08X)",
+			filePath, slave.Name(), status.Transferred, status.Elapsed, status.Checksum)
+
+		if b.raceDB != nil {
+			if err := b.raceDB.RecordUpload(filePath, owner, group, status.Transferred, status.Elapsed, status.Checksum); err != nil {
+				log.Printf("[Passthrough-PORT] RaceDB record failed: %v", err)
+			}
+		}
+
+		return status.Transferred, status.Checksum, status.Elapsed, nil
+	}
+
+	return 0, 0, 0, fmt.Errorf("transfer status not available")
 }

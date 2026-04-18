@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"strings"
@@ -93,8 +94,62 @@ func text(w io.Writer, s string, width int) {
 	w.Write(buf)
 }
 
-func RenderRaceStats(w io.Writer, users []VFSRaceUser, groups []VFSRaceGroup, totalBytes int64, present, total int, version string) {
+func HasRaceStats(users []VFSRaceUser, groups []VFSRaceGroup, totalBytes int64, present, total int) bool {
+	if len(users) > 0 || len(groups) > 0 {
+		return true
+	}
+	if totalBytes > 0 {
+		return true
+	}
+	if present > 0 || total > 0 {
+		return true
+	}
+	return false
+}
 
+func RenderCompactRaceStats(w io.Writer, users []VFSRaceUser, groups []VFSRaceGroup, totalBytes int64, present, total int) {
+	if present < 0 {
+		present = 0
+	}
+	if total < 0 {
+		total = 0
+	}
+	if total > 0 && present > total {
+		present = total
+	}
+
+	totalPct := 0
+	if total > 0 {
+		totalPct = pct((present * 100) / total)
+	}
+
+	totalSpeed := 0.0
+	for _, u := range users {
+		totalSpeed += u.Speed
+	}
+	if totalSpeed == 0 {
+		for _, g := range groups {
+			totalSpeed += g.Speed
+		}
+	}
+
+	leader := "-"
+	if len(users) > 0 {
+		leader = clean(users[0].Name, 20)
+	}
+
+	fmt.Fprintf(w, ".-== GoFTPd Race ==------------------------------.\r\n")
+	fmt.Fprintf(w, "| #1 %-20s %4dF %7.1fM %11s %3d%% |\r\n",
+		leader,
+		present,
+		float64(totalBytes)/(1024*1024),
+		speed(totalSpeed),
+		totalPct,
+	)
+	fmt.Fprintf(w, "`------------------------------[ %d/%d ]--'\r\n", present, total)
+}
+
+func RenderRaceStats(w io.Writer, users []VFSRaceUser, groups []VFSRaceGroup, totalBytes int64, present, total int, version string) {
 	if present < 0 {
 		present = 0
 	}
@@ -122,14 +177,12 @@ func RenderRaceStats(w io.Writer, users []VFSRaceUser, groups []VFSRaceGroup, to
 	raw(w, line(cpTL, cpHZ, cpTR, width))
 	text(w, fmt.Sprintf(" GoFTPd %s :: Race Stats ", version), width)
 	text(w, "", width)
-
-text(w, "   ____       _____ _____ ____     _  ", width)
-text(w, "  / ___| ___ |  ___|_   _|  _ \\ __| | ", width)
-text(w, " | |  _ / _ \\| |_    | | | |_) / _` | ", width)
-text(w, " | |_| | (_) |  _|   | | |  __/ (_| | ", width)
-text(w, "  \\____|\\___/|_|     |_| |_|   \\__,_| ", width)
-text(w, "", width)                
-
+	text(w, "   ____       _____ _____ ____     _  ", width)
+	text(w, "  / ___| ___ |  ___|_   _|  _ \\ __| | ", width)
+	text(w, " | |  _ / _ \\| |_    | | | |_) / _` | ", width)
+	text(w, " | |_| | (_) |  _|   | | |  __/ (_| | ", width)
+	text(w, "  \\____|\\___/|_|     |_| |_|   \\__,_| ", width)
+	text(w, "", width)
 
 	raw(w, sep(32, 7, 8, 11, 8))
 	row(w, "Users", "Files", "Size", "Speed", "%")
@@ -185,4 +238,19 @@ text(w, "", width)
 	)
 
 	raw(w, line(cpBL, cpHZ, cpBR, width))
+}
+
+func RenderFTPReplyBlock(w io.Writer, code int, finalLine string, render func(io.Writer)) {
+	var buf bytes.Buffer
+	render(&buf)
+	text := strings.ReplaceAll(buf.String(), "\r\n", "\n")
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	for _, line := range lines {
+		if line == "" {
+			fmt.Fprintf(w, "%d-\r\n", code)
+			continue
+		}
+		fmt.Fprintf(w, "%d-%s\r\n", code, line)
+	}
+	fmt.Fprintf(w, "%d %s\r\n", code, finalLine)
 }

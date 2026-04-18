@@ -313,6 +313,7 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 	defer userRows.Close()
 
 	var users []core.VFSRaceUser
+	var userDurations []int64
 	for userRows.Next() {
 		var u core.VFSRaceUser
 		var durationMs int64
@@ -320,8 +321,36 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 			log.Printf("[RaceDB] user row scan failed for %s: %v", dirPath, err)
 			return nil, nil, 0, 0, 0
 		}
+		users = append(users, u)
+		userDurations = append(userDurations, durationMs)
+	}
+	if err := userRows.Err(); err != nil {
+		log.Printf("[RaceDB] user rows iteration failed for %s: %v", dirPath, err)
+		return nil, nil, 0, 0, 0
+	}
+	_ = userRows.Close()
+
+	for i := range users {
+		u := &users[i]
+		durationMs := userDurations[i]
 		if durationMs > 0 {
 			u.Speed = float64(u.Bytes) / (float64(durationMs) / 1000.0)
+		}
+		var peakBytes, peakMs sql.NullInt64
+		err := r.db.QueryRow(`
+            SELECT size_bytes, duration_ms FROM release_files
+            WHERE release_id = (SELECT id FROM releases WHERE path = ?)
+              AND uploader = ?
+              AND is_present = 1 AND is_expected = 1
+              AND duration_ms > 0
+            ORDER BY (CAST(size_bytes AS REAL) / CAST(duration_ms AS REAL)) DESC
+            LIMIT 1
+        `, dirPath, u.Name).Scan(&peakBytes, &peakMs)
+		if err != nil && err != sql.ErrNoRows {
+			log.Printf("[RaceDB] peak query failed for %s user=%s: %v", dirPath, u.Name, err)
+		}
+		if peakBytes.Valid && peakMs.Valid && peakMs.Int64 > 0 {
+			u.PeakSpeed = float64(peakBytes.Int64) / (float64(peakMs.Int64) / 1000.0)
 		}
 		if total > 0 {
 			u.Percent = (u.Files * 100) / total
@@ -329,7 +358,6 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 				u.Percent = 100
 			}
 		}
-		users = append(users, u)
 	}
 
 	groupRows, err := r.db.Query(`

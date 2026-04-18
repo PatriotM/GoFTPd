@@ -38,6 +38,7 @@ type RemoteSlave struct {
 
 	// Transfers
 	transfers    sync.Map // TransferIndex (int32) -> *RemoteTransfer
+	activeCount  atomic.Int32 // number of currently-active uploads (for load balancing)
 
 	// Timing
 	lastResponseReceived atomic.Int64
@@ -80,6 +81,16 @@ func (rs *RemoteSlave) Name() string   { return rs.name }
 func (rs *RemoteSlave) IsOnline() bool { return rs.online.Load() }
 func (rs *RemoteSlave) IsAvailable() bool { return rs.available.Load() }
 func (rs *RemoteSlave) IsRemerging() bool { return rs.remerging.Load() }
+
+// ActiveTransfers returns the current number of in-flight uploads on this slave.
+// Used by the load balancer in SelectSlaveForUpload.
+func (rs *RemoteSlave) ActiveTransfers() int32 { return rs.activeCount.Load() }
+func (rs *RemoteSlave) IncActiveTransfers()    { rs.activeCount.Add(1) }
+func (rs *RemoteSlave) DecActiveTransfers() {
+	if rs.activeCount.Add(-1) < 0 {
+		rs.activeCount.Store(0)
+	}
+}
 
 func (rs *RemoteSlave) GetDiskStatus() protocol.DiskStatus {
 	rs.diskMu.RLock()

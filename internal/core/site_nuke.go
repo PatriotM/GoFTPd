@@ -99,9 +99,9 @@ func (s *Session) HandleSiteNuke(args []string) bool {
 		}
 
 		// Update NUKE stats
-		u.NukeStat.Meta = now              // Last nuke timestamp
-		u.NukeStat.Files += 1              // Times nuked
-		u.NukeStat.Bytes += bytes          // Total bytes nuked
+		u.NukeStat.Meta = now     // Last nuke timestamp
+		u.NukeStat.Files += 1     // Times nuked
+		u.NukeStat.Bytes += bytes // Total bytes nuked
 
 		// Save user
 		if err := u.SaveUser(); err == nil && s.Config.Debug {
@@ -121,6 +121,11 @@ func (s *Session) HandleSiteNuke(args []string) bool {
 		return false
 	}
 
+	s.emitEvent(EventNuke, path.Join(s.CurrentDir, target), dirName, 0, 0, map[string]string{
+		"multiplier": strconv.Itoa(multiplier),
+		"reason":     reason,
+		"users":      strconv.Itoa(len(uploaderBytes)),
+	})
 	fmt.Fprintf(s.Conn, "200 Nuked: x%d multiplier, %d MB, %d users affected, %d credits removed. Reason: %s\r\n",
 		multiplier, len(uploaderBytes), len(uploaderBytes), totalNuked, reason)
 	return true
@@ -208,6 +213,9 @@ func (s *Session) HandleSiteUnnuke(args []string) bool {
 		return false
 	}
 
+	s.emitEvent(EventUnnuke, newPath, originalName, 0, 0, map[string]string{
+		"users": strconv.Itoa(len(uploaderBytes)),
+	})
 	fmt.Fprintf(s.Conn, "200 Unnuked: %d MB, %d users affected, %d credits restored.\r\n",
 		len(uploaderBytes), len(uploaderBytes), totalRestored)
 	return true

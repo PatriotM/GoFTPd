@@ -2,6 +2,7 @@ package irc
 
 import (
 	"crypto/cipher"
+	"crypto/rand"
 	"crypto/sha1"
 	"encoding/base64"
 	"fmt"
@@ -104,25 +105,32 @@ func (b *BlowfishEncryptor) decryptECB(ciphertext string) (string, error) {
 	return string(data), nil
 }
 
-// encryptCBC encrypts in CBC mode
+// encryptCBC encrypts in CBC mode (FiSH-compatible: random IV prepended, zero-padded)
 func (b *BlowfishEncryptor) encryptCBC(data []byte) string {
-	// Pad to block size
 	blockSize := b.cipher.BlockSize()
-	padLen := blockSize - (len(data) % blockSize)
-	for i := 0; i < padLen; i++ {
-		data = append(data, byte(padLen))
+	// FiSH/Mircryption use zero-padding for CBC
+	if rem := len(data) % blockSize; rem != 0 {
+		padLen := blockSize - rem
+		for i := 0; i < padLen; i++ {
+			data = append(data, 0)
+		}
 	}
-	
-	// Generate IV from plaintext hash (FiSH compatible)
-	hash := sha1.Sum(data)
-	iv := hash[:blockSize]
-	
-	// Create CBC encrypter
+
+	// Generate a random IV and prepend it to the ciphertext
+	iv := make([]byte, blockSize)
+	if _, err := rand.Read(iv); err != nil {
+		// Fallback to sha1 of plaintext if rand fails
+		h := sha1.Sum(data)
+		copy(iv, h[:blockSize])
+	}
+
 	mode := cipher.NewCBCEncrypter(b.cipher, iv)
 	mode.CryptBlocks(data, data)
-	
-	// Base64 encode
-	return base64.StdEncoding.EncodeToString(data)
+
+	out := make([]byte, 0, len(iv)+len(data))
+	out = append(out, iv...)
+	out = append(out, data...)
+	return base64.StdEncoding.EncodeToString(out)
 }
 
 // decryptCBC decrypts in CBC mode
