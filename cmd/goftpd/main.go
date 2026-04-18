@@ -80,6 +80,23 @@ func main() {
 			log.Fatalf("SlaveManager failed: %v", err)
 		}
 
+		// Apply per-slave routing policies (section affinity + load-balancing weights)
+		if len(cfg.Slaves) > 0 {
+			policies := make(map[string]master.SlaveRoutePolicy, len(cfg.Slaves))
+			for _, sp := range cfg.Slaves {
+				if sp.Name == "" {
+					continue
+				}
+				policies[sp.Name] = master.SlaveRoutePolicy{
+					Sections: sp.Sections,
+					Paths:    sp.Paths,
+					Weight:   sp.Weight,
+				}
+			}
+			sm.SetSlavePolicies(policies)
+			log.Printf("[MASTER] Applied routing policies for %d slave(s)", len(policies))
+		}
+
 		// Create Bridge (implements core.MasterBridge) and inject into config
 		// so the FTP session can route STOR/RETR/LIST/DELE to slaves
 		bridge := master.NewBridge(sm)

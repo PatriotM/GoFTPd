@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -80,7 +81,58 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		}
 
 	case "CPSV":
-		fmt.Fprintf(s.Conn, "200 CPSV command successful.\r\n")
+		// CPSV = PASV + SSL client mode (for FXP)
+		// CPSV is ALWAYS for transfers (never LIST), so always use passthrough
+		if s.Config.Debug {
+			log.Printf("[CPSV] Starting passive mode setup (passthrough=%v)", s.Config.Passthrough)
+		}
+		s.SSCN = true
+
+		// Passthrough: return slave's IP:port — other site connects to slave directly
+		if s.Config.Passthrough && s.Config.Mode == "master" && s.MasterManager != nil {
+			if bridge, ok := s.MasterManager.(MasterBridge); ok {
+				slaveIP, port, xferIdx, slaveName, err := bridge.SlaveListenForPassthrough(s.CurrentDir)
+				if err != nil {
+					log.Printf("[CPSV] Passthrough slave listen failed: %v", err)
+					fmt.Fprintf(s.Conn, "421 No available slave for passthrough.\r\n")
+					return false
+				}
+				s.PassthruSlave = slaveName
+				s.PassthruXferIdx = xferIdx
+				if s.DataListen != nil {
+					s.DataListen.Close()
+					s.DataListen = nil
+				}
+				ip := strings.ReplaceAll(slaveIP, ".", ",")
+				response := fmt.Sprintf("227 Entering Passive Mode (%s,%d,%d)\r\n", ip, port/256, port%256)
+				if s.Config.Debug {
+					log.Printf("[CPSV] Passthrough to slave %s: %s (port: %d)", slaveName, strings.TrimSpace(response), port)
+				}
+				fmt.Fprintf(s.Conn, response)
+				return false
+			}
+		}
+
+		// Fallback: standard PASV on master
+		var l net.Listener
+		var port int
+		var err error
+		for p := s.Config.PasvMin; p <= s.Config.PasvMax; p++ {
+			l, err = net.Listen("tcp", fmt.Sprintf(":%d", p))
+			if err == nil {
+				port = p
+				break
+			}
+		}
+		if l == nil {
+			fmt.Fprintf(s.Conn, "421 No available passive ports.\r\n")
+			return false
+		}
+		s.DataListen = l
+		s.PassthruSlave = nil
+		ip := strings.ReplaceAll(s.Config.PublicIP, ".", ",")
+		fmt.Fprintf(s.Conn, "227 Entering Passive Mode (%s,%d,%d)\r\n", ip, port/256, port%256)
+		return false
 
 	case "USER":
 		if len(args) == 0 {
@@ -243,25 +295,27 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						s.CurrentDir, len(users), len(groups), totalBytes, present, total)
 				}
 
-				var builder strings.Builder
-				RenderRaceStats(
-					&builder,
-					users,
-					groups,
-					totalBytes,
-					present,
-					total,
-					s.Config.Version,
-				)
+				if present > 0 || total > 0 || len(users) > 0 || len(groups) > 0 || totalBytes > 0 {
+					var builder strings.Builder
+					RenderRaceStats(
+						&builder,
+						users,
+						groups,
+						totalBytes,
+						present,
+						total,
+						s.Config.Version,
+					)
 
-				for _, line := range strings.Split(strings.TrimRight(builder.String(), "\r\n"), "\n") {
-					fmt.Fprintf(s.Conn, "250-%s\r\n", line)
+					for _, line := range strings.Split(strings.TrimRight(builder.String(), "\r\n"), "\n") {
+						fmt.Fprintf(s.Conn, "250-%s\r\n", line)
+					}
 				}
 			}
 		}
 
-	s.showGlobalStats("250", false)
-	fmt.Fprintf(s.Conn, "250 Directory changed to %s\r\n", s.CurrentDir)
+		s.showGlobalStats("250", false)
+		fmt.Fprintf(s.Conn, "250 Directory changed to %s\r\n", s.CurrentDir)
 
 	case "CDUP":
 		s.CurrentDir = path.Clean(path.Join(s.CurrentDir, ".."))
@@ -303,6 +357,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			}
 		}
 
+		s.emitEvent(EventMKDir, path.Join(s.CurrentDir, args[0]), args[0], 0, 0, nil)
 		fmt.Fprintf(s.Conn, "257 \"%s\" created\r\n", args[0])
 
 	case "RMD":
@@ -321,6 +376,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				bridge.DeleteFile(dirPath)
 			}
 		}
+		s.emitEvent(EventRMDir, path.Join(s.CurrentDir, args[0]), args[0], 0, 0, nil)
 		fmt.Fprintf(s.Conn, "250 Directory removed.\r\n")
 
 	case "SIZE":
@@ -417,6 +473,10 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			log.Printf("[PRET] Client preparing for %s", args[0])
 		}
 		if len(args) > 0 {
+			s.PretCmd = strings.ToUpper(args[0])
+			if len(args) > 1 {
+				s.PretArg = args[1]
+			}
 			fmt.Fprintf(s.Conn, "200 OK, preparing for %s\r\n", args[0])
 		} else {
 			fmt.Fprintf(s.Conn, "200 OK\r\n")
@@ -433,8 +493,38 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 
 	case "PASV":
 		if s.Config.Debug {
-			log.Printf("[PASV] Starting passive mode setup")
+			log.Printf("[PASV] Starting passive mode setup (pret=%s, passthrough=%v)", s.PretCmd, s.Config.Passthrough)
 		}
+
+		// Passthrough mode: for STOR/RETR, ask slave to listen and return slave's IP:port
+		if s.Config.Passthrough && s.Config.Mode == "master" && s.MasterManager != nil {
+			if s.PretCmd == "STOR" || s.PretCmd == "RETR" {
+				if bridge, ok := s.MasterManager.(MasterBridge); ok {
+					slaveIP, port, xferIdx, slaveName, err := bridge.SlaveListenForPassthrough(s.CurrentDir)
+					if err != nil {
+						log.Printf("[PASV] Passthrough slave listen failed: %v", err)
+						fmt.Fprintf(s.Conn, "421 No available slave for passthrough.\r\n")
+						return false
+					}
+					s.PassthruSlave = slaveName
+					s.PassthruXferIdx = xferIdx
+					// Close any existing master listener
+					if s.DataListen != nil {
+						s.DataListen.Close()
+						s.DataListen = nil
+					}
+					ip := strings.ReplaceAll(slaveIP, ".", ",")
+					response := fmt.Sprintf("227 Entering Passive Mode (%s,%d,%d)\r\n", ip, port/256, port%256)
+					if s.Config.Debug {
+						log.Printf("[PASV] Passthrough to slave %s: %s (port: %d, xferIdx: %d)", slaveName, strings.TrimSpace(response), port, xferIdx)
+					}
+					fmt.Fprintf(s.Conn, response)
+					return false
+				}
+			}
+		}
+
+		// Standard proxy PASV: master listens
 		var l net.Listener
 		var port int
 		var err error
@@ -453,6 +543,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			return false
 		}
 		s.DataListen = l
+		s.PassthruSlave = nil // clear any passthrough state
 		ip := strings.ReplaceAll(s.Config.PublicIP, ".", ",")
 		response := fmt.Sprintf("227 Entering Passive Mode (%s,%d,%d)\r\n", ip, port/256, port%256)
 		if s.Config.Debug {
@@ -694,27 +785,22 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			}
 		}
 
-		raw, err := s.getRawDataConn()
-		if err != nil {
-			fmt.Fprintf(s.Conn, "425 Data connection failed\r\n")
-			return false
-		}
-		fmt.Fprintf(s.Conn, "150 Opening binary mode data connection.\r\n")
-		dataConn, err := s.upgradeDataTLS(raw, tlsConfig)
-		if err != nil {
-			raw.Close()
-			return false
-		}
-
-		if s.Config.Mode == "master" && s.MasterManager != nil {
+		// PORT PASSTHROUGH: skip getRawDataConn, tell slave to connect out directly
+		// But NOT when PassthruSlave is set (CPSV passthrough — slave is listening, not connecting out)
+		if s.Config.Passthrough && s.Config.Mode == "master" && s.MasterManager != nil && s.ActiveAddr != "" && s.PassthruSlave == nil {
 			if bridge, ok := s.MasterManager.(MasterBridge); ok {
 				filePath := path.Join(s.CurrentDir, fileName)
+				portAddr := s.ActiveAddr
+				s.ActiveAddr = ""
 
-				fileSize, checksum, err := bridge.UploadFile(filePath, dataConn, s.User.Name, s.User.PrimaryGroup)
-				dataConn.Close()
+				log.Printf("[Passthrough] PORT STOR %s → slave connects to %s", filePath, portAddr)
+				fmt.Fprintf(s.Conn, "150 Opening binary mode data connection.\r\n")
+
+				fileSize, checksum, xferMs, err := bridge.SlaveConnectAndReceive(filePath, portAddr, s.User.Name, s.User.PrimaryGroup)
+				_ = xferMs
 
 				if err != nil {
-					log.Printf("[MASTER] Upload failed: %v", err)
+					log.Printf("[Passthrough] PORT upload failed: %v", err)
 					fmt.Fprintf(s.Conn, "550 Upload failed: %v\r\n", err)
 					return false
 				}
@@ -755,16 +841,210 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				if fileSize > 0 {
 					s.User.UpdateStats(fileSize, true)
 				}
+				speedMB := 0.0
+				if xferMs > 0 {
+					speedMB = (float64(fileSize) / 1024.0 / 1024.0) / (float64(xferMs) / 1000.0)
+				}
+				data := map[string]string{}
+				if strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
+					if sfvEntries := bridge.GetSFVData(s.CurrentDir); sfvEntries != nil {
+						data["t_filecount"] = fmt.Sprintf("%d", len(sfvEntries))
+					}
+				}
+				if regexp.MustCompile(`(?i)\.(rar|r\d\d)$`).MatchString(fileName) {
+					data["t_mbytes"] = mbString(fileSize)
+					// Attach live race progress for NEW LEADER / HALFWAY detection
+					if sfvEntries := bridge.GetSFVData(s.CurrentDir); sfvEntries != nil {
+						users, _, totalBytes, present, total := bridge.GetVFSRaceStats(s.CurrentDir)
+						if total > 0 {
+							data["relname"] = path.Base(s.CurrentDir)
+							data["t_files"] = fmt.Sprintf("%d", total)
+							data["t_present"] = fmt.Sprintf("%d", present)
+							data["t_totalmb"] = fmt.Sprintf("%.1f", float64(totalBytes)/1024.0/1024.0)
+							// Estimate total release size from first rar size * expected file count
+							estBytes := fileSize * int64(total)
+							data["t_mbytes"] = fmt.Sprintf("%.0fMB", float64(estBytes)/1024.0/1024.0)
+							if len(users) > 0 {
+								leader := users[0]
+								for _, u := range users {
+									if u.Files > leader.Files {
+										leader = u
+									}
+								}
+								data["leader_name"] = leader.Name
+								data["leader_group"] = leader.Group
+								data["leader_files"] = fmt.Sprintf("%d", leader.Files)
+								data["leader_mb"] = fmt.Sprintf("%.1f", float64(leader.Bytes)/1024.0/1024.0)
+								data["leader_pct"] = fmt.Sprintf("%d", leader.Percent)
+								data["leader_speed"] = fmt.Sprintf("%.2fMB/s", leader.Speed/1024.0/1024.0)
+							}
+						}
+					}
+				}
+				s.emitEvent(EventUpload, filePath, fileName, fileSize, speedMB, data)
+				if sfvEntries := bridge.GetSFVData(s.CurrentDir); sfvEntries != nil {
+					users, _, totalBytes, present, total := bridge.GetVFSRaceStats(s.CurrentDir)
+					if total > 0 && present >= total {
+						emitRaceEnd(s, users, totalBytes, total, xferMs)
+					}
+				}
+
+				fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
+				return false
+			}
+		}
+
+		raw, err := s.getRawDataConn()
+		if err != nil {
+			if s.PassthruSlave != nil && s.Config.Passthrough {
+				// fall through to PASV passthrough handler below
+			} else {
+				fmt.Fprintf(s.Conn, "425 Data connection failed\r\n")
+				return false
+			}
+		}
+
+		if s.Config.Mode == "master" && s.MasterManager != nil {
+			if bridge, ok := s.MasterManager.(MasterBridge); ok {
+				filePath := path.Join(s.CurrentDir, fileName)
+
+				var fileSize int64
+				var checksum uint32
+				var xferMs int64
+
+				if s.PassthruSlave != nil && s.Config.Passthrough {
+					// PASSTHROUGH: client already connected to slave directly
+					slaveName := s.PassthruSlave.(string)
+					fmt.Fprintf(s.Conn, "150 Opening binary mode data connection.\r\n")
+					log.Printf("[Passthrough] STOR %s via slave %s (xferIdx=%d)", filePath, slaveName, s.PassthruXferIdx)
+
+					fileSize, checksum, xferMs, err = bridge.SlaveReceivePassthrough(filePath, s.PassthruXferIdx, slaveName, s.User.Name, s.User.PrimaryGroup)
+					s.PassthruSlave = nil
+					s.PretCmd = ""
+
+					if err != nil {
+						log.Printf("[Passthrough] Upload failed: %v", err)
+						fmt.Fprintf(s.Conn, "550 Upload failed: %v\r\n", err)
+						return false
+					}
+				} else {
+					// PROXY: bridge data through master
+					fmt.Fprintf(s.Conn, "150 Opening binary mode data connection.\r\n")
+					dataConn, err := s.upgradeDataTLS(raw, tlsConfig)
+					if err != nil {
+						raw.Close()
+						return false
+					}
+
+					start := time.Now()
+					fileSize, checksum, err = bridge.UploadFile(filePath, dataConn, s.User.Name, s.User.PrimaryGroup)
+					xferMs = time.Since(start).Milliseconds()
+					dataConn.Close()
+
+					if err != nil {
+						log.Printf("[MASTER] Upload failed: %v", err)
+						fmt.Fprintf(s.Conn, "550 Upload failed: %v\r\n", err)
+						return false
+					}
+				}
+
+				if fileSize == 0 {
+					bridge.DeleteFile(filePath)
+					log.Printf("[MASTER-ZS] Deleted 0-byte file: %s", filePath)
+					fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
+					return false
+				}
+
+				if checksum > 0 && !strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
+					sfvEntries := bridge.GetSFVData(s.CurrentDir)
+					if sfvEntries != nil {
+						if expectedCRC, exists := sfvEntries[fileName]; exists {
+							if expectedCRC != checksum {
+								bridge.DeleteFile(filePath)
+								log.Printf("[MASTER-ZS] CRC mismatch for %s: got %08X, expected %08X — deleted",
+									fileName, checksum, expectedCRC)
+								fmt.Fprintf(s.Conn, "226- checksum mismatch: SLAVE: %08X SFV: %08X\r\n", checksum, expectedCRC)
+								fmt.Fprintf(s.Conn, "226 Checksum mismatch, deleting file\r\n")
+								return false
+							}
+							if s.Config.Debug {
+								log.Printf("[MASTER-ZS] CRC match for %s: %08X", fileName, checksum)
+							}
+						}
+					}
+				}
+
+				if strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
+					if sfvEntries, err := bridge.GetSFVInfo(filePath); err == nil {
+						log.Printf("[MASTER-ZS] Parsed SFV %s: %d entries", fileName, len(sfvEntries))
+						bridge.CacheSFV(s.CurrentDir, fileName, sfvEntries)
+					}
+				}
+
+				if fileSize > 0 {
+					s.User.UpdateStats(fileSize, true)
+				}
+				speedMB := 0.0
+				if xferMs > 0 {
+					speedMB = (float64(fileSize) / 1024.0 / 1024.0) / (float64(xferMs) / 1000.0)
+				}
+				data := map[string]string{}
+				if strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
+					if sfvEntries := bridge.GetSFVData(s.CurrentDir); sfvEntries != nil {
+						data["t_filecount"] = fmt.Sprintf("%d", len(sfvEntries))
+					}
+				}
+				if regexp.MustCompile(`(?i)\.(rar|r\d\d)$`).MatchString(fileName) {
+					data["t_mbytes"] = mbString(fileSize)
+					// Attach live race progress for NEW LEADER / HALFWAY detection
+					if sfvEntries := bridge.GetSFVData(s.CurrentDir); sfvEntries != nil {
+						users, _, totalBytes, present, total := bridge.GetVFSRaceStats(s.CurrentDir)
+						if total > 0 {
+							data["relname"] = path.Base(s.CurrentDir)
+							data["t_files"] = fmt.Sprintf("%d", total)
+							data["t_present"] = fmt.Sprintf("%d", present)
+							data["t_totalmb"] = fmt.Sprintf("%.1f", float64(totalBytes)/1024.0/1024.0)
+							// Estimate total release size from first rar size * expected file count
+							estBytes := fileSize * int64(total)
+							data["t_mbytes"] = fmt.Sprintf("%.0fMB", float64(estBytes)/1024.0/1024.0)
+							if len(users) > 0 {
+								leader := users[0]
+								for _, u := range users {
+									if u.Files > leader.Files {
+										leader = u
+									}
+								}
+								data["leader_name"] = leader.Name
+								data["leader_group"] = leader.Group
+								data["leader_files"] = fmt.Sprintf("%d", leader.Files)
+								data["leader_mb"] = fmt.Sprintf("%.1f", float64(leader.Bytes)/1024.0/1024.0)
+								data["leader_pct"] = fmt.Sprintf("%d", leader.Percent)
+								data["leader_speed"] = fmt.Sprintf("%.2fMB/s", leader.Speed/1024.0/1024.0)
+							}
+						}
+					}
+				}
+				s.emitEvent(EventUpload, filePath, fileName, fileSize, speedMB, data)
+				if sfvEntries := bridge.GetSFVData(s.CurrentDir); sfvEntries != nil {
+					users, _, totalBytes, present, total := bridge.GetVFSRaceStats(s.CurrentDir)
+					if total > 0 && present >= total {
+						emitRaceEnd(s, users, totalBytes, total, xferMs)
+					}
+				}
 
 				fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
 			} else {
 				fmt.Fprintf(s.Conn, "550 Master not initialized\r\n")
-				dataConn.Close()
+				if raw != nil {
+					raw.Close()
+				}
 			}
 			return false
 		}
 
-		dataConn.Close()
+		if raw != nil {
+			raw.Close()
+		}
 		return false
 
 	case "RETR":
@@ -798,26 +1078,51 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					fmt.Fprintf(s.Conn, "550 File not found on any slave.\r\n")
 					return false
 				}
-				raw, err := s.getRawDataConn()
-				if err != nil {
-					fmt.Fprintf(s.Conn, "425 Data connection failed\r\n")
-					return false
-				}
-				fmt.Fprintf(s.Conn, "150 Opening binary mode data connection for %s (%d bytes).\r\n", args[0], fileSize)
-				dataConn, err := s.upgradeDataTLS(raw, tlsConfig)
-				if err != nil {
-					raw.Close()
-					return false
-				}
-				err = bridge.DownloadFile(filePath, dataConn)
-				dataConn.Close()
-				if err != nil {
-					log.Printf("[MASTER] Download failed: %v", err)
-					fmt.Fprintf(s.Conn, "550 Download failed: %v\r\n", err)
+
+				if s.PassthruSlave != nil && s.Config.Passthrough {
+					// PASSTHROUGH: client already connected to slave directly
+					slaveName := s.PassthruSlave.(string)
+					fmt.Fprintf(s.Conn, "150 Opening binary mode data connection for %s (%d bytes).\r\n", args[0], fileSize)
+					log.Printf("[Passthrough] RETR %s via slave %s (xferIdx=%d)", filePath, slaveName, s.PassthruXferIdx)
+
+					err := bridge.SlaveSendPassthrough(filePath, s.PassthruXferIdx, slaveName)
+					s.PassthruSlave = nil
+					s.PretCmd = ""
+
+					if err != nil {
+						log.Printf("[Passthrough] Download failed: %v", err)
+						fmt.Fprintf(s.Conn, "550 Download failed: %v\r\n", err)
+					} else {
+						fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
+						if fileSize > 0 {
+							s.User.UpdateStats(fileSize, false)
+						}
+						s.emitEvent(EventDownload, filePath, args[0], fileSize, 0, nil)
+						s.emitEvent(EventDownload, filePath, args[0], fileSize, 0, nil)
+					}
 				} else {
-					fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
-					if fileSize > 0 {
-						s.User.UpdateStats(fileSize, false)
+					// PROXY: bridge through master
+					raw, err := s.getRawDataConn()
+					if err != nil {
+						fmt.Fprintf(s.Conn, "425 Data connection failed\r\n")
+						return false
+					}
+					fmt.Fprintf(s.Conn, "150 Opening binary mode data connection for %s (%d bytes).\r\n", args[0], fileSize)
+					dataConn, err := s.upgradeDataTLS(raw, tlsConfig)
+					if err != nil {
+						raw.Close()
+						return false
+					}
+					err = bridge.DownloadFile(filePath, dataConn)
+					dataConn.Close()
+					if err != nil {
+						log.Printf("[MASTER] Download failed: %v", err)
+						fmt.Fprintf(s.Conn, "550 Download failed: %v\r\n", err)
+					} else {
+						fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
+						if fileSize > 0 {
+							s.User.UpdateStats(fileSize, false)
+						}
 					}
 				}
 			} else {
@@ -835,7 +1140,6 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 	}
 	return false
 }
-
 
 func (s *Session) showGlobalStats(code string, final bool) {
 	var stat syscall.Statfs_t
@@ -871,4 +1175,12 @@ func (s *Session) showGlobalStats(code string, final bool) {
 		fmt.Fprintf(s.Conn, "%s- [Section: DEFAULT] [Credits: %.1fGiB] [Ratio: %s]\r\n",
 			code, creditsGiB, ratioStr)
 	}
+}
+
+func mbString(size int64) string { return fmt.Sprintf("%.0fMB", float64(size)/1024.0/1024.0) }
+func max64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
 }

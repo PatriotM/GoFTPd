@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"path"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,11 +29,23 @@ type SlaveManager struct {
 	slaves     map[string]*RemoteSlave
 	slavesMu   sync.RWMutex
 
+	// Per-slave routing policies (section affinity, weights). Keyed by slave name.
+	// Populated from master config via SetSlavePolicies(). Empty = no restrictions.
+	policies   map[string]SlaveRoutePolicy
+	policiesMu sync.RWMutex
+
 	// Virtual File System: master-side file index
 	vfs        *VirtualFileSystem
 
 	listener   net.Listener
 	running    atomic.Bool // Changed to atomic to prevent data races
+}
+
+// SlaveRoutePolicy is the runtime form of SlavePolicy from config.
+type SlaveRoutePolicy struct {
+	Sections []string // uppercased for matching
+	Paths    []string // glob patterns
+	Weight   int      // >= 1
 }
 
 func NewSlaveManager(host string, port int, tlsEnabled bool, tlsCert, tlsKey string) *SlaveManager {
@@ -42,8 +56,35 @@ func NewSlaveManager(host string, port int, tlsEnabled bool, tlsCert, tlsKey str
 		tlsCert:    tlsCert,
 		tlsKey:     tlsKey,
 		slaves:     make(map[string]*RemoteSlave),
+		policies:   make(map[string]SlaveRoutePolicy),
 		vfs:        NewVirtualFileSystem(),
 	}
+}
+
+// SetSlavePolicies configures per-slave routing rules (section affinity + weights).
+// Call once at startup after loading config. Re-calling replaces all policies.
+func (sm *SlaveManager) SetSlavePolicies(policies map[string]SlaveRoutePolicy) {
+	sm.policiesMu.Lock()
+	defer sm.policiesMu.Unlock()
+	sm.policies = make(map[string]SlaveRoutePolicy, len(policies))
+	for name, p := range policies {
+		if p.Weight < 1 {
+			p.Weight = 1
+		}
+		upSections := make([]string, len(p.Sections))
+		for i, s := range p.Sections {
+			upSections[i] = strings.ToUpper(strings.TrimSpace(s))
+		}
+		p.Sections = upSections
+		sm.policies[name] = p
+	}
+}
+
+func (sm *SlaveManager) getPolicy(name string) (SlaveRoutePolicy, bool) {
+	sm.policiesMu.RLock()
+	defer sm.policiesMu.RUnlock()
+	p, ok := sm.policies[name]
+	return p, ok
 }
 
 // Start begins listening for slave connections.
@@ -281,25 +322,126 @@ func (sm *SlaveManager) GetVFS() *VirtualFileSystem {
 	return sm.vfs
 }
 
-// SelectSlaveForUpload picks the slave with the most free space.
-func (sm *SlaveManager) SelectSlaveForUpload() *RemoteSlave {
+// SelectSlaveForUpload picks the best slave for an incoming upload.
+//
+// Selection order:
+//  1. Filter slaves to those whose policy matches the upload path/section.
+//     (A slave with no policy accepts everything.)
+//  2. From eligible slaves, pick the one with the lowest "load score":
+//        score = activeTransfers / weight
+//     Lower score = less busy relative to capacity.
+//  3. Tie-break on most free disk space.
+//
+// uploadPath may be empty (e.g. legacy callers); in that case all available
+// slaves are considered and section affinity is skipped.
+func (sm *SlaveManager) SelectSlaveForUpload(uploadPath string) *RemoteSlave {
 	slaves := sm.GetAvailableSlaves()
 	if len(slaves) == 0 {
 		return nil
 	}
 
-	var best *RemoteSlave
-	var bestFree int64
+	section := sectionFromUploadPath(uploadPath)
+	eligible := make([]*RemoteSlave, 0, len(slaves))
+	weights := make(map[string]int, len(slaves))
 
 	for _, rs := range slaves {
-		ds := rs.GetDiskStatus()
-		if ds.SpaceAvailable > bestFree {
-			bestFree = ds.SpaceAvailable
-			best = rs
+		policy, hasPolicy := sm.getPolicy(rs.Name())
+		if !hasPolicy {
+			// No policy = accepts everything
+			eligible = append(eligible, rs)
+			weights[rs.Name()] = 1
+			continue
+		}
+		if slavePolicyAccepts(policy, section, uploadPath) {
+			eligible = append(eligible, rs)
+			weights[rs.Name()] = policy.Weight
 		}
 	}
 
+	// Fallback: if policies excluded everyone, use all available slaves.
+	// Better to upload somewhere than fail.
+	if len(eligible) == 0 {
+		eligible = slaves
+		for _, rs := range slaves {
+			weights[rs.Name()] = 1
+		}
+	}
+
+	var best *RemoteSlave
+	var bestScore float64
+	var bestFree int64
+	for _, rs := range eligible {
+		w := weights[rs.Name()]
+		if w < 1 {
+			w = 1
+		}
+		score := float64(rs.ActiveTransfers()) / float64(w)
+		ds := rs.GetDiskStatus()
+		if best == nil {
+			best = rs
+			bestScore = score
+			bestFree = ds.SpaceAvailable
+			continue
+		}
+		if score < bestScore || (score == bestScore && ds.SpaceAvailable > bestFree) {
+			best = rs
+			bestScore = score
+			bestFree = ds.SpaceAvailable
+		}
+	}
 	return best
+}
+
+// sectionFromUploadPath returns the first path component uppercased,
+// e.g. "/TV-1080P/Foo.Bar.Baz" -> "TV-1080P".
+func sectionFromUploadPath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" || p == "/" {
+		return ""
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	parts := strings.Split(strings.TrimPrefix(p, "/"), "/")
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.ToUpper(parts[0])
+}
+
+// slavePolicyAccepts returns true if the given section or path is allowed
+// by the slave's policy. If Sections and Paths are both empty, everything
+// is allowed (acts like no policy at all).
+func slavePolicyAccepts(policy SlaveRoutePolicy, section, uploadPath string) bool {
+	if len(policy.Sections) == 0 && len(policy.Paths) == 0 {
+		return true
+	}
+	if section != "" {
+		for _, s := range policy.Sections {
+			if s == section {
+				return true
+			}
+		}
+	}
+	if uploadPath != "" {
+		for _, pat := range policy.Paths {
+			pat = strings.TrimSpace(pat)
+			if pat == "" {
+				continue
+			}
+			if ok, _ := path.Match(pat, uploadPath); ok {
+				return true
+			}
+			// Also allow prefix-style patterns like "/TV-1080P/*"
+			if strings.HasSuffix(pat, "/*") {
+				prefix := strings.TrimSuffix(pat, "*")
+				if strings.HasPrefix(strings.ToLower(uploadPath), strings.ToLower(prefix)) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // SelectSlaveForDownload picks a slave that has the file.

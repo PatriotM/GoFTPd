@@ -30,6 +30,12 @@ type Session struct {
 	IsTLS      bool        // Control channel encryption state
 	DataTLS    bool        // Data channel encryption state (PROT P)
 	GroupMap   map[string]int // groupname -> GID mapping
+
+	// Passthrough transfer state (drftpd-style direct client→slave)
+	PretCmd        string      // "STOR", "RETR", or "" — set by PRET
+	PretArg        string      // filename from PRET
+	PassthruSlave  interface{} // slave selected for passthrough (avoids import cycle)
+	PassthruXferIdx int32      // slave transfer index for passthrough
 }
 
 // HandleSession initializes the session and manages the command read loop.

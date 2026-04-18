@@ -1,0 +1,41 @@
+############################################################
+#  GoFTPd sitebot theme — light background friendly         #
+#  All colors are dark shades readable on white/light mIRC: #
+#    c02 = blue                                              #
+#    c03 = green                                             #
+#    c04 = red                                               #
+#    c05 = brown                                             #
+#    c06 = purple                                            #
+#    c10 = teal/cyan                                         #
+#    c13 = pink/magenta                                      #
+#  Avoids: c00 (white), c08 (yellow), c09 (light green),    #
+#          c11 (light cyan), c14/15 (greys)                 #
+############################################################
+
+announce.NEWDIR = "%b{%c03{NEW :}} %c01{[}%c02{%section}%c01{]} %c06{%b{%relname}} %c01{by} %c04{%u_name}"
+
+announce.SFV_RAR = "%b{%c10{RACE:}} %c01{[}%c02{%section}%c01{]} Got SFV for %c06{%b{%relname}} %c01{uploaded by} %c04{%u_name}%c01{. Now expecting} %c05{%b{%t_filecount}} %c01{rar file(s).}"
+
+announce.UPDATE_RAR = "%b{%c10{RACE:}} %c01{[}%c02{%section}%c01{]} %c06{%b{%relname}} %c01{got its first rar file from} %c04{%u_name} %c01{at} %c05{%u_speed}%c01{. Now expecting} %c05{%b{%t_mbytes}}%c01{.}"
+
+announce.RACE_RAR = "%b{%c10{RACE:}} %c01{[}%c02{%section}%c01{]} %c06{%b{%relname}} %c01{-} %c04{%u_name} joined the race %c01{at} %c05{%u_speed}%c01{.}"
+
+announce.NEWLEADER = "%b{%c04{NEW LEADER:}} %c01{[}%c02{%section}%c01{]} %c06{%b{%relname}} %c01{-} %c04{%leader_name} %c01{takes the lead -} %c05{%{leader_mb}MB}%c01{/}%c05{%{leader_files}F}%c01{/}%c05{%{leader_pct}%}%c01{/}%c05{%leader_speed}"
+
+announce.HALFWAY = "%b{%c13{HALFWAY:}} %c01{[}%c02{%section}%c01{]} %c06{%b{%relname}} %c01{- leader:} %c04{%leader_name} %c01{[}%c05{%{leader_mb}MB}%c01{/}%c05{%{leader_files}F}%c01{/}%c05{%{leader_pct}%}%c01{/}%c05{%leader_speed}%c01{] -} %c05{%t_filesleft} %c01{files left.}"
+
+announce.TVINFO = "%b{%c03{TV-INFO:}} %c01{[}%c02{%section}%c01{]} %c06{%b{%relname}} %c01{Genre:} %c05{%genre} %c01{- Type:} %c05{%b{%type}} %c01{- Link:} %c05{%link} %c01{- Network:} %c05{%b{%network}} %c01{- Rating:} %b{%c05{%rating}} %c01{- Language:} %c05{%language}"
+
+announce.COMPLETE = "%b{%c03{COMPLETE:}} %c01{[}%c02{%section}%c01{]} %c06{%b{%relname}} %c01{by} %c05{%u_count} %c01{racers -} %c05{%t_mbytes}%c01{/}%c05{%t_files}%c01{/}%c05{%t_avgspeed}%c01{/}%c05{%t_duration}"
+
+announce.STATS_HOF = "%b{%c02{STATS:}} ▂▃▅▇█▓▒░۩۞۩  %c03{Users Hall Of Fame} ۩۞۩░▒▓█▇▅▃▂"
+
+announce.STATS_SPEEDS = "%b{%c02{STATS:}} %c01{Slowest:} %c04{%u_slowest_name} %c01{at} %c05{%u_slowest_speed} %c01{-} %c01{Fastest:} %c04{%u_fastest_name} %c01{at} %c05{%u_fastest_speed}%c01{.}"
+
+announce.STATS_USER = "%b{%c02{STATS:}} %c01{[}%c03{%u_rank}%c01{]} %c04{%u_name}%c01{/}%c06{%u_group} %c01{-} %c05{%b{%{u_files}f}} %c01{-} %c05{%b{%{u_mb}MB}} %c01{-} %c05{%b{%{u_pct}%}} %c01{-} %c05{%u_speed}"
+
+announce.STATS_END = "%b{%c02{STATS:}} -----------====>>>>           %c03{END}           <<<<====-----------"
+
+announce.NUKE = "%b{%c04{NUKE:}} %c01{[}%c02{%section}%c01{]} %c06{%b{%relname}} %c01{by} %c04{%u_name}"
+
+announce.UNNUKE = "%b{%c03{UNNUKE:}} %c01{[}%c02{%section}%c01{]} %c06{%b{%relname}} %c01{by} %c04{%u_name}"

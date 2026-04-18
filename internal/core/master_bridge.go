@@ -55,6 +55,18 @@ type MasterBridge interface {
 	// GetSFVData returns cached SFV entries for a directory (filename->CRC32 map).
 	// Returns nil if no SFV is cached for this directory.
 	GetSFVData(dirPath string) map[string]uint32
+
+	// Passthrough PORT: tell slave to connect out to remote address and receive file
+	SlaveConnectAndReceive(filePath, remoteAddr, owner, group string) (int64, uint32, int64, error)
+
+	// Passthrough: ask a slave to listen and return its IP:port + transfer index
+	SlaveListenForPassthrough(uploadPath string) (slaveIP string, port int, transferIdx int32, slaveName string, err error)
+
+	// Passthrough: tell slave to receive a file, wait for completion, return size/checksum
+	SlaveReceivePassthrough(filePath string, transferIdx int32, slaveName string, owner, group string) (int64, uint32, int64, error)
+
+	// Passthrough: tell slave to send a file, wait for completion
+	SlaveSendPassthrough(filePath string, transferIdx int32, slaveName string) error
 }
 
 // MasterFileEntry is a file/dir entry returned by MasterBridge.ListDir.
@@ -76,12 +88,13 @@ type SFVEntryInfo struct {
 
 // VFSRaceUser holds per-user race stats from VFS.
 type VFSRaceUser struct {
-	Name    string
-	Group   string
-	Files   int
-	Bytes   int64
-	Speed   float64
-	Percent int
+	Name      string
+	Group     string
+	Files     int
+	Bytes     int64
+	Speed     float64
+	PeakSpeed float64
+	Percent   int
 }
 
 // VFSRaceGroup holds per-group race stats from VFS.

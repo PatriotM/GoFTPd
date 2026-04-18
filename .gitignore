@@ -6,6 +6,8 @@
 *.so
 *.dylib
 copy.sh
+sitebot/sitebot
+etc/goftpd.sitebot.fifo
 
 # TLS certificates (generate your own with generate_certs.sh)
 etc/server.crt
@@ -16,6 +18,7 @@ etc/server.key
 etc/users/*
 !etc/users/default.user
 !etc/users/goftpd
+etc/users/n0pe
 
 # Group files - only keep NoGroup as example
 etc/groups/*
@@ -42,6 +45,7 @@ userdata/
 etc/config.yml
 !etc/config-master.yml
 !etc/config-slave.yml
+sitebot/etc/config.yml
 
 # IDE / Editor
 .vscode/

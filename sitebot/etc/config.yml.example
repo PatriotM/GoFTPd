@@ -1,0 +1,64 @@
+
+debug: true
+event_fifo: "/GoFTPd/etc/goftpd.sitebot.fifo"
+
+irc:
+  host: "45.45.54.54"
+  port: 48400
+  nick: "GoSitebot"
+  user: "sitebot"
+  realname: "GoSitebot v1.0"
+  password: "changeme"
+  ssl: true
+  auto_oper: false
+  operuser: "GoSitebot"
+  operpassword: "changeme-oper"
+  user_modes: "+Hi"
+  autojoin_delay_ms: 250
+  channels:
+    - "#goftpd"
+    - "#goftpd-announce"
+
+encryption:
+  enabled: true
+  keys:
+    "#goftpd": "cbc:YourBlowfishKeyHere123456"
+    "#goftpd-spam": "cbc:YourBlowfishKeyHere123456"
+    "#goftpd-staff": "cbc:YourBlowfishKeyHere123456"
+
+announce:
+  default_channel: "#goftpd-staff"
+  theme_file: "./etc/templates/pzsng.theme"
+  type_routes:
+    NUKE:
+      - "#goftpd-nuke"
+    UNNUKE:
+      - "#goftpd-nuke"
+
+sections:
+  - name: "DEFAULT"
+    channels:
+      - "#goftpd-staff"
+    paths: []
+  - name: "TV-1080P"
+    channels:
+      - "#goftpd"
+    paths:
+      - "/TV-1080P/*"
+  - name: "MP3"
+    channels:
+      - "#goftpd-spam"
+    paths:
+      - "/MP3/*"
+
+
+# Do not enable tvmaze or imdb yet, need to fix it.. the output works but something is blocking the daemon
+plugins:
+  enabled:
+    Announce: true
+    TVMaze: false
+    IMDB: false
+  config:
+    debug: true
+    tvmaze_enabled: false
+    imdb_enabled: false

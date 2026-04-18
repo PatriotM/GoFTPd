@@ -62,7 +62,9 @@ func (s *Session) DispatchSiteCommand(args []string) bool {
 	case "UNNUKE":
 		return s.HandleSiteUnnuke(remainingArgs)
 
-	// Miscellaneous (site_misc.go)
+	// Miscellaneous (site_misc.go / site_race.go)
+	case "RACE":
+		return s.HandleSiteRace(remainingArgs)
 	case "CHMOD":
 		return s.HandleSiteChmod(remainingArgs)
 	case "XDUPE":

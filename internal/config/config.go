@@ -8,22 +8,34 @@ import (
 )
 
 type Config struct {
-	SitenameLong  string       `yaml:"sitename_long"`
-	SitenameShort string       `yaml:"sitename_short"`
-	Version       string       `yaml:"version"`
-	Email         string       `yaml:"email"`
-	ListenPort    int          `yaml:"listen_port"`
-	PublicIP      string       `yaml:"public_ip"`
-	PasvMin       int          `yaml:"pasv_min"`
-	PasvMax       int          `yaml:"pasv_max"`
-	Mode          string       `yaml:"mode"` // "master" or "slave"
-	Master        MasterConfig `yaml:"master"`
-	Slave         SlaveConfig  `yaml:"slave"`
-	StoragePath   string       `yaml:"storage_path"`
-	TLSEnabled    bool         `yaml:"tls_enabled"`
-	TLSCert       string       `yaml:"tls_cert"`
-	TLSKey        string       `yaml:"tls_key"`
-	Debug         bool         `yaml:"debug"`
+	SitenameLong  string        `yaml:"sitename_long"`
+	SitenameShort string        `yaml:"sitename_short"`
+	Version       string        `yaml:"version"`
+	Email         string        `yaml:"email"`
+	ListenPort    int           `yaml:"listen_port"`
+	PublicIP      string        `yaml:"public_ip"`
+	PasvMin       int           `yaml:"pasv_min"`
+	PasvMax       int           `yaml:"pasv_max"`
+	Mode          string        `yaml:"mode"` // "master" or "slave"
+	Master        MasterConfig  `yaml:"master"`
+	Slave         SlaveConfig   `yaml:"slave"`
+	Slaves        []SlavePolicy `yaml:"slaves"` // per-slave routing policy (master side)
+	StoragePath   string        `yaml:"storage_path"`
+	TLSEnabled    bool          `yaml:"tls_enabled"`
+	TLSCert       string        `yaml:"tls_cert"`
+	TLSKey        string        `yaml:"tls_key"`
+	Debug         bool          `yaml:"debug"`
+}
+
+// SlavePolicy defines routing rules for a slave. Configured on the master.
+// Sections and Paths restrict which uploads can go to this slave.
+// Weight biases the load balancer (higher weight = more uploads sent here).
+// If Sections is empty and Paths is empty, the slave accepts all uploads.
+type SlavePolicy struct {
+	Name     string   `yaml:"name"`     // must match the slave's registered name
+	Sections []string `yaml:"sections"` // e.g. ["TV-1080P", "MP3"] — case-insensitive
+	Paths    []string `yaml:"paths"`    // e.g. ["/TV-1080P/*", "/MOVIES/*"]
+	Weight   int      `yaml:"weight"`   // default 1; higher = more traffic
 }
 
 type MasterConfig struct {

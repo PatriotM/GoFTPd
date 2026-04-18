@@ -39,7 +39,7 @@ type MasterTransferState struct {
 // Returns the slave's PASV address and port for the FTP client.
 // () for upload path.
 func (sm *SlaveManager) SetupPASVForUpload(filePath string) (*MasterTransferState, string, int, error) {
-	slave := sm.SelectSlaveForUpload()
+	slave := sm.SelectSlaveForUpload(filePath)
 	if slave == nil {
 		return nil, "", 0, fmt.Errorf("no available slave for upload")
 	}
