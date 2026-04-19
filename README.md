@@ -1,6 +1,6 @@
 # GoFTPd
 
-A distributed FTP daemon written in Go, drftpd-inspired, glftpd-compatible. Master/slave architecture with VFS-based zipscript, live race stats, TLS 1.3, CRC32 verification, and an IRC sitebot for announces.
+A distributed FTP daemon written in Go, drftpd-inspired. Master/slave architecture with VFS-based zipscript, live race stats, TLS 1.3, CRC32 verification, and an IRC sitebot for announces.
 
 ## Architecture
 
