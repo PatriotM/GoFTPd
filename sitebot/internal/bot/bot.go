@@ -386,22 +386,37 @@ func pathMatches(pattern, p string) bool {
 }
 func (b *Bot) routeChannels(evt *event.Event, outType string) []string {
 	if chs := b.Config.Announce.TypeRoutes[outType]; len(chs) > 0 {
-		return chs
+		return nonEmptyChannels(chs)
 	}
 	for _, sec := range b.Config.Sections {
 		if strings.EqualFold(sec.Name, evt.Section) {
-			return sec.Channels
+			if chs := nonEmptyChannels(sec.Channels); len(chs) > 0 {
+				return chs
+			}
 		}
 		for _, pat := range sec.Paths {
 			if pathMatches(pat, evt.Path) {
-				return sec.Channels
+				if chs := nonEmptyChannels(sec.Channels); len(chs) > 0 {
+					return chs
+				}
 			}
 		}
 	}
 	if strings.TrimSpace(b.Config.Announce.DefaultChannel) != "" {
 		return []string{b.Config.Announce.DefaultChannel}
 	}
-	return b.Config.IRC.Channels
+	return nonEmptyChannels(b.Config.IRC.Channels)
+}
+
+func nonEmptyChannels(channels []string) []string {
+	out := make([]string, 0, len(channels))
+	for _, ch := range channels {
+		ch = strings.TrimSpace(ch)
+		if ch != "" {
+			out = append(out, ch)
+		}
+	}
+	return out
 }
 func (b *Bot) handleEvent(evt *event.Event) {
 	// Special case: INVITE events don't go to plugins — we send an IRC
@@ -440,9 +455,13 @@ func (b *Bot) handleEvent(evt *event.Event) {
 					log.Printf("[Bot] Sending %s to %s: %s", kind, out.Target, line)
 				}
 				if out.Notice {
-					_ = b.IRC.SendNotice(out.Target, line)
+					if err := b.IRC.SendNotice(out.Target, line); err != nil {
+						log.Printf("[Bot] NOTICE %s failed: %v", out.Target, err)
+					}
 				} else {
-					_ = b.IRC.SendMessage(out.Target, line)
+					if err := b.IRC.SendMessage(out.Target, line); err != nil {
+						log.Printf("[Bot] PRIVMSG %s failed: %v", out.Target, err)
+					}
 				}
 			}
 			continue
@@ -457,7 +476,9 @@ func (b *Bot) handleEvent(evt *event.Event) {
 				if b.Debug {
 					log.Printf("[Bot] Sending %s to %s: %s", out.Type, ch, line)
 				}
-				_ = b.IRC.SendMessage(ch, line)
+				if err := b.IRC.SendMessage(ch, line); err != nil {
+					log.Printf("[Bot] %s to %s failed: %v", out.Type, ch, err)
+				}
 			}
 		}
 	}
