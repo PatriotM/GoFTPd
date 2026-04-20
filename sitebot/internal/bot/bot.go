@@ -14,7 +14,10 @@ import (
 	"goftpd/sitebot/internal/event"
 	"goftpd/sitebot/internal/irc"
 	"goftpd/sitebot/internal/plugin"
+	announceplugin "goftpd/sitebot/plugins/announce"
+	imdbplugin "goftpd/sitebot/plugins/imdb"
 	newsplugin "goftpd/sitebot/plugins/news"
+	tvmazeplugin "goftpd/sitebot/plugins/tvmaze"
 )
 
 type Bot struct {
@@ -56,7 +59,7 @@ func (b *Bot) Start() error {
 
 func (b *Bot) initializePlugins() error {
 	if enabled, ok := b.Config.Plugins.Enabled["Announce"]; !ok || enabled {
-		announce := plugin.NewAnnouncePlugin()
+		announce := announceplugin.New()
 		cfg := map[string]interface{}{"debug": b.Debug, "theme_file": b.Config.Announce.ThemeFile}
 		for k, v := range b.Config.Plugins.Config {
 			cfg[k] = v
@@ -69,7 +72,7 @@ func (b *Bot) initializePlugins() error {
 		}
 	}
 	if enabled, ok := b.Config.Plugins.Enabled["TVMaze"]; !ok || enabled {
-		tv := plugin.NewTVMazePlugin()
+		tv := tvmazeplugin.New()
 		cfg := map[string]interface{}{"debug": b.Debug, "theme_file": b.Config.Announce.ThemeFile}
 		for k, v := range b.Config.Plugins.Config {
 			cfg[k] = v
@@ -97,7 +100,7 @@ func (b *Bot) initializePlugins() error {
 		}
 	}
 	if enabled, ok := b.Config.Plugins.Enabled["IMDB"]; !ok || enabled {
-		im := plugin.NewIMDBPlugin()
+		im := imdbplugin.New()
 		cfg := map[string]interface{}{"debug": b.Debug, "theme_file": b.Config.Announce.ThemeFile}
 		for k, v := range b.Config.Plugins.Config {
 			cfg[k] = v

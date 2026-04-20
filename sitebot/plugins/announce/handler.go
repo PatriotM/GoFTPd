@@ -1,4 +1,4 @@
-package plugin
+package announce
 
 import (
 	"fmt"
@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"goftpd/sitebot/internal/event"
+	"goftpd/sitebot/internal/plugin"
 	tmpl "goftpd/sitebot/internal/template"
 )
 
@@ -29,7 +30,7 @@ type AnnouncePlugin struct {
 	state map[string]*releaseState
 }
 
-func NewAnnouncePlugin() *AnnouncePlugin { return &AnnouncePlugin{state: map[string]*releaseState{}} }
+func New() *AnnouncePlugin               { return &AnnouncePlugin{state: map[string]*releaseState{}} }
 func (p *AnnouncePlugin) Name() string   { return "Announce" }
 func (p *AnnouncePlugin) Initialize(config map[string]interface{}) error {
 	if debug, ok := config["debug"].(bool); ok {
@@ -123,7 +124,7 @@ func (p *AnnouncePlugin) render(key string, vars map[string]string, fallback str
 	return fallback
 }
 
-func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]Output, error) {
+func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	rel := releaseName(evt)
@@ -143,7 +144,7 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]Output, error) {
 		vars["section"] = section
 	}
 	fileType := classifyFile(strings.ToLower(evt.Path))
-	outs := []Output{}
+	outs := []plugin.Output{}
 
 	switch evt.Type {
 	case event.EventMKDir:
@@ -151,7 +152,7 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]Output, error) {
 		if path.Base(path.Dir(path.Clean(evt.Path))) == strings.ToUpper(section) || strings.EqualFold(path.Dir(path.Clean(evt.Path)), "/"+section) {
 			if !st.Created {
 				st.Created = true
-				outs = append(outs, Output{Type: "NEW", Text: p.render("NEWDIR", vars, fmt.Sprintf("NEW : [%s] %s by %s", section, rel, evt.User))})
+				outs = append(outs, plugin.Output{Type: "NEW", Text: p.render("NEWDIR", vars, fmt.Sprintf("NEW : [%s] %s by %s", section, rel, evt.User))})
 			}
 		}
 	case event.EventUpload:
@@ -161,22 +162,22 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]Output, error) {
 		case "sfv":
 			if !st.HasSFV {
 				st.HasSFV = true
-				outs = append(outs, Output{Type: "RACE", Text: p.render("SFV_RAR", vars, fmt.Sprintf("RACE: [%s] Got SFV for %s uploaded by %s.", section, rel, evt.User))})
+				outs = append(outs, plugin.Output{Type: "RACE", Text: p.render("SFV_RAR", vars, fmt.Sprintf("RACE: [%s] Got SFV for %s uploaded by %s.", section, rel, evt.User))})
 			}
 		case "rar":
 			if evt.User != "" && !st.Users[evt.User] {
 				st.Users[evt.User] = true
 				if !st.FirstRar {
 					st.FirstRar = true
-					outs = append(outs, Output{Type: "RACE", Text: p.render("UPDATE_RAR", vars, fmt.Sprintf("RACE: [%s] %s got its first rar file from %s at %s.", section, rel, evt.User, speedMB(evt)))})
+					outs = append(outs, plugin.Output{Type: "RACE", Text: p.render("UPDATE_RAR", vars, fmt.Sprintf("RACE: [%s] %s got its first rar file from %s at %s.", section, rel, evt.User, speedMB(evt)))})
 				} else {
-					outs = append(outs, Output{Type: "RACE", Text: p.render("RACE_RAR", vars, fmt.Sprintf("RACE: [%s] %s - %s joined the race at %s.", section, rel, evt.User, speedMB(evt)))})
+					outs = append(outs, plugin.Output{Type: "RACE", Text: p.render("RACE_RAR", vars, fmt.Sprintf("RACE: [%s] %s - %s joined the race at %s.", section, rel, evt.User, speedMB(evt)))})
 				}
 			}
 			// NEW LEADER: announce when the leading user changes (skip single-user races)
 			if leader := vars["leader_name"]; leader != "" && leader != st.CurrentLeader && len(st.Users) > 1 {
 				if st.CurrentLeader != "" {
-					outs = append(outs, Output{Type: "RACE", Text: p.render("NEWLEADER", vars, fmt.Sprintf("NEW LEADER: [%s] %s - %s takes the lead - %sMB/%sF/%s%%/%s", section, rel, leader, vars["leader_mb"], vars["leader_files"], vars["leader_pct"], vars["leader_speed"]))})
+					outs = append(outs, plugin.Output{Type: "RACE", Text: p.render("NEWLEADER", vars, fmt.Sprintf("NEW LEADER: [%s] %s - %s takes the lead - %sMB/%sF/%s%%/%s", section, rel, leader, vars["leader_mb"], vars["leader_files"], vars["leader_pct"], vars["leader_speed"]))})
 				}
 				st.CurrentLeader = leader
 			}
@@ -190,19 +191,19 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]Output, error) {
 						st.HalfwayDone = true
 						left := t1 - p1
 						vars["t_filesleft"] = fmt.Sprintf("%d", left)
-						outs = append(outs, Output{Type: "RACE", Text: p.render("HALFWAY", vars, fmt.Sprintf("HALFWAY: [%s] %s - leader: %s [%sMB/%sF/%s%%/%s] - %d files left.", section, rel, vars["leader_name"], vars["leader_mb"], vars["leader_files"], vars["leader_pct"], vars["leader_speed"], left))})
+						outs = append(outs, plugin.Output{Type: "RACE", Text: p.render("HALFWAY", vars, fmt.Sprintf("HALFWAY: [%s] %s - leader: %s [%sMB/%sF/%s%%/%s] - %d files left.", section, rel, vars["leader_name"], vars["leader_mb"], vars["leader_files"], vars["leader_pct"], vars["leader_speed"], left))})
 					}
 				}
 			}
 		}
 	case event.EventRaceEnd:
-		outs = append(outs, Output{Type: "COMPLETE", Text: p.render("COMPLETE", vars, fmt.Sprintf("COMPLETE: [%s] %s by %s racers - %s/%s/%s/%s", section, rel, vars["u_count"], vars["t_mbytes"], vars["t_files"], vars["t_avgspeed"], vars["t_duration"]))})
+		outs = append(outs, plugin.Output{Type: "COMPLETE", Text: p.render("COMPLETE", vars, fmt.Sprintf("COMPLETE: [%s] %s by %s racers - %s/%s/%s/%s", section, rel, vars["u_count"], vars["t_mbytes"], vars["t_files"], vars["t_avgspeed"], vars["t_duration"]))})
 	case event.EventRaceStats:
 		if line := strings.TrimSpace(p.render("STATS_HOF", vars, "STATS: Users Hall Of Fame")); line != "" {
-			outs = append(outs, Output{Type: "STATS", Text: line})
+			outs = append(outs, plugin.Output{Type: "STATS", Text: line})
 		}
 		if line := strings.TrimSpace(p.render("STATS_SPEEDS", vars, fmt.Sprintf("STATS: Slowest: %s at %s - Fastest: %s at %s.", vars["u_slowest_name"], vars["u_slowest_speed"], vars["u_fastest_name"], vars["u_fastest_speed"]))); line != "" {
-			outs = append(outs, Output{Type: "STATS", Text: line})
+			outs = append(outs, plugin.Output{Type: "STATS", Text: line})
 		}
 	case event.EventRaceUser:
 		perVars := map[string]string{}
@@ -217,16 +218,16 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]Output, error) {
 		perVars["u_speed"] = vars["u_racer_speed"]
 		fallback := fmt.Sprintf("STATS: [%s] %s/%s %sMB %s%% %s", vars["u_rank"], perVars["u_name"], perVars["u_group"], perVars["u_mb"], perVars["u_pct"], perVars["u_speed"])
 		if line := strings.TrimSpace(p.render("STATS_USER", perVars, fallback)); line != "" {
-			outs = append(outs, Output{Type: "STATS", Text: line})
+			outs = append(outs, plugin.Output{Type: "STATS", Text: line})
 		}
 	case event.EventRaceFooter:
 		if line := strings.TrimSpace(p.render("STATS_END", vars, "STATS: -----------====>>>>           END          <<<<====-----------")); line != "" {
-			outs = append(outs, Output{Type: "STATS", Text: line})
+			outs = append(outs, plugin.Output{Type: "STATS", Text: line})
 		}
 	case event.EventNuke:
-		outs = append(outs, Output{Type: "NUKE", Text: p.render("NUKE", vars, fmt.Sprintf("NUKE: [%s] %s by %s", section, rel, evt.User))})
+		outs = append(outs, plugin.Output{Type: "NUKE", Text: p.render("NUKE", vars, fmt.Sprintf("NUKE: [%s] %s by %s", section, rel, evt.User))})
 	case event.EventUnnuke:
-		outs = append(outs, Output{Type: "UNNUKE", Text: p.render("UNNUKE", vars, fmt.Sprintf("UNNUKE: [%s] %s by %s", section, rel, evt.User))})
+		outs = append(outs, plugin.Output{Type: "UNNUKE", Text: p.render("UNNUKE", vars, fmt.Sprintf("UNNUKE: [%s] %s by %s", section, rel, evt.User))})
 	case event.EventPre:
 		group := vars["group"]
 		user := vars["user"]
@@ -237,14 +238,14 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]Output, error) {
 			user = evt.User
 		}
 		fallback := fmt.Sprintf("PRE: [%s] %s by %s (%s) - %s/%s", section, rel, group, user, vars["t_mbytes"], vars["t_files"])
-		outs = append(outs, Output{Type: "PRE", Text: p.render("PRE", vars, fallback)})
+		outs = append(outs, plugin.Output{Type: "PRE", Text: p.render("PRE", vars, fallback)})
 	case event.EventPreBW:
 		fallback := fmt.Sprintf("PREBW: [%s] %s :: %s%s @ %s%s :: Highest %s%s",
 			section, rel,
 			vars["traffic_val"], vars["traffic_unit"],
 			vars["avg_val"], vars["avg_unit"],
 			vars["peak_val"], vars["peak_unit"])
-		outs = append(outs, Output{Type: "PREBW", Text: p.render("PREBW", vars, fallback)})
+		outs = append(outs, plugin.Output{Type: "PREBW", Text: p.render("PREBW", vars, fallback)})
 	case event.EventPreBWInterval:
 		fallback := fmt.Sprintf("PREBW: [%s] %s :: %s%s@%ss :: %s%s@%ss :: %s%s@%ss :: %s%s@%ss :: %s%s@%ss :: Highest %s%s",
 			section, rel,
@@ -254,14 +255,14 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]Output, error) {
 			vars["b4"], vars["u4"], vars["t4"],
 			vars["b5"], vars["u5"], vars["t5"],
 			vars["peak_val"], vars["peak_unit"])
-		outs = append(outs, Output{Type: "PREBW", Text: p.render("PREBWINTERVAL", vars, fallback)})
+		outs = append(outs, plugin.Output{Type: "PREBW", Text: p.render("PREBWINTERVAL", vars, fallback)})
 	case event.EventPreBWUser:
 		fallback := fmt.Sprintf("PREBW: [%s] %s :: %s%s/%sF @ %s%s :: Highest %s%s",
 			section, vars["user"],
 			vars["size_val"], vars["size_unit"], vars["cnt_files"],
 			vars["avg_val_user"], vars["avg_unit_user"],
 			vars["peak_val_user"], vars["peak_unit_user"])
-		outs = append(outs, Output{Type: "PREBW", Text: p.render("PREBWUSER", vars, fallback)})
+		outs = append(outs, plugin.Output{Type: "PREBW", Text: p.render("PREBWUSER", vars, fallback)})
 	}
 	return outs, nil
 }

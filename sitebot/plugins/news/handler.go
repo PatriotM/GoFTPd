@@ -15,7 +15,7 @@ import (
 	"goftpd/sitebot/internal/plugin"
 )
 
-type Plugin struct {
+type NewsPlugin struct {
 	mu            sync.Mutex
 	file          string
 	maxShown      int
@@ -33,8 +33,8 @@ type item struct {
 	Text string `json:"text"`
 }
 
-func New() *Plugin {
-	return &Plugin{
+func New() *NewsPlugin {
+	return &NewsPlugin{
 		file:          "./data/news.jsonl",
 		maxShown:      20,
 		defaultShown:  5,
@@ -44,9 +44,9 @@ func New() *Plugin {
 	}
 }
 
-func (p *Plugin) Name() string { return "News" }
+func (p *NewsPlugin) Name() string { return "News" }
 
-func (p *Plugin) Initialize(config map[string]interface{}) error {
+func (p *NewsPlugin) Initialize(config map[string]interface{}) error {
 	newsConfig := plugin.ConfigSection(config, "news")
 	if s, ok := stringConfig(newsConfig, config, "file", "news_file"); ok && strings.TrimSpace(s) != "" {
 		p.file = strings.TrimSpace(s)
@@ -75,9 +75,9 @@ func (p *Plugin) Initialize(config map[string]interface{}) error {
 	return os.MkdirAll(filepath.Dir(p.file), 0755)
 }
 
-func (p *Plugin) Close() error { return nil }
+func (p *NewsPlugin) Close() error { return nil }
 
-func (p *Plugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
+func (p *NewsPlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 	if evt.Type != event.EventCommand {
 		return nil, nil
 	}
@@ -95,7 +95,7 @@ func (p *Plugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 	}
 }
 
-func (p *Plugin) show(nick, args string) ([]plugin.Output, error) {
+func (p *NewsPlugin) show(nick, args string) ([]plugin.Output, error) {
 	p.mu.Lock()
 	items, err := p.read()
 	p.mu.Unlock()
@@ -142,7 +142,7 @@ func (p *Plugin) show(nick, args string) ([]plugin.Output, error) {
 	return notices(nick, out...), nil
 }
 
-func (p *Plugin) add(evt *event.Event, text string) ([]plugin.Output, error) {
+func (p *NewsPlugin) add(evt *event.Event, text string) ([]plugin.Output, error) {
 	if !p.canStaff(evt) {
 		return notice(evt.User, "Sorry, only staff can add news."), nil
 	}
@@ -174,7 +174,7 @@ func (p *Plugin) add(evt *event.Event, text string) ([]plugin.Output, error) {
 	return outs, nil
 }
 
-func (p *Plugin) delete(evt *event.Event, args string) ([]plugin.Output, error) {
+func (p *NewsPlugin) delete(evt *event.Event, args string) ([]plugin.Output, error) {
 	if !p.canStaff(evt) {
 		return notice(evt.User, "Sorry, only staff can delete news."), nil
 	}
@@ -201,7 +201,7 @@ func (p *Plugin) delete(evt *event.Event, args string) ([]plugin.Output, error) 
 	return notice(evt.User, "News deleted."), nil
 }
 
-func (p *Plugin) parseShowArgs(args string) (int, string) {
+func (p *NewsPlugin) parseShowArgs(args string) (int, string) {
 	args = strings.TrimSpace(args)
 	count := p.defaultShown
 	search := ""
@@ -228,7 +228,7 @@ func (p *Plugin) parseShowArgs(args string) (int, string) {
 	return count, search
 }
 
-func (p *Plugin) canStaff(evt *event.Event) bool {
+func (p *NewsPlugin) canStaff(evt *event.Event) bool {
 	channel := strings.ToLower(strings.TrimSpace(evt.Data["channel"]))
 	for _, ch := range p.staffChannels {
 		if strings.EqualFold(strings.TrimSpace(ch), channel) {
@@ -244,7 +244,7 @@ func (p *Plugin) canStaff(evt *event.Event) bool {
 	return false
 }
 
-func (p *Plugin) read() ([]item, error) {
+func (p *NewsPlugin) read() ([]item, error) {
 	f, err := os.Open(p.file)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -273,7 +273,7 @@ func (p *Plugin) read() ([]item, error) {
 	return items, scanner.Err()
 }
 
-func (p *Plugin) append(it item) error {
+func (p *NewsPlugin) append(it item) error {
 	if err := os.MkdirAll(filepath.Dir(p.file), 0755); err != nil {
 		return err
 	}
@@ -286,7 +286,7 @@ func (p *Plugin) append(it item) error {
 	return enc.Encode(it)
 }
 
-func (p *Plugin) write(items []item) error {
+func (p *NewsPlugin) write(items []item) error {
 	if err := os.MkdirAll(filepath.Dir(p.file), 0755); err != nil {
 		return err
 	}
