@@ -372,6 +372,44 @@ func (b *Bridge) WriteFile(filePath string, content []byte) error {
 	return nil
 }
 
+func (b *Bridge) ChecksumFile(filePath string) (uint32, error) {
+	slave := b.sm.SelectSlaveForDownload(filePath)
+	if slave == nil {
+		return 0, fmt.Errorf("file not found: %s", filePath)
+	}
+	index, err := IssueChecksum(slave, filePath)
+	if err != nil {
+		return 0, fmt.Errorf("issue checksum: %w", err)
+	}
+	resp, err := slave.FetchResponse(index, 10*time.Minute)
+	if err != nil {
+		return 0, err
+	}
+	if checksum, ok := resp.(*protocol.AsyncResponseChecksum); ok {
+		return checksum.Checksum, nil
+	}
+	return 0, fmt.Errorf("unexpected response type: %T", resp)
+}
+
+func (b *Bridge) MarkFileMissing(filePath string) error {
+	b.sm.GetVFS().DeleteFile(filePath)
+	if b.raceDB != nil {
+		return b.raceDB.DeletePath(filepath.Clean(filePath), false)
+	}
+	return nil
+}
+
+func (b *Bridge) SyncPresentFile(filePath string, checksum uint32) error {
+	f := b.sm.GetVFS().GetFile(filePath)
+	if f == nil || f.IsDir {
+		return fmt.Errorf("file not found: %s", filePath)
+	}
+	if b.raceDB != nil {
+		return b.raceDB.RecordUpload(filePath, f.Owner, f.Group, f.Size, f.XferTime, checksum)
+	}
+	return nil
+}
+
 // =====================================================================
 // VFS ADAPTER FOR PLUGINS (Implements zipscript.FileSystem implicitly)
 // =====================================================================
