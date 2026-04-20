@@ -92,6 +92,7 @@ func NewIMDBPlugin() *IMDBPlugin {
 func (p *IMDBPlugin) Name() string { return "IMDB" }
 
 func (p *IMDBPlugin) Initialize(config map[string]interface{}) error {
+	imdbConfig := ConfigSection(config, "imdb")
 	if d, ok := config["debug"].(bool); ok {
 		p.debug = d
 	}
@@ -104,6 +105,9 @@ func (p *IMDBPlugin) Initialize(config map[string]interface{}) error {
 		}
 	}
 	if raw, ok := config["imdb_sections"]; ok {
+		p.sections = toStringSlice(raw, p.sections)
+	}
+	if raw, ok := imdbConfig["sections"]; ok {
 		p.sections = toStringSlice(raw, p.sections)
 	}
 	return nil

@@ -27,6 +27,15 @@ func main() {
 		log.Fatalf("Failed to load etc/config.yml: %v", err)
 	}
 
+	// 1a. Install file logger (active only when debug=true AND log_file is set).
+	// Tee's log output to both stderr and the file, rotates daily, keeps the
+	// last log_keep_days archived copies (default 1).
+	if cfg.Debug && cfg.LogFile != "" {
+		if err := core.InstallFileLogger(cfg.LogFile, cfg.LogKeepDays); err != nil {
+			log.Printf("[LOG] file logger init failed: %v (continuing with stderr only)", err)
+		}
+	}
+
 	// SLAVE MODE: No FTP server, just connect to master and serve files
 	if cfg.Mode == "slave" {
 		startSlave(cfg)

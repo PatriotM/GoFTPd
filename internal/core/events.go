@@ -298,6 +298,9 @@ func (s *Session) emitEvent(evtType EventType, eventPath, fileName string, size 
 		for k, v := range data {
 			extra[k] = v
 		}
+		if s.Config.Debug {
+			log.Printf("[PLUGIN-DISPATCH] %s path=%s filename=%s section=%s", evtType, cleanedPath, fileName, section)
+		}
 		s.Config.PluginManager.Dispatch(&pluginpkg.Event{
 			Type:     string(evtType),
 			User:     s.User,
@@ -308,6 +311,8 @@ func (s *Session) emitEvent(evtType EventType, eventPath, fileName string, size 
 			Section:  section,
 			Extra:    extra,
 		})
+	} else if s.Config.Debug {
+		log.Printf("[PLUGIN-DISPATCH] %s — PluginManager is nil, event not dispatched", evtType)
 	}
 }
 
@@ -321,19 +326,31 @@ func (s *Session) emitEvent(evtType EventType, eventPath, fileName string, size 
 // use max(user.DurationMs) as the wall-clock span instead, which is the
 // effective critical-path time across all racers.
 func emitRaceEnd(s *Session, users []VFSRaceUser, totalBytes int64, total int, xferMs int64) {
-	// Race span = longest per-user active transfer time. With a single
-	// uploader this equals wall-clock time; with parallel racers it's a
-	// good approximation since the slowest concurrent uploader dictates
-	// when the release is complete. Using the last-file xferMs (old
-	// behavior) gives wildly inflated speeds when files are small/fast.
+	// Prefer wall-clock race duration from the race DB (first file start to
+	// last file end). Summing per-file durations (u.DurationMs) overcounts
+	// heavily when uploads run in parallel — a 52s race with 8 parallel
+	// threads can easily sum to 400s+ of "transfer time". pzs-ng uses
+	// wall-clock for STATS_SPEED totals too.
 	var raceDurationMs int64
-	for _, u := range users {
-		if u.DurationMs > raceDurationMs {
-			raceDurationMs = u.DurationMs
+	if s.Config.Mode == "master" && s.MasterManager != nil {
+		if bridge, ok := s.MasterManager.(MasterBridge); ok {
+			if sec := bridge.GetRaceWallClockSeconds(s.CurrentDir); sec > 0 {
+				raceDurationMs = sec * 1000
+			}
+		}
+	}
+
+	// Fallback: longest per-user active transfer time. Good for sequential
+	// uploaders, overcounts for parallel — but better than last-file xferMs.
+	if raceDurationMs == 0 {
+		for _, u := range users {
+			if u.DurationMs > raceDurationMs {
+				raceDurationMs = u.DurationMs
+			}
 		}
 	}
 	if raceDurationMs == 0 {
-		raceDurationMs = xferMs // fallback for safety
+		raceDurationMs = xferMs // last-ditch fallback
 	}
 	if raceDurationMs < 1 {
 		raceDurationMs = 1

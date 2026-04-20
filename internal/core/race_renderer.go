@@ -8,15 +8,17 @@ import (
 )
 
 const (
-	cpTL = byte(0xDA)
-	cpTR = byte(0xBF)
-	cpBL = byte(0xC0)
-	cpBR = byte(0xD9)
-	cpHZ = byte(0xC4)
-	cpVT = byte(0xB3)
-	cpLT = byte(0xC3)
-	cpRT = byte(0xB4)
-	cpCR = byte(0xC5)
+	cpTL = byte(0xDA) // top-left corner
+	cpTR = byte(0xBF) // top-right corner
+	cpBL = byte(0xC0) // bottom-left corner
+	cpBR = byte(0xD9) // bottom-right corner
+	cpHZ = byte(0xC4) // horizontal line
+	cpVT = byte(0xB3) // vertical line
+	cpLT = byte(0xC3) // left-T (prongs: right + up + down)
+	cpRT = byte(0xB4) // right-T (prongs: left + up + down)
+	cpCR = byte(0xC5) // cross (prongs all 4 directions)
+	cpTD = byte(0xC2) // top-T (prong pointing down only)
+	cpBU = byte(0xC1) // bottom-T (prong pointing up only)
 )
 
 func clean(s string, max int) string {
@@ -57,17 +59,22 @@ func line(l, fill, r byte, n int) []byte {
 	return b
 }
 
-func sep(widths ...int) []byte {
-	out := []byte{cpLT}
+// sep draws a row separator using the given left-edge, junction, and right-edge
+// connector characters. Examples:
+//   sep(cpLT, cpCR, cpRT, ...)   → row between two rows that both have columns
+//   sep(cpLT, cpTD, cpRT, ...)   → row below a single-wide block, above columns
+//   sep(cpLT, cpBU, cpRT, ...)   → row below columns, above a single-wide block
+func sep(leftEdge, junction, rightEdge byte, widths ...int) []byte {
+	out := []byte{leftEdge}
 	for i, w := range widths {
 		for j := 0; j < w; j++ {
 			out = append(out, cpHZ)
 		}
 		if i != len(widths)-1 {
-			out = append(out, cpCR)
+			out = append(out, junction)
 		}
 	}
-	out = append(out, cpRT)
+	out = append(out, rightEdge)
 	return out
 }
 
@@ -184,9 +191,12 @@ func RenderRaceStats(w io.Writer, users []VFSRaceUser, groups []VFSRaceGroup, to
 	text(w, "  \\____|\\___/|_|     |_| |_|   \\__,_| ", width)
 	text(w, "", width)
 
-	raw(w, sep(32, 7, 8, 11, 8))
+	// Junction = top-T: the section above is a single-wide block (ASCII art),
+	// so column dividers start here and only go DOWNWARD. Using cpCR here
+	// would draw little nubs sticking up above the line.
+	raw(w, sep(cpLT, cpTD, cpRT, 32, 7, 8, 11, 8))
 	row(w, "Users", "Files", "Size", "Speed", "%")
-	raw(w, sep(32, 7, 8, 11, 8))
+	raw(w, sep(cpLT, cpCR, cpRT, 32, 7, 8, 11, 8))
 
 	for i, u := range users {
 		label := fmt.Sprintf("#%-2d %-10s/%-10s",
@@ -206,9 +216,9 @@ func RenderRaceStats(w io.Writer, users []VFSRaceUser, groups []VFSRaceGroup, to
 	}
 
 	if len(groups) > 0 {
-		raw(w, sep(32, 7, 8, 11, 8))
+		raw(w, sep(cpLT, cpCR, cpRT, 32, 7, 8, 11, 8))
 		row(w, "Groups", "Files", "Size", "Speed", "%")
-		raw(w, sep(32, 7, 8, 11, 8))
+		raw(w, sep(cpLT, cpCR, cpRT, 32, 7, 8, 11, 8))
 
 		for i, g := range groups {
 			label := fmt.Sprintf("#%-2d %-28s",
@@ -227,7 +237,7 @@ func RenderRaceStats(w io.Writer, users []VFSRaceUser, groups []VFSRaceGroup, to
 		}
 	}
 
-	raw(w, sep(32, 7, 8, 11, 8))
+	raw(w, sep(cpLT, cpCR, cpRT, 32, 7, 8, 11, 8))
 	row(
 		w,
 		"TOTAL",
@@ -237,7 +247,9 @@ func RenderRaceStats(w io.Writer, users []VFSRaceUser, groups []VFSRaceGroup, to
 		fmt.Sprintf("%d%%", totalPct),
 	)
 
-	raw(w, line(cpBL, cpHZ, cpBR, width))
+	// Bottom border uses bottom-T junctions so column separators from the
+	// TOTAL row terminate cleanly into the bottom edge.
+	raw(w, sep(cpBL, cpBU, cpBR, 32, 7, 8, 11, 8))
 }
 
 func RenderFTPReplyBlock(w io.Writer, code int, finalLine string, render func(io.Writer)) {

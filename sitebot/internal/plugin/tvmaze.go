@@ -92,6 +92,7 @@ func (p *TVMazePlugin) startWorker() {
 func (p *TVMazePlugin) Name() string { return "TVMaze" }
 
 func (p *TVMazePlugin) Initialize(config map[string]interface{}) error {
+	tvmazeConfig := ConfigSection(config, "tvmaze")
 	if debug, ok := config["debug"].(bool); ok {
 		p.debug = debug
 	}
@@ -102,6 +103,9 @@ func (p *TVMazePlugin) Initialize(config map[string]interface{}) error {
 		}
 	}
 	if raw, ok := config["tvmaze_sections"]; ok {
+		p.sections = toStringSlice(raw, p.sections)
+	}
+	if raw, ok := tvmazeConfig["sections"]; ok {
 		p.sections = toStringSlice(raw, p.sections)
 	}
 	return nil

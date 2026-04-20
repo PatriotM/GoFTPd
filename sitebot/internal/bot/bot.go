@@ -14,6 +14,7 @@ import (
 	"goftpd/sitebot/internal/event"
 	"goftpd/sitebot/internal/irc"
 	"goftpd/sitebot/internal/plugin"
+	newsplugin "goftpd/sitebot/plugins/news"
 )
 
 type Bot struct {
@@ -121,6 +122,19 @@ func (b *Bot) initializePlugins() error {
 			return err
 		}
 	}
+	if enabled, ok := b.Config.Plugins.Enabled["News"]; !ok || enabled {
+		news := newsplugin.New()
+		cfg := map[string]interface{}{"debug": b.Debug}
+		for k, v := range b.Config.Plugins.Config {
+			cfg[k] = v
+		}
+		if err := news.Initialize(cfg); err != nil {
+			return err
+		}
+		if err := b.Plugins.Register(news); err != nil {
+			return err
+		}
+	}
 	if b.Debug {
 		log.Printf("[Bot] Loaded %d plugins: %v", len(b.Plugins.List()), b.Plugins.List())
 	}
@@ -178,10 +192,66 @@ func (b *Bot) listenIRC() {
 				}
 			}
 		}
+		if evt := b.commandEventFromPrivmsg(line); evt != nil {
+			select {
+			case b.EventChan <- evt:
+			case <-b.Done:
+			}
+		}
 	}
 	if err := b.IRC.Listen(handler); err != nil {
 		log.Printf("[Bot] IRC listen error: %v", err)
 	}
+}
+
+func (b *Bot) commandEventFromPrivmsg(line string) *event.Event {
+	if !strings.HasPrefix(line, ":") || !strings.Contains(line, " PRIVMSG ") {
+		return nil
+	}
+	withoutPrefix := strings.TrimPrefix(line, ":")
+	prefix, rest, ok := strings.Cut(withoutPrefix, " PRIVMSG ")
+	if !ok {
+		return nil
+	}
+	sender := prefix
+	host := ""
+	if nick, userHost, ok := strings.Cut(prefix, "!"); ok {
+		sender = nick
+		host = userHost
+	}
+	target, msg, ok := strings.Cut(rest, " :")
+	if !ok {
+		return nil
+	}
+	target = strings.TrimSpace(target)
+	msg = strings.TrimSpace(msg)
+	if enc, ok := b.IRC.Keys[target]; ok && strings.HasPrefix(msg, "+OK ") {
+		ciphertext := strings.TrimSpace(strings.TrimPrefix(msg, "+OK "))
+		ciphertext = strings.TrimPrefix(ciphertext, "*")
+		if plain, err := enc.Decrypt(ciphertext); err == nil {
+			msg = strings.TrimSpace(plain)
+		}
+	}
+	if !strings.HasPrefix(target, "#") || !strings.HasPrefix(msg, "!") {
+		return nil
+	}
+
+	fields := strings.Fields(strings.TrimPrefix(msg, "!"))
+	if len(fields) == 0 {
+		return nil
+	}
+	command := strings.ToLower(fields[0])
+	args := ""
+	if len(fields) > 1 {
+		args = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(msg, "!"), fields[0]))
+	}
+	evt := event.NewEvent(event.EventCommand, sender, "", target, command)
+	evt.Data["command"] = command
+	evt.Data["args"] = args
+	evt.Data["channel"] = target
+	evt.Data["host"] = host
+	evt.Data["raw"] = msg
+	return evt
 }
 
 func (b *Bot) onRegistered() {
@@ -319,6 +389,20 @@ func (b *Bot) handleEvent(evt *event.Event) {
 		return
 	}
 	for _, out := range outs {
+		if strings.TrimSpace(out.Target) != "" {
+			for _, line := range strings.Split(out.Text, "\n") {
+				line = strings.TrimSpace(line)
+				if line == "" {
+					continue
+				}
+				if out.Notice {
+					_ = b.IRC.SendNotice(out.Target, line)
+				} else {
+					_ = b.IRC.SendMessage(out.Target, line)
+				}
+			}
+			continue
+		}
 		channels := b.routeChannels(evt, out.Type)
 		for _, line := range strings.Split(out.Text, "\n") {
 			line = strings.TrimSpace(line)

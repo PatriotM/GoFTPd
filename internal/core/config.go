@@ -144,6 +144,13 @@ type Config struct {
 	// Debug
 	Debug bool `yaml:"debug"`
 
+	// Log file. If LogFile is set AND Debug is true, log output is tee'd to
+	// both stderr and the given file, with daily rotation. Rotated files
+	// (<LogFile>.YYYY-MM-DD) older than LogKeepDays are deleted. Default
+	// LogKeepDays = 1 (today + yesterday only).
+	LogFile     string `yaml:"log_file"`
+	LogKeepDays int    `yaml:"log_keep_days"`
+
 	// TLS/Security Policy
 	RequireTLSControl bool                `yaml:"require_tls_control"` // Force TLS on control channel
 	RequireTLSData    bool                `yaml:"require_tls_data"`    // Force TLS on data channel

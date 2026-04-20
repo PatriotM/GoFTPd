@@ -37,6 +37,7 @@ site/
 *.sqlite3
 logs/
 *.log
+sitebot/data/
 
 # VFS persistence data
 userdata/
@@ -63,5 +64,4 @@ Thumbs.db
 vendor/
 *.o
 *.a
-
 
