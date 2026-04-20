@@ -36,9 +36,7 @@ func NewBot(cfg *Config) *Bot {
 }
 
 func (b *Bot) Start() error {
-	if b.Debug {
-		log.Println("[Bot] Starting GoSitebot")
-	}
+	log.Println("[Bot] Starting GoSitebot")
 	b.IRC = irc.NewBot(b.Config.IRC.Host, b.Config.IRC.Port, b.Config.IRC.Nick, b.Config.IRC.User, b.Config.IRC.RealName)
 	b.IRC.SSL = b.Config.IRC.SSL
 	b.IRC.Password = b.Config.IRC.Password
@@ -152,9 +150,7 @@ func (b *Bot) initializePlugins() error {
 			return err
 		}
 	}
-	if b.Debug {
-		log.Printf("[Bot] Loaded %d plugins: %v", len(b.Plugins.List()), b.Plugins.List())
-	}
+	log.Printf("[Bot] Loaded %d plugins: %v", len(b.Plugins.List()), b.Plugins.List())
 	return nil
 }
 
@@ -335,10 +331,19 @@ func (b *Bot) onRegistered() {
 }
 
 func (b *Bot) readEvents() {
+	log.Printf("[Bot] FIFO reader starting, watching %s", b.Config.EventFIFO)
+	waited := false
 	for {
 		for {
 			if _, err := os.Stat(b.Config.EventFIFO); err == nil {
+				if waited {
+					log.Printf("[Bot] FIFO appeared at %s", b.Config.EventFIFO)
+				}
 				break
+			}
+			if !waited {
+				log.Printf("[Bot] FIFO not present at %s, waiting...", b.Config.EventFIFO)
+				waited = true
 			}
 			time.Sleep(time.Second)
 		}
@@ -348,12 +353,16 @@ func (b *Bot) readEvents() {
 			time.Sleep(2 * time.Second)
 			continue
 		}
+		log.Printf("[Bot] FIFO opened, reading events from %s", b.Config.EventFIFO)
 		s := bufio.NewScanner(f)
 		for s.Scan() {
-			evt, err := parseEvent(s.Text())
+			line := s.Text()
+			evt, err := parseEvent(line)
 			if err != nil {
+				log.Printf("[Bot] FIFO parse error: %v (raw=%q)", err, line)
 				continue
 			}
+			log.Printf("[Bot] FIFO got event %s section=%s path=%s file=%s", evt.Type, evt.Section, evt.Path, evt.Filename)
 			select {
 			case b.EventChan <- evt:
 			case <-b.Done:
@@ -361,7 +370,13 @@ func (b *Bot) readEvents() {
 				return
 			}
 		}
+		if err := s.Err(); err != nil {
+			log.Printf("[Bot] FIFO scanner error: %v", err)
+		} else {
+			log.Printf("[Bot] FIFO writer closed (EOF), reopening...")
+		}
 		_ = f.Close()
+		waited = false
 	}
 }
 func (b *Bot) processEvents() {
@@ -425,21 +440,19 @@ func (b *Bot) handleEvent(evt *event.Event) {
 		b.handleInviteEvent(evt)
 		return
 	}
-	if b.Debug {
-		log.Printf("[Bot] Event %s section=%s path=%s file=%s", evt.Type, evt.Section, evt.Path, evt.Filename)
-	}
+	log.Printf("[Bot] handleEvent %s section=%s path=%s file=%s user=%s", evt.Type, evt.Section, evt.Path, evt.Filename, evt.User)
 	outs, err := b.Plugins.ProcessEvent(evt)
 	if err != nil {
-		if b.Debug {
-			log.Printf("[Bot] Plugin processing failed for %s: %v", evt.Type, err)
-		}
+		log.Printf("[Bot] Plugin processing error for %s: %v", evt.Type, err)
 		if len(outs) == 0 {
 			return
 		}
 	}
-	if b.Debug && len(outs) == 0 {
-		log.Printf("[Bot] Event %s produced no plugin output", evt.Type)
+	if len(outs) == 0 {
+		log.Printf("[Bot] %s produced no plugin output", evt.Type)
+		return
 	}
+	log.Printf("[Bot] %s produced %d plugin outputs", evt.Type, len(outs))
 	for _, out := range outs {
 		if strings.TrimSpace(out.Target) != "" {
 			for _, line := range strings.Split(out.Text, "\n") {
@@ -447,13 +460,11 @@ func (b *Bot) handleEvent(evt *event.Event) {
 				if line == "" {
 					continue
 				}
-				if b.Debug {
-					kind := "PRIVMSG"
-					if out.Notice {
-						kind = "NOTICE"
-					}
-					log.Printf("[Bot] Sending %s to %s: %s", kind, out.Target, line)
+				kind := "PRIVMSG"
+				if out.Notice {
+					kind = "NOTICE"
 				}
+				log.Printf("[Bot] -> %s %s: %s", kind, out.Target, line)
 				if out.Notice {
 					if err := b.IRC.SendNotice(out.Target, line); err != nil {
 						log.Printf("[Bot] NOTICE %s failed: %v", out.Target, err)
@@ -467,15 +478,17 @@ func (b *Bot) handleEvent(evt *event.Event) {
 			continue
 		}
 		channels := b.routeChannels(evt, out.Type)
+		if len(channels) == 0 {
+			log.Printf("[Bot] %s output dropped — routeChannels returned empty for section=%s outType=%s", evt.Type, evt.Section, out.Type)
+			continue
+		}
 		for _, line := range strings.Split(out.Text, "\n") {
 			line = strings.TrimSpace(line)
 			if line == "" {
 				continue
 			}
 			for _, ch := range channels {
-				if b.Debug {
-					log.Printf("[Bot] Sending %s to %s: %s", out.Type, ch, line)
-				}
+				log.Printf("[Bot] -> %s %s: %s", out.Type, ch, line)
 				if err := b.IRC.SendMessage(ch, line); err != nil {
 					log.Printf("[Bot] %s to %s failed: %v", out.Type, ch, err)
 				}

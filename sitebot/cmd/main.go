@@ -15,6 +15,15 @@ func main() {
 	flag.Parse()
 	cfg, err := bot.LoadConfig(*cfgPath)
 	if err != nil { log.Fatalf("config: %v", err) }
+
+	// File logging — only active when log_file is set. Tee's to stderr+file
+	// with daily rotation (kept log_keep_days days, default 1).
+	if cfg.LogFile != "" {
+		if err := bot.InstallFileLogger(cfg.LogFile, cfg.LogKeepDays); err != nil {
+			log.Printf("[LOG] file logger init failed: %v (continuing with stderr only)", err)
+		}
+	}
+
 	b := bot.NewBot(cfg)
 	if err := b.Start(); err != nil { log.Fatalf("start: %v", err) }
 	log.Println("GoSitebot running...")

@@ -1083,7 +1083,12 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				if sfvEntries := bridge.GetSFVData(s.CurrentDir); sfvEntries != nil {
 					users, _, totalBytes, present, total := bridge.GetVFSRaceStats(s.CurrentDir)
 					if total > 0 && present >= total {
-						emitRaceEnd(s, users, totalBytes, total, xferMs)
+						// Race complete: fire COMPLETE/STATS sequence in a
+						// goroutine so the client gets 226 immediately. The
+						// FIFO writes + plugin dispatches were stacking up on
+						// the connection's hot path and delaying the final
+						// transfer ack by the time it took to do all that work.
+						go emitRaceEnd(s, users, totalBytes, total, xferMs)
 					}
 				}
 
@@ -1221,7 +1226,8 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				if sfvEntries := bridge.GetSFVData(s.CurrentDir); sfvEntries != nil {
 					users, _, totalBytes, present, total := bridge.GetVFSRaceStats(s.CurrentDir)
 					if total > 0 && present >= total {
-						emitRaceEnd(s, users, totalBytes, total, xferMs)
+						// Async — see explanation at the other emitRaceEnd call.
+						go emitRaceEnd(s, users, totalBytes, total, xferMs)
 					}
 				}
 
