@@ -373,7 +373,7 @@ func (b *Bridge) WriteFile(filePath string, content []byte) error {
 }
 
 // =====================================================================
-// VFS ADAPTER FOR PLUGINS (Implements plugin.MasterBridge implicitly)
+// VFS ADAPTER FOR PLUGINS (Implements zipscript.FileSystem implicitly)
 // =====================================================================
 
 func (b *Bridge) PluginFS() *VFSAdapter {
@@ -531,6 +531,15 @@ func (b *Bridge) GetVFSRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFS
 	}
 
 	return coreUsers, coreGroups, totalBytes, present, total
+}
+
+// GetRaceWallClockSeconds returns wall-clock race duration (first file start
+// to last file end) in seconds. 0 if race db unavailable or dir unknown.
+func (b *Bridge) GetRaceWallClockSeconds(dirPath string) int64 {
+	if b.raceDB == nil {
+		return 0
+	}
+	return b.raceDB.GetRaceWallClockSeconds(filepath.Clean(dirPath))
 }
 
 // GetSFVData returns cached SFV entries for a directory.

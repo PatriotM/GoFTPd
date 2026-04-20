@@ -81,13 +81,23 @@ func (h *Handler) OnEvent(evt *plugin.Event) error {
 	if evt == nil || evt.Type != plugin.EventMKDir {
 		return nil
 	}
+	if h.debug {
+		log.Printf("[IMDB] OnEvent MKDIR path=%s filename=%s section=%s", evt.Path, evt.Filename, evt.Section)
+	}
 	if h.svc == nil || h.svc.Bridge == nil {
+		log.Printf("[IMDB] skipping %s: svc or bridge nil", evt.Filename)
 		return nil
 	}
 	if !matchSection(evt.Section, h.sections) {
+		if h.debug {
+			log.Printf("[IMDB] skipping %s: section %q not in %v", evt.Filename, evt.Section, h.sections)
+		}
 		return nil
 	}
 	if !isMovieReleaseName(evt.Filename) {
+		if h.debug {
+			log.Printf("[IMDB] skipping %s: not a movie release name", evt.Filename)
+		}
 		return nil
 	}
 
@@ -102,12 +112,12 @@ func (h *Handler) OnEvent(evt *plugin.Event) error {
 	}
 	h.seenMu.Unlock()
 
+	log.Printf("[IMDB] queued lookup for %s", evt.Filename)
+
 	select {
 	case h.jobs <- job{dirPath: evt.Path, relname: evt.Filename, section: evt.Section}:
 	default:
-		if h.debug {
-			log.Printf("[IMDB] job queue full, dropping %s", evt.Filename)
-		}
+		log.Printf("[IMDB] job queue full, dropping %s", evt.Filename)
 	}
 	return nil
 }
@@ -223,9 +233,7 @@ func (h *Handler) doLookup(j job) {
 		log.Printf("[IMDB] WriteFile %s failed: %v", filePath, err)
 		return
 	}
-	if h.debug {
-		log.Printf("[IMDB] Wrote .imdb for %s", j.relname)
-	}
+	log.Printf("[IMDB] Wrote .imdb for %s", j.relname)
 }
 
 func (h *Handler) fetchDetails(id string) *imdbTitle {

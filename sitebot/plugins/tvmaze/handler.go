@@ -1,4 +1,4 @@
-package plugin
+package tvmaze
 
 import (
 	"encoding/json"
@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"goftpd/sitebot/internal/event"
+	"goftpd/sitebot/internal/plugin"
 	tmpl "goftpd/sitebot/internal/template"
 )
 
@@ -62,7 +63,7 @@ type tvmazeSearchResult struct {
 	Show tvmazeShow `json:"show"`
 }
 
-func NewTVMazePlugin() *TVMazePlugin {
+func New() *TVMazePlugin {
 	return &TVMazePlugin{
 		seen:     map[string]bool{},
 		client:   &http.Client{Timeout: 8 * time.Second},
@@ -92,6 +93,7 @@ func (p *TVMazePlugin) startWorker() {
 func (p *TVMazePlugin) Name() string { return "TVMaze" }
 
 func (p *TVMazePlugin) Initialize(config map[string]interface{}) error {
+	tvmazeConfig := plugin.ConfigSection(config, "tvmaze")
 	if debug, ok := config["debug"].(bool); ok {
 		p.debug = debug
 	}
@@ -102,7 +104,10 @@ func (p *TVMazePlugin) Initialize(config map[string]interface{}) error {
 		}
 	}
 	if raw, ok := config["tvmaze_sections"]; ok {
-		p.sections = toStringSlice(raw, p.sections)
+		p.sections = plugin.ToStringSlice(raw, p.sections)
+	}
+	if raw, ok := tvmazeConfig["sections"]; ok {
+		p.sections = plugin.ToStringSlice(raw, p.sections)
 	}
 	return nil
 }
@@ -173,7 +178,7 @@ func (p *TVMazePlugin) lookup(query string) (*tvmazeShow, error) {
 	return &s, nil
 }
 
-func (p *TVMazePlugin) OnEvent(evt *event.Event) ([]Output, error) {
+func (p *TVMazePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 	if evt.Type != event.EventMKDir {
 		return nil, nil
 	}

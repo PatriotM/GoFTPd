@@ -402,3 +402,30 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 
 	return users, groups, totalBytes, present, total
 }
+
+// GetRaceWallClockSeconds returns the wall-clock duration of a release race in
+// seconds: from the first recorded file upload (releases.created_at) to the
+// most recent file finish (max release_files.updated_at). Returns 0 if the
+// release isn't known. This is what pzs-ng uses for STATS_SPEED total time —
+// summing per-file durations overcounts when uploads are parallel.
+func (r *RaceDB) GetRaceWallClockSeconds(dirPath string) int64 {
+	if r == nil || r.db == nil {
+		return 0
+	}
+	var start, end sql.NullInt64
+	err := r.db.QueryRow(`
+        SELECT rel.created_at,
+               COALESCE((SELECT MAX(updated_at) FROM release_files
+                         WHERE release_id = rel.id AND is_present = 1),
+                        rel.created_at)
+        FROM releases rel WHERE rel.path = ?
+    `, dirPath).Scan(&start, &end)
+	if err != nil || !start.Valid || !end.Valid {
+		return 0
+	}
+	d := end.Int64 - start.Int64
+	if d < 1 {
+		d = 1
+	}
+	return d
+}

@@ -14,6 +14,11 @@ import (
 	"goftpd/sitebot/internal/event"
 	"goftpd/sitebot/internal/irc"
 	"goftpd/sitebot/internal/plugin"
+	announceplugin "goftpd/sitebot/plugins/announce"
+	freeplugin "goftpd/sitebot/plugins/free"
+	imdbplugin "goftpd/sitebot/plugins/imdb"
+	newsplugin "goftpd/sitebot/plugins/news"
+	tvmazeplugin "goftpd/sitebot/plugins/tvmaze"
 )
 
 type Bot struct {
@@ -31,9 +36,7 @@ func NewBot(cfg *Config) *Bot {
 }
 
 func (b *Bot) Start() error {
-	if b.Debug {
-		log.Println("[Bot] Starting GoSitebot")
-	}
+	log.Println("[Bot] Starting GoSitebot")
 	b.IRC = irc.NewBot(b.Config.IRC.Host, b.Config.IRC.Port, b.Config.IRC.Nick, b.Config.IRC.User, b.Config.IRC.RealName)
 	b.IRC.SSL = b.Config.IRC.SSL
 	b.IRC.Password = b.Config.IRC.Password
@@ -55,7 +58,7 @@ func (b *Bot) Start() error {
 
 func (b *Bot) initializePlugins() error {
 	if enabled, ok := b.Config.Plugins.Enabled["Announce"]; !ok || enabled {
-		announce := plugin.NewAnnouncePlugin()
+		announce := announceplugin.New()
 		cfg := map[string]interface{}{"debug": b.Debug, "theme_file": b.Config.Announce.ThemeFile}
 		for k, v := range b.Config.Plugins.Config {
 			cfg[k] = v
@@ -68,7 +71,7 @@ func (b *Bot) initializePlugins() error {
 		}
 	}
 	if enabled, ok := b.Config.Plugins.Enabled["TVMaze"]; !ok || enabled {
-		tv := plugin.NewTVMazePlugin()
+		tv := tvmazeplugin.New()
 		cfg := map[string]interface{}{"debug": b.Debug, "theme_file": b.Config.Announce.ThemeFile}
 		for k, v := range b.Config.Plugins.Config {
 			cfg[k] = v
@@ -96,7 +99,7 @@ func (b *Bot) initializePlugins() error {
 		}
 	}
 	if enabled, ok := b.Config.Plugins.Enabled["IMDB"]; !ok || enabled {
-		im := plugin.NewIMDBPlugin()
+		im := imdbplugin.New()
 		cfg := map[string]interface{}{"debug": b.Debug, "theme_file": b.Config.Announce.ThemeFile}
 		for k, v := range b.Config.Plugins.Config {
 			cfg[k] = v
@@ -121,9 +124,33 @@ func (b *Bot) initializePlugins() error {
 			return err
 		}
 	}
-	if b.Debug {
-		log.Printf("[Bot] Loaded %d plugins: %v", len(b.Plugins.List()), b.Plugins.List())
+	if enabled, ok := b.Config.Plugins.Enabled["News"]; !ok || enabled {
+		news := newsplugin.New()
+		cfg := map[string]interface{}{"debug": b.Debug}
+		for k, v := range b.Config.Plugins.Config {
+			cfg[k] = v
+		}
+		if err := news.Initialize(cfg); err != nil {
+			return err
+		}
+		if err := b.Plugins.Register(news); err != nil {
+			return err
+		}
 	}
+	if enabled, ok := b.Config.Plugins.Enabled["Free"]; ok && enabled {
+		free := freeplugin.New()
+		cfg := map[string]interface{}{"debug": b.Debug}
+		for k, v := range b.Config.Plugins.Config {
+			cfg[k] = v
+		}
+		if err := free.Initialize(cfg); err != nil {
+			return err
+		}
+		if err := b.Plugins.Register(free); err != nil {
+			return err
+		}
+	}
+	log.Printf("[Bot] Loaded %d plugins: %v", len(b.Plugins.List()), b.Plugins.List())
 	return nil
 }
 
@@ -178,10 +205,75 @@ func (b *Bot) listenIRC() {
 				}
 			}
 		}
+		if evt := b.commandEventFromPrivmsg(line); evt != nil {
+			select {
+			case b.EventChan <- evt:
+			case <-b.Done:
+			}
+		}
 	}
 	if err := b.IRC.Listen(handler); err != nil {
 		log.Printf("[Bot] IRC listen error: %v", err)
 	}
+}
+
+func (b *Bot) commandEventFromPrivmsg(line string) *event.Event {
+	if !strings.HasPrefix(line, ":") || !strings.Contains(line, " PRIVMSG ") {
+		return nil
+	}
+	withoutPrefix := strings.TrimPrefix(line, ":")
+	prefix, rest, ok := strings.Cut(withoutPrefix, " PRIVMSG ")
+	if !ok {
+		return nil
+	}
+	sender := prefix
+	host := ""
+	if nick, userHost, ok := strings.Cut(prefix, "!"); ok {
+		sender = nick
+		host = userHost
+	}
+	target, msg, ok := strings.Cut(rest, " :")
+	if !ok {
+		return nil
+	}
+	target = strings.TrimSpace(target)
+	msg = strings.TrimSpace(msg)
+	if enc, ok := b.IRC.Keys[target]; ok && strings.HasPrefix(msg, "+OK ") {
+		ciphertext := strings.TrimSpace(strings.TrimPrefix(msg, "+OK "))
+		ciphertext = strings.TrimPrefix(ciphertext, "*")
+		if plain, err := enc.Decrypt(ciphertext); err == nil {
+			msg = cleanIRCText(plain)
+		} else if b.Debug {
+			log.Printf("[Bot] Failed to decrypt command from %s in %s: %v", sender, target, err)
+		}
+	}
+	if !strings.HasPrefix(target, "#") || !strings.HasPrefix(msg, "!") {
+		return nil
+	}
+
+	fields := strings.Fields(strings.TrimPrefix(msg, "!"))
+	if len(fields) == 0 {
+		return nil
+	}
+	command := strings.ToLower(fields[0])
+	args := ""
+	if len(fields) > 1 {
+		args = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(msg, "!"), fields[0]))
+	}
+	evt := event.NewEvent(event.EventCommand, sender, "", target, command)
+	evt.Data["command"] = command
+	evt.Data["args"] = args
+	evt.Data["channel"] = target
+	evt.Data["host"] = host
+	evt.Data["raw"] = msg
+	if b.Debug {
+		log.Printf("[Bot] IRC command %q from %s in %s", command, sender, target)
+	}
+	return evt
+}
+
+func cleanIRCText(s string) string {
+	return strings.Trim(strings.TrimSpace(s), "\x00")
 }
 
 func (b *Bot) onRegistered() {
@@ -239,10 +331,19 @@ func (b *Bot) onRegistered() {
 }
 
 func (b *Bot) readEvents() {
+	log.Printf("[Bot] FIFO reader starting, watching %s", b.Config.EventFIFO)
+	waited := false
 	for {
 		for {
 			if _, err := os.Stat(b.Config.EventFIFO); err == nil {
+				if waited {
+					log.Printf("[Bot] FIFO appeared at %s", b.Config.EventFIFO)
+				}
 				break
+			}
+			if !waited {
+				log.Printf("[Bot] FIFO not present at %s, waiting...", b.Config.EventFIFO)
+				waited = true
 			}
 			time.Sleep(time.Second)
 		}
@@ -252,12 +353,16 @@ func (b *Bot) readEvents() {
 			time.Sleep(2 * time.Second)
 			continue
 		}
+		log.Printf("[Bot] FIFO opened, reading events from %s", b.Config.EventFIFO)
 		s := bufio.NewScanner(f)
 		for s.Scan() {
-			evt, err := parseEvent(s.Text())
+			line := s.Text()
+			evt, err := parseEvent(line)
 			if err != nil {
+				log.Printf("[Bot] FIFO parse error: %v (raw=%q)", err, line)
 				continue
 			}
+			log.Printf("[Bot] FIFO got event %s section=%s path=%s file=%s", evt.Type, evt.Section, evt.Path, evt.Filename)
 			select {
 			case b.EventChan <- evt:
 			case <-b.Done:
@@ -265,7 +370,13 @@ func (b *Bot) readEvents() {
 				return
 			}
 		}
+		if err := s.Err(); err != nil {
+			log.Printf("[Bot] FIFO scanner error: %v", err)
+		} else {
+			log.Printf("[Bot] FIFO writer closed (EOF), reopening...")
+		}
 		_ = f.Close()
+		waited = false
 	}
 }
 func (b *Bot) processEvents() {
@@ -290,22 +401,37 @@ func pathMatches(pattern, p string) bool {
 }
 func (b *Bot) routeChannels(evt *event.Event, outType string) []string {
 	if chs := b.Config.Announce.TypeRoutes[outType]; len(chs) > 0 {
-		return chs
+		return nonEmptyChannels(chs)
 	}
 	for _, sec := range b.Config.Sections {
 		if strings.EqualFold(sec.Name, evt.Section) {
-			return sec.Channels
+			if chs := nonEmptyChannels(sec.Channels); len(chs) > 0 {
+				return chs
+			}
 		}
 		for _, pat := range sec.Paths {
 			if pathMatches(pat, evt.Path) {
-				return sec.Channels
+				if chs := nonEmptyChannels(sec.Channels); len(chs) > 0 {
+					return chs
+				}
 			}
 		}
 	}
 	if strings.TrimSpace(b.Config.Announce.DefaultChannel) != "" {
 		return []string{b.Config.Announce.DefaultChannel}
 	}
-	return b.Config.IRC.Channels
+	return nonEmptyChannels(b.Config.IRC.Channels)
+}
+
+func nonEmptyChannels(channels []string) []string {
+	out := make([]string, 0, len(channels))
+	for _, ch := range channels {
+		ch = strings.TrimSpace(ch)
+		if ch != "" {
+			out = append(out, ch)
+		}
+	}
+	return out
 }
 func (b *Bot) handleEvent(evt *event.Event) {
 	// Special case: INVITE events don't go to plugins — we send an IRC
@@ -314,19 +440,58 @@ func (b *Bot) handleEvent(evt *event.Event) {
 		b.handleInviteEvent(evt)
 		return
 	}
+	log.Printf("[Bot] handleEvent %s section=%s path=%s file=%s user=%s", evt.Type, evt.Section, evt.Path, evt.Filename, evt.User)
 	outs, err := b.Plugins.ProcessEvent(evt)
 	if err != nil {
+		log.Printf("[Bot] Plugin processing error for %s: %v", evt.Type, err)
+		if len(outs) == 0 {
+			return
+		}
+	}
+	if len(outs) == 0 {
+		log.Printf("[Bot] %s produced no plugin output", evt.Type)
 		return
 	}
+	log.Printf("[Bot] %s produced %d plugin outputs", evt.Type, len(outs))
 	for _, out := range outs {
+		if strings.TrimSpace(out.Target) != "" {
+			for _, line := range strings.Split(out.Text, "\n") {
+				line = strings.TrimSpace(line)
+				if line == "" {
+					continue
+				}
+				kind := "PRIVMSG"
+				if out.Notice {
+					kind = "NOTICE"
+				}
+				log.Printf("[Bot] -> %s %s: %s", kind, out.Target, line)
+				if out.Notice {
+					if err := b.IRC.SendNotice(out.Target, line); err != nil {
+						log.Printf("[Bot] NOTICE %s failed: %v", out.Target, err)
+					}
+				} else {
+					if err := b.IRC.SendMessage(out.Target, line); err != nil {
+						log.Printf("[Bot] PRIVMSG %s failed: %v", out.Target, err)
+					}
+				}
+			}
+			continue
+		}
 		channels := b.routeChannels(evt, out.Type)
+		if len(channels) == 0 {
+			log.Printf("[Bot] %s output dropped — routeChannels returned empty for section=%s outType=%s", evt.Type, evt.Section, out.Type)
+			continue
+		}
 		for _, line := range strings.Split(out.Text, "\n") {
 			line = strings.TrimSpace(line)
 			if line == "" {
 				continue
 			}
 			for _, ch := range channels {
-				_ = b.IRC.SendMessage(ch, line)
+				log.Printf("[Bot] -> %s %s: %s", out.Type, ch, line)
+				if err := b.IRC.SendMessage(ch, line); err != nil {
+					log.Printf("[Bot] %s to %s failed: %v", out.Type, ch, err)
+				}
 			}
 		}
 	}

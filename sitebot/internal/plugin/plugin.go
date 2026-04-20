@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"fmt"
 	"sort"
 
 	"goftpd/sitebot/internal/event"
@@ -14,8 +15,10 @@ type Handler interface {
 }
 
 type Output struct {
-	Type string
-	Text string
+	Type   string
+	Text   string
+	Target string
+	Notice bool
 }
 
 // toStringSlice coerces a YAML-decoded config value into []string.
@@ -54,6 +57,30 @@ func toStringSlice(raw interface{}, fallback []string) []string {
 	return fallback
 }
 
+func ToStringSlice(raw interface{}, fallback []string) []string {
+	return toStringSlice(raw, fallback)
+}
+
+func ConfigSection(config map[string]interface{}, name string) map[string]interface{} {
+	raw, ok := config[name]
+	if !ok {
+		return map[string]interface{}{}
+	}
+	if section, ok := raw.(map[string]interface{}); ok {
+		return section
+	}
+	if section, ok := raw.(map[interface{}]interface{}); ok {
+		out := map[string]interface{}{}
+		for k, v := range section {
+			if key, ok := k.(string); ok {
+				out[key] = v
+			}
+		}
+		return out
+	}
+	return map[string]interface{}{}
+}
+
 func splitCSV(s string) []string {
 	parts := []string{}
 	start := 0
@@ -87,13 +114,28 @@ func (m *Manager) List() []string {
 }
 func (m *Manager) ProcessEvent(evt *event.Event) ([]Output, error) {
 	var outs []Output
+	var errs []error
 	for _, name := range m.List() {
-		o, err := m.plugins[name].OnEvent(evt)
+		o, err := callPlugin(m.plugins[name], evt)
 		if err == nil {
 			outs = append(outs, o...)
+		} else {
+			errs = append(errs, fmt.Errorf("%s: %w", name, err))
 		}
 	}
+	if len(errs) > 0 {
+		return outs, fmt.Errorf("%v", errs)
+	}
 	return outs, nil
+}
+
+func callPlugin(p Handler, evt *event.Event) (outs []Output, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic: %v", r)
+		}
+	}()
+	return p.OnEvent(evt)
 }
 func (m *Manager) Close() error {
 	for _, name := range m.List() {

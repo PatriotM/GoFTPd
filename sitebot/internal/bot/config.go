@@ -14,6 +14,8 @@ type Config struct {
 	rehashMu   sync.RWMutex `yaml:"-"`
 
 	Debug      bool           `yaml:"debug"`
+	LogFile    string         `yaml:"log_file"`
+	LogKeepDays int           `yaml:"log_keep_days"`
 	EventFIFO  string         `yaml:"event_fifo"`
 	IRC        IRCConfig      `yaml:"irc"`
 	Encryption EncConfig      `yaml:"encryption"`

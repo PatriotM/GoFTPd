@@ -1,5 +1,8 @@
 
 debug: true
+log_file:      "logs/sitebot.log"
+log_keep_days: 1
+
 event_fifo: "/GoFTPd/etc/goftpd.sitebot.fifo"
 
 irc:
@@ -73,8 +76,30 @@ plugins:
     Announce: true
     TVMaze: true
     IMDB: true
+    News: true
+    Free: true
   config:
-    #Section matching is case-insensitive substring — "TV" matches TV-1080P, TV-720P, etc. So in practice you only need TV:
     debug: true
-    tvmaze_sections: ["TV-1080P", "TV-720P"]
-    imdb_sections: ["X264-SD", "X265", "BLURAY"]
+
+
+    # Section matching is case-insensitive substring based.
+    # "TV" matches TV-1080P, TV-720P, TV-X265, etc.
+    tvmaze:
+      sections: ["TV-1080P", "TV-720P"]
+
+    imdb:
+      sections: ["X264-SD", "X265", "BLURAY"]
+
+    news:
+      file: "./data/news.jsonl"
+      default_shown: 5
+      max_shown: 20
+      search_default: 4
+      reply_target: "channel"
+      channels: ["#goftpd"]
+      staff_channels: ["#goftpd-staff"]
+      staff_hosts: []
+
+    free:
+      reply_target: "#goftpd"
+      stale_after_seconds: 600

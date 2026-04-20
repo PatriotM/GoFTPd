@@ -1,4 +1,4 @@
-package plugin
+package imdb
 
 import (
 	"encoding/json"
@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"goftpd/sitebot/internal/event"
+	"goftpd/sitebot/internal/plugin"
 	tmpl "goftpd/sitebot/internal/template"
 )
 
@@ -80,7 +81,7 @@ type imdbPerson struct {
 	DisplayName string `json:"displayName"`
 }
 
-func NewIMDBPlugin() *IMDBPlugin {
+func New() *IMDBPlugin {
 	return &IMDBPlugin{
 		seen:     map[string]bool{},
 		client:   &http.Client{Timeout: 8 * time.Second},
@@ -92,6 +93,7 @@ func NewIMDBPlugin() *IMDBPlugin {
 func (p *IMDBPlugin) Name() string { return "IMDB" }
 
 func (p *IMDBPlugin) Initialize(config map[string]interface{}) error {
+	imdbConfig := plugin.ConfigSection(config, "imdb")
 	if d, ok := config["debug"].(bool); ok {
 		p.debug = d
 	}
@@ -104,7 +106,10 @@ func (p *IMDBPlugin) Initialize(config map[string]interface{}) error {
 		}
 	}
 	if raw, ok := config["imdb_sections"]; ok {
-		p.sections = toStringSlice(raw, p.sections)
+		p.sections = plugin.ToStringSlice(raw, p.sections)
+	}
+	if raw, ok := imdbConfig["sections"]; ok {
+		p.sections = plugin.ToStringSlice(raw, p.sections)
 	}
 	return nil
 }
@@ -165,7 +170,7 @@ func extractMovieTitleYear(rel string) (string, int) {
 	return strings.TrimSpace(title), year
 }
 
-func (p *IMDBPlugin) OnEvent(evt *event.Event) ([]Output, error) {
+func (p *IMDBPlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 	if evt.Type != event.EventMKDir {
 		return nil, nil
 	}

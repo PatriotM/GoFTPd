@@ -8,13 +8,16 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
+	"time"
 
 	"goftpd/internal/acl"
 	"goftpd/internal/core"
 	"goftpd/internal/dupe"
 	"goftpd/internal/master"
 	"goftpd/internal/plugin"
+	"goftpd/internal/protocol"
 	"goftpd/internal/slave"
 	"goftpd/plugins/imdb"
 	"goftpd/plugins/tvmaze"
@@ -25,6 +28,15 @@ func main() {
 	cfg, err := core.LoadConfig("etc/config.yml")
 	if err != nil {
 		log.Fatalf("Failed to load etc/config.yml: %v", err)
+	}
+
+	// 1a. Install file logger (active only when debug=true AND log_file is set).
+	// Tee's log output to both stderr and the file, rotates daily, keeps the
+	// last log_keep_days archived copies (default 1).
+	if cfg.Debug && cfg.LogFile != "" {
+		if err := core.InstallFileLogger(cfg.LogFile, cfg.LogKeepDays); err != nil {
+			log.Printf("[LOG] file logger init failed: %v (continuing with stderr only)", err)
+		}
 	}
 
 	// SLAVE MODE: No FTP server, just connect to master and serve files
@@ -78,6 +90,20 @@ func main() {
 			cfg.TLSCert,
 			cfg.TLSKey,
 		)
+		sm.SetDiskStatusHook(func(name string, status protocol.DiskStatus, online, available bool, sections []string) {
+			core.PublishEvent(cfg, core.Event{
+				Type:      core.EventDiskStatus,
+				Timestamp: time.Now(),
+				Data: map[string]string{
+					"slave":       name,
+					"free_bytes":  fmt.Sprintf("%d", status.SpaceAvailable),
+					"total_bytes": fmt.Sprintf("%d", status.SpaceCapacity),
+					"online":      fmt.Sprintf("%t", online),
+					"available":   fmt.Sprintf("%t", available),
+					"sections":    strings.Join(sections, ","),
+				},
+			})
+		})
 		if err := sm.Start(); err != nil {
 			log.Fatalf("SlaveManager failed: %v", err)
 		}
@@ -96,6 +122,7 @@ func main() {
 				}
 			}
 			sm.SetSlavePolicies(policies)
+			sm.PublishAllDiskStatuses()
 			log.Printf("[MASTER] Applied routing policies for %d slave(s)", len(policies))
 		}
 
@@ -125,6 +152,7 @@ func main() {
 				}
 			}
 			sm.SetSlavePolicies(policies)
+			sm.PublishAllDiskStatuses()
 			log.Printf("[REHASH] reapplied %d slave policies", len(policies))
 		}
 	}

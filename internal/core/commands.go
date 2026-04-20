@@ -31,6 +31,24 @@ func getMlsdPerm(info os.FileInfo, isSymlink bool) string {
 	return perms
 }
 
+// isSceneSubfolder returns true if name is a conventional subfolder that lives
+// INSIDE a scene release (not a release itself). These are created repeatedly
+// across every release and must not trigger dupe-check.
+func isSceneSubfolder(name string) bool {
+	lower := strings.ToLower(name)
+	switch lower {
+	case "sample", "samples", "proof", "proofs", "subs", "sub", "subtitles",
+		"cover", "covers", "covers-back", "covers-front", "covers-side",
+		"extras", "extra", "featurettes", "nfo":
+		return true
+	}
+	// CD1, CD2, ..., DVD1, DVD2, DISC1, etc.
+	if m, _ := regexp.MatchString(`^(cd|dvd|disc|disk)\d+$`, lower); m {
+		return true
+	}
+	return false
+}
+
 // processCommand handles the core RFC 959 FTP and FXP commands.
 func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Config) bool {
 	switch cmd {
@@ -346,7 +364,16 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		}
 
 		dirName := path.Base(targetPath)
-		if s.DupeChecker != nil {
+
+		// Decide whether the new dir participates in dupe-checking. Skip:
+		//  - section dirs (parent = root) — e.g. /TV-1080P, /X265, /MP3
+		//  - known scene subfolders that exist inside many releases
+		parent := path.Dir(targetPath)
+		isSectionDir := parent == "/" || parent == "."
+		isSubFolder := isSceneSubfolder(dirName)
+		dupeEligible := !isSectionDir && !isSubFolder
+
+		if dupeEligible && s.DupeChecker != nil {
 			if dc, ok := s.DupeChecker.(interface{ IsDupe(string) (bool, error) }); ok {
 				if isDupe, err := dc.IsDupe(dirName); err == nil && isDupe {
 					fmt.Fprintf(s.Conn, "550 %s: directory already exists in dupe database.\r\n", dirName)
@@ -361,7 +388,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			}
 		}
 
-		if s.DupeChecker != nil {
+		if dupeEligible && s.DupeChecker != nil {
 			if dc, ok := s.DupeChecker.(interface {
 				AddDupe(string, string, string, int, int64) error
 			}); ok {
@@ -1056,7 +1083,12 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				if sfvEntries := bridge.GetSFVData(s.CurrentDir); sfvEntries != nil {
 					users, _, totalBytes, present, total := bridge.GetVFSRaceStats(s.CurrentDir)
 					if total > 0 && present >= total {
-						emitRaceEnd(s, users, totalBytes, total, xferMs)
+						// Race complete: fire COMPLETE/STATS sequence in a
+						// goroutine so the client gets 226 immediately. The
+						// FIFO writes + plugin dispatches were stacking up on
+						// the connection's hot path and delaying the final
+						// transfer ack by the time it took to do all that work.
+						go emitRaceEnd(s, users, totalBytes, total, xferMs)
 					}
 				}
 
@@ -1194,7 +1226,8 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				if sfvEntries := bridge.GetSFVData(s.CurrentDir); sfvEntries != nil {
 					users, _, totalBytes, present, total := bridge.GetVFSRaceStats(s.CurrentDir)
 					if total > 0 && present >= total {
-						emitRaceEnd(s, users, totalBytes, total, xferMs)
+						// Async — see explanation at the other emitRaceEnd call.
+						go emitRaceEnd(s, users, totalBytes, total, xferMs)
 					}
 				}
 

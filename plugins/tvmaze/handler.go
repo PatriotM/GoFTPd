@@ -84,13 +84,23 @@ func (h *Handler) OnEvent(evt *plugin.Event) error {
 	if evt == nil || evt.Type != plugin.EventMKDir {
 		return nil
 	}
+	if h.debug {
+		log.Printf("[TVMAZE] OnEvent MKDIR path=%s filename=%s section=%s", evt.Path, evt.Filename, evt.Section)
+	}
 	if h.svc == nil || h.svc.Bridge == nil {
+		log.Printf("[TVMAZE] skipping %s: svc or bridge nil", evt.Filename)
 		return nil
 	}
 	if !matchSection(evt.Section, h.sections) {
+		if h.debug {
+			log.Printf("[TVMAZE] skipping %s: section %q not in %v", evt.Filename, evt.Section, h.sections)
+		}
 		return nil
 	}
 	if !isTVReleaseName(evt.Filename) {
+		if h.debug {
+			log.Printf("[TVMAZE] skipping %s: not a TV release name", evt.Filename)
+		}
 		return nil
 	}
 
@@ -106,12 +116,12 @@ func (h *Handler) OnEvent(evt *plugin.Event) error {
 	}
 	h.seenMu.Unlock()
 
+	log.Printf("[TVMAZE] queued lookup for %s", evt.Filename)
+
 	select {
 	case h.jobs <- job{dirPath: evt.Path, relname: evt.Filename, section: evt.Section}:
 	default:
-		if h.debug {
-			log.Printf("[TVMAZE] job queue full, dropping %s", evt.Filename)
-		}
+		log.Printf("[TVMAZE] job queue full, dropping %s", evt.Filename)
 	}
 	return nil
 }
@@ -182,20 +192,21 @@ type tvmEpisode struct {
 func (h *Handler) doLookup(j job) {
 	title, season, episode := parseTVName(j.relname)
 	if title == "" {
+		log.Printf("[TVMAZE] parseTVName returned empty title for %s, skipping", j.relname)
 		return
 	}
+	log.Printf("[TVMAZE] lookup %s (title=%q season=%d episode=%d)", j.relname, title, season, episode)
 
 	q := url.QueryEscape(title)
 	searchURL := fmt.Sprintf("https://api.tvmaze.com/singlesearch/shows?q=%s&embed=episodes", q)
 	resp, err := h.client.Get(searchURL)
 	if err != nil {
-		if h.debug {
-			log.Printf("[TVMAZE] search %q failed: %v", title, err)
-		}
+		log.Printf("[TVMAZE] search %q failed: %v", title, err)
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
+		log.Printf("[TVMAZE] search %q got HTTP %d", title, resp.StatusCode)
 		return
 	}
 	body, err := io.ReadAll(resp.Body)
@@ -204,12 +215,11 @@ func (h *Handler) doLookup(j job) {
 	}
 	var show tvmShow
 	if err := json.Unmarshal(body, &show); err != nil {
-		if h.debug {
-			log.Printf("[TVMAZE] parse %q failed: %v", title, err)
-		}
+		log.Printf("[TVMAZE] parse %q failed: %v", title, err)
 		return
 	}
 	if show.ID == 0 {
+		log.Printf("[TVMAZE] no show found for %q", title)
 		return
 	}
 
@@ -230,9 +240,7 @@ func (h *Handler) doLookup(j job) {
 		log.Printf("[TVMAZE] WriteFile %s failed: %v", filePath, err)
 		return
 	}
-	if h.debug {
-		log.Printf("[TVMAZE] Wrote .tvmaze for %s", j.relname)
-	}
+	log.Printf("[TVMAZE] Wrote .tvmaze for %s", j.relname)
 }
 
 // =============================================================================
