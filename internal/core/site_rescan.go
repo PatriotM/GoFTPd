@@ -14,6 +14,8 @@ type rescanReleaseResult struct {
 	OK      int
 	Missing int
 	Bad     int
+	MissingFiles []string
+	BadFiles     []string
 	Errors  []string
 }
 
@@ -81,6 +83,7 @@ func (s *Session) rescanRelease(bridge MasterBridge, releasePath string) rescanR
 
 		if bridge.GetFileSize(filePath) < 0 {
 			result.Missing++
+			result.MissingFiles = append(result.MissingFiles, entry.FileName)
 			_ = bridge.MarkFileMissing(filePath)
 			if err := bridge.WriteFile(missingPath, []byte{}); err != nil {
 				result.Errors = append(result.Errors, fmt.Sprintf("%s missing marker failed: %v", entry.FileName, err))
@@ -91,6 +94,7 @@ func (s *Session) rescanRelease(bridge MasterBridge, releasePath string) rescanR
 		checksum, err := bridge.ChecksumFile(filePath)
 		if err != nil || checksum != entry.CRC32 {
 			result.Bad++
+			result.BadFiles = append(result.BadFiles, entry.FileName)
 			if err := bridge.DeleteFile(filePath); err != nil {
 				result.Errors = append(result.Errors, fmt.Sprintf("%s delete failed: %v", entry.FileName, err))
 			}
@@ -120,6 +124,12 @@ func writeRescanResult(s *Session, result rescanReleaseResult) {
 	}
 	if result.SFV != "" {
 		fmt.Fprintf(s.Conn, "200- OK: %d Missing: %d Bad: %d\r\n", result.OK, result.Missing, result.Bad)
+		for _, fileName := range result.MissingFiles {
+			fmt.Fprintf(s.Conn, "200- MISSING: %s\r\n", fileName)
+		}
+		for _, fileName := range result.BadFiles {
+			fmt.Fprintf(s.Conn, "200- BAD: %s\r\n", fileName)
+		}
 	}
 	fmt.Fprintf(s.Conn, "200-  \r\n")
 }
