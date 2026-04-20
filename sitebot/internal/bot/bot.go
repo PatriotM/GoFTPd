@@ -233,6 +233,8 @@ func (b *Bot) commandEventFromPrivmsg(line string) *event.Event {
 		ciphertext = strings.TrimPrefix(ciphertext, "*")
 		if plain, err := enc.Decrypt(ciphertext); err == nil {
 			msg = strings.TrimSpace(plain)
+		} else if b.Debug {
+			log.Printf("[Bot] Failed to decrypt command from %s in %s: %v", sender, target, err)
 		}
 	}
 	if !strings.HasPrefix(target, "#") || !strings.HasPrefix(msg, "!") {
@@ -254,6 +256,9 @@ func (b *Bot) commandEventFromPrivmsg(line string) *event.Event {
 	evt.Data["channel"] = target
 	evt.Data["host"] = host
 	evt.Data["raw"] = msg
+	if b.Debug {
+		log.Printf("[Bot] IRC command %q from %s in %s", command, sender, target)
+	}
 	return evt
 }
 

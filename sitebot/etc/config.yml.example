@@ -90,6 +90,7 @@ plugins:
       default_shown: 5
       max_shown: 20
       search_default: 4
+      reply_target: "channel"
       channels: ["#goftpd"]
       staff_channels: ["#goftpd-staff"]
       staff_hosts: []

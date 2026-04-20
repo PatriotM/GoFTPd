@@ -25,6 +25,7 @@ type NewsPlugin struct {
 	staffChannels []string
 	staffHosts    []string
 	dateFormat    string
+	replyTarget   string
 }
 
 type item struct {
@@ -41,6 +42,7 @@ func New() *NewsPlugin {
 		searchDefault: 4,
 		staffChannels: []string{"#goftpd-staff"},
 		dateFormat:    "02 Jan 15:04",
+		replyTarget:   "channel",
 	}
 }
 
@@ -72,6 +74,9 @@ func (p *NewsPlugin) Initialize(config map[string]interface{}) error {
 	if s, ok := stringConfig(newsConfig, config, "date_format", "news_date_format"); ok && strings.TrimSpace(s) != "" {
 		p.dateFormat = strings.TrimSpace(s)
 	}
+	if s, ok := stringConfig(newsConfig, config, "reply_target", "news_reply_target"); ok && strings.TrimSpace(s) != "" {
+		p.replyTarget = strings.ToLower(strings.TrimSpace(s))
+	}
 	return os.MkdirAll(filepath.Dir(p.file), 0755)
 }
 
@@ -85,7 +90,7 @@ func (p *NewsPlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 	args := strings.TrimSpace(evt.Data["args"])
 	switch command {
 	case "news":
-		return p.show(evt.User, args)
+		return p.show(evt, args)
 	case "addnews":
 		return p.add(evt, args)
 	case "delnews":
@@ -95,15 +100,15 @@ func (p *NewsPlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 	}
 }
 
-func (p *NewsPlugin) show(nick, args string) ([]plugin.Output, error) {
+func (p *NewsPlugin) show(evt *event.Event, args string) ([]plugin.Output, error) {
 	p.mu.Lock()
 	items, err := p.read()
 	p.mu.Unlock()
 	if err != nil {
-		return notice(nick, "News is unavailable right now."), nil
+		return p.reply(evt, "News is unavailable right now."), nil
 	}
 	if strings.EqualFold(args, "help") {
-		return notices(nick,
+		return p.replies(evt,
 			"!news [number] [search]",
 			"!news - show latest news",
 			"!news 10 - show 10 latest news items",
@@ -125,9 +130,9 @@ func (p *NewsPlugin) show(nick, args string) ([]plugin.Output, error) {
 	}
 	if len(items) == 0 {
 		if search != "" {
-			return notice(nick, fmt.Sprintf("No news found for %q.", search)), nil
+			return p.reply(evt, fmt.Sprintf("No news found for %q.", search)), nil
 		}
-		return notice(nick, "No news has been added yet."), nil
+		return p.reply(evt, "No news has been added yet."), nil
 	}
 	if count > len(items) {
 		count = len(items)
@@ -139,7 +144,7 @@ func (p *NewsPlugin) show(nick, args string) ([]plugin.Output, error) {
 		when := time.Unix(it.Time, 0).Format(p.dateFormat)
 		out = append(out, fmt.Sprintf("[%s] %s - %s", when, it.User, it.Text))
 	}
-	return notices(nick, out...), nil
+	return p.replies(evt, out...), nil
 }
 
 func (p *NewsPlugin) add(evt *event.Event, text string) ([]plugin.Output, error) {
@@ -334,6 +339,28 @@ func notices(target string, lines ...string) []plugin.Output {
 
 func notice(target, text string) []plugin.Output {
 	return notices(target, text)
+}
+
+func (p *NewsPlugin) replies(evt *event.Event, lines ...string) []plugin.Output {
+	target := strings.TrimSpace(evt.Data["channel"])
+	noticeReply := false
+	if p.replyTarget == "notice" || target == "" {
+		target = evt.User
+		noticeReply = true
+	}
+	out := make([]plugin.Output, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		out = append(out, plugin.Output{Type: "COMMAND", Target: target, Notice: noticeReply, Text: line})
+	}
+	return out
+}
+
+func (p *NewsPlugin) reply(evt *event.Event, text string) []plugin.Output {
+	return p.replies(evt, text)
 }
 
 func configValue(section, flat map[string]interface{}, sectionKey, flatKey string) interface{} {
