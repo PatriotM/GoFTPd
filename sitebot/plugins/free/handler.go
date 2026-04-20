@@ -10,6 +10,7 @@ import (
 
 	"goftpd/sitebot/internal/event"
 	"goftpd/sitebot/internal/plugin"
+	tmpl "goftpd/sitebot/internal/template"
 )
 
 type Plugin struct {
@@ -17,6 +18,7 @@ type Plugin struct {
 	slaves      map[string]diskStatus
 	replyTarget string
 	staleAfter  time.Duration
+	theme       *tmpl.Theme
 }
 
 type diskStatus struct {
@@ -40,6 +42,13 @@ func New() *Plugin {
 func (p *Plugin) Name() string { return "Free" }
 
 func (p *Plugin) Initialize(config map[string]interface{}) error {
+	if themeFile, ok := config["theme_file"].(string); ok && strings.TrimSpace(themeFile) != "" {
+		th, err := tmpl.LoadTheme(themeFile)
+		if err == nil {
+			p.theme = th
+		}
+	}
+
 	cfg := plugin.ConfigSection(config, "free")
 	if s, ok := stringConfig(cfg, config, "reply_target", "free_reply_target"); ok && strings.TrimSpace(s) != "" {
 		p.replyTarget = strings.ToLower(strings.TrimSpace(s))
@@ -101,7 +110,7 @@ func (p *Plugin) show(evt *event.Event) []plugin.Output {
 	p.mu.RUnlock()
 
 	if len(statuses) == 0 {
-		return p.reply(evt, "DF: No slave disk status received yet.")
+		return p.reply(evt, p.render("DF_EMPTY", nil, "DF: No slave disk status received yet."))
 	}
 	sort.Slice(statuses, func(i, j int) bool {
 		return strings.ToLower(statuses[i].Name) < strings.ToLower(statuses[j].Name)
@@ -126,17 +135,54 @@ func (p *Plugin) show(evt *event.Event) []plugin.Output {
 		if p.staleAfter > 0 && now.Sub(st.Updated) > p.staleAfter {
 			state += ", stale"
 		}
-		lines = append(lines, fmt.Sprintf("DF: %-12s %8s free / %8s total (%5.1f%% free) [%s]",
-			st.Name, humanBytes(st.Free), humanBytes(st.Total), percentFree(st.Free, st.Total), state))
+		vars := diskVars(st, state, now)
+		lines = append(lines, p.render("DF_SLAVE", vars, fmt.Sprintf("DF: %-12s %8s free / %8s total (%5.1f%% free) [%s]",
+			st.Name, humanBytes(st.Free), humanBytes(st.Total), percentFree(st.Free, st.Total), state)))
 	}
 	if len(lines) == 0 {
-		return p.reply(evt, fmt.Sprintf("DF: No slave matched %q.", filter))
+		return p.reply(evt, p.render("DF_NOMATCH", map[string]string{"filter": filter}, fmt.Sprintf("DF: No slave matched %q.", filter)))
 	}
 	if filter == "" && len(lines) > 1 {
-		lines = append(lines, fmt.Sprintf("DF: %-12s %8s free / %8s total (%5.1f%% free)",
-			"TOTAL", humanBytes(totalFree), humanBytes(totalCap), percentFree(totalFree, totalCap)))
+		vars := map[string]string{
+			"slave":       "TOTAL",
+			"name":        "TOTAL",
+			"free":        humanBytes(totalFree),
+			"total":       humanBytes(totalCap),
+			"free_pct":    fmt.Sprintf("%.1f", percentFree(totalFree, totalCap)),
+			"used_pct":    fmt.Sprintf("%.1f", 100-percentFree(totalFree, totalCap)),
+			"free_bytes":  strconv.FormatInt(totalFree, 10),
+			"total_bytes": strconv.FormatInt(totalCap, 10),
+			"count":       strconv.Itoa(len(lines)),
+		}
+		lines = append(lines, p.render("DF_TOTAL", vars, fmt.Sprintf("DF: %-12s %8s free / %8s total (%5.1f%% free)",
+			"TOTAL", humanBytes(totalFree), humanBytes(totalCap), percentFree(totalFree, totalCap))))
 	}
 	return p.replies(evt, lines...)
+}
+
+func (p *Plugin) render(key string, vars map[string]string, fallback string) string {
+	if p.theme != nil {
+		if raw, ok := p.theme.Announces[key]; ok && raw != "" {
+			return tmpl.Render(raw, vars)
+		}
+	}
+	return fallback
+}
+
+func diskVars(st diskStatus, state string, now time.Time) map[string]string {
+	return map[string]string{
+		"slave":       st.Name,
+		"name":        st.Name,
+		"free":        humanBytes(st.Free),
+		"total":       humanBytes(st.Total),
+		"free_pct":    fmt.Sprintf("%.1f", percentFree(st.Free, st.Total)),
+		"used_pct":    fmt.Sprintf("%.1f", 100-percentFree(st.Free, st.Total)),
+		"state":       state,
+		"sections":    strings.Join(st.Sections, ","),
+		"age":         formatAge(now.Sub(st.Updated)),
+		"free_bytes":  strconv.FormatInt(st.Free, 10),
+		"total_bytes": strconv.FormatInt(st.Total, 10),
+	}
 }
 
 func (st diskStatus) matches(filter string) bool {
@@ -199,6 +245,16 @@ func humanBytes(n int64) string {
 		}
 	}
 	return fmt.Sprintf("%.1fEB", f/unit)
+}
+
+func formatAge(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	return fmt.Sprintf("%dh%02dm", int(d.Hours()), int(d.Minutes())%60)
 }
 
 func splitCSV(s string) []string {
