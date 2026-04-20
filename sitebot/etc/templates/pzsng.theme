@@ -49,3 +49,11 @@ announce.PREBW = "%b{%c02{PREBW:}} %c01{[}%c02{%section}%c01{]} %c01{::} %c06{%b
 announce.PREBWINTERVAL = "%b{%c02{PREBW:}} %c01{[}%c02{%section}%c01{]} %c01{::} %c03{%b{%b1}}%c01{%u1 @} %c03{%t1}%c01{s ::} %c03{%b{%b2}}%c01{%u2 @} %c03{%t2}%c01{s ::} %c03{%b{%b3}}%c01{%u3 @} %c03{%t3}%c01{s ::} %c03{%b{%b4}}%c01{%u4 @} %c03{%t4}%c01{s ::} %c03{%b{%b5}}%c01{%u5 @} %c03{%t5}%c01{s :: Highest} %c03{%b{%peak_val}}%c01{%peak_unit}"
 
 announce.PREBWUSER = "%b{%c02{PREBW:}} %c01{[}%c02{%section}%c01{]} %c01{::} %c04{%b{%user}} %c01{::} %c03{%b{%size_val}}%c01{%size_unit}%c01{/}%c03{%b{%cnt_files}}%c01{F @} %c03{%b{%avg_val_user}}%c01{%avg_unit_user} %c01{:: Highest} %c03{%b{%peak_val_user}}%c01{%peak_unit_user}"
+
+announce.DF_SLAVE = "%b{%c02{DF:}} %c06{%b{%slave}} %c01{-} %c03{%free} %c01{free /} %c05{%total} %c01{total (}%c03{%{free_pct}%}%c01{ free) [}%c04{%state}%c01{]}"
+
+announce.DF_TOTAL = "%b{%c02{DF:}} %c06{%b{TOTAL}} %c01{-} %c03{%free} %c01{free /} %c05{%total} %c01{total (}%c03{%{free_pct}%}%c01{ free)}"
+
+announce.DF_EMPTY = "%b{%c02{DF:}} %c04{No slave disk status received yet.}"
+
+announce.DF_NOMATCH = "%b{%c02{DF:}} %c04{No slave matched} %c05{%filter}"
