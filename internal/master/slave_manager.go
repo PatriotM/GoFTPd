@@ -35,14 +35,16 @@ type SlaveManager struct {
 	policiesMu sync.RWMutex
 
 	// Virtual File System: master-side file index
-	vfs        *VirtualFileSystem
+	vfs *VirtualFileSystem
 
-	listener   net.Listener
-	running    atomic.Bool
+	listener       net.Listener
+	running        atomic.Bool
 	diskStatusHook func(name string, status protocol.DiskStatus, online, available bool, sections []string)
-	datedMu        sync.Mutex
-	datedConfig    DatedDirsConfig
-	datedStarted   bool
+	datedDirHook  func(section, date, dirPath, linkPath string, symlink bool)
+	datedMu       sync.Mutex
+	datedConfig   DatedDirsConfig
+	datedStarted  bool
+	datedLastDay  string
 }
 
 // SlaveRoutePolicy is the runtime form of SlavePolicy from config.
@@ -67,6 +69,10 @@ func NewSlaveManager(host string, port int, tlsEnabled bool, tlsCert, tlsKey str
 
 func (sm *SlaveManager) SetDiskStatusHook(fn func(name string, status protocol.DiskStatus, online, available bool, sections []string)) {
 	sm.diskStatusHook = fn
+}
+
+func (sm *SlaveManager) SetDatedDirHook(fn func(section, date, dirPath, linkPath string, symlink bool)) {
+	sm.datedDirHook = fn
 }
 
 func (sm *SlaveManager) publishDiskStatus(rs *RemoteSlave) {

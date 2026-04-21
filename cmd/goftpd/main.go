@@ -105,6 +105,21 @@ func main() {
 				},
 			})
 		})
+		sm.SetDatedDirHook(func(section, date, dirPath, linkPath string, symlink bool) {
+			core.PublishEvent(cfg, core.Event{
+				Type:      core.EventNewDay,
+				Timestamp: time.Now(),
+				Section:   section,
+				Filename:  date,
+				Path:      dirPath,
+				Data: map[string]string{
+					"date":     date,
+					"dirpath":  dirPath,
+					"linkpath": linkPath,
+					"symlink":  fmt.Sprintf("%t", symlink),
+				},
+			})
+		})
 		sm.SetProtectedDirs(protectedVFSDirs(cfg))
 		if err := sm.Start(); err != nil {
 			log.Fatalf("SlaveManager failed: %v", err)

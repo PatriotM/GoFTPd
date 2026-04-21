@@ -14,6 +14,8 @@
 
 announce.NEWDIR = "%b{%c03{NEW :}} %c01{[}%c02{%section}%c01{]} %c06{%b{%relname}} %c01{by} %c04{%u_name}"
 
+announce.NEWDAY = "%b{%c03{NEW DAY:}} %c01{-}%c02{%section}%c01{- A new day has come!} %c05{%date} %c01{has been created along with its symlink.}"
+
 announce.SFV_RAR = "%b{%c10{RACE:}} %c01{[}%c02{%section}%c01{]} Got SFV for %c06{%b{%relname}} %c01{uploaded by} %c04{%u_name}%c01{. Now expecting} %c05{%b{%t_filecount}} %c01{rar file(s).}"
 
 announce.UPDATE_RAR = "%b{%c10{RACE:}} %c01{[}%c02{%section}%c01{]} %c06{%b{%relname}} %c01{got its first rar file from} %c04{%u_name} %c01{at} %c05{%u_speed}%c01{. Now expecting} %c05{%b{%t_mbytes}}%c01{.}"

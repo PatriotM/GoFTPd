@@ -21,6 +21,7 @@ const (
 	EventInvite        EventType = "INVITE"
 	EventCommand       EventType = "COMMAND"
 	EventDiskStatus    EventType = "DISKSTATUS"
+	EventNewDay        EventType = "NEWDAY"
 	EventPre           EventType = "PRE"
 	EventPreBW         EventType = "PREBW"
 	EventPreBWUser     EventType = "PREBWUSER"

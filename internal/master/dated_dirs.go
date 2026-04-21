@@ -43,6 +43,7 @@ func (sm *SlaveManager) datedDirsLoop() {
 func (sm *SlaveManager) applyDatedDirs(now time.Time) {
 	sm.datedMu.Lock()
 	cfg := sm.datedConfig
+	lastDay := sm.datedLastDay
 	sm.datedMu.Unlock()
 	if !cfg.Enabled {
 		return
@@ -50,6 +51,7 @@ func (sm *SlaveManager) applyDatedDirs(now time.Time) {
 
 	today := now.Format(cfg.Format)
 	yesterday := now.AddDate(0, 0, -1).Format(cfg.Format)
+	announceNewDay := lastDay != "" && lastDay != today
 
 	for _, section := range cfg.Sections {
 		section = strings.Trim(strings.TrimSpace(section), "/")
@@ -59,17 +61,27 @@ func (sm *SlaveManager) applyDatedDirs(now time.Time) {
 
 		todayPath := "/" + section + "/" + today
 		sm.ensureDatedDir(todayPath, 0777)
+		linkPath := ""
 		if cfg.TodaySymlink {
-			linkPath := "/" + cfg.SymlinkPrefix + section
+			linkPath = "/" + cfg.SymlinkPrefix + section
 			if err := sm.ensureSymlink(linkPath, todayPath); err != nil {
 				log.Printf("[DATED] symlink %s -> %s failed: %v", linkPath, todayPath, err)
 			}
+		}
+		if announceNewDay && sm.datedDirHook != nil {
+			sm.datedDirHook(section, today, todayPath, linkPath, cfg.TodaySymlink)
 		}
 
 		if minutesSinceMidnight(now) >= cfg.ReadOnlyAfterMinutes {
 			sm.chmodPath("/"+section+"/"+yesterday, 0555)
 		}
 	}
+
+	sm.datedMu.Lock()
+	if sm.datedLastDay == "" || sm.datedLastDay != today {
+		sm.datedLastDay = today
+	}
+	sm.datedMu.Unlock()
 }
 
 func (sm *SlaveManager) ensureDatedDir(dirPath string, mode uint32) {

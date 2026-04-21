@@ -53,6 +53,8 @@ announce:
       - "#goftpd-nuke"
     UNNUKE:
       - "#goftpd-nuke"
+    NEWDAY:
+      - "#goftpd"
 
 sections:
   - name: "DEFAULT"

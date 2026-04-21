@@ -33,10 +33,11 @@ const (
 	EventUnnuke       EventType = "UNNUKE"
 	EventInvite       EventType = "INVITE"
 	EventDiskStatus   EventType = "DISKSTATUS"
-	EventPre          EventType = "PRE"          // release pre'd — relname, section, group, files, mbytes
-	EventPreBW        EventType = "PREBW"        // race-bw totals after pre
-	EventPreBWUser    EventType = "PREBWUSER"    // per-user race-bw after pre
-	EventPreBWInterval EventType = "PREBWINTERVAL" // interval snapshots after pre
+	EventNewDay       EventType = "NEWDAY"
+	EventPre           EventType = "PRE"              // release pre'd — relname, section, group, files, mbytes
+	EventPreBW         EventType = "PREBW"            // race-bw totals after pre
+	EventPreBWUser     EventType = "PREBWUSER"        // per-user race-bw after pre
+	EventPreBWInterval EventType = "PREBWINTERVAL"    // interval snapshots after pre
 )
 
 // Event is the daemon-side event payload written to the event FIFO as JSON lines.

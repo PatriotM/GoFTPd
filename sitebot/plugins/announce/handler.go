@@ -147,6 +147,12 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 	outs := []plugin.Output{}
 
 	switch evt.Type {
+	case event.EventNewDay:
+		fallback := fmt.Sprintf("NEW DAY: -%s- A new day has come! %s has been created along with its symlink.", section, vars["date"])
+		if vars["symlink"] != "true" {
+			fallback = fmt.Sprintf("NEW DAY: -%s- A new day has come! %s has been created.", section, vars["date"])
+		}
+		outs = append(outs, plugin.Output{Type: "NEWDAY", Text: p.render("NEWDAY", vars, fallback)})
 	case event.EventMKDir:
 		// only top-level release dirs
 		if path.Base(path.Dir(path.Clean(evt.Path))) == strings.ToUpper(section) || strings.EqualFold(path.Dir(path.Clean(evt.Path)), "/"+section) {
