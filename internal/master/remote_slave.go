@@ -37,8 +37,9 @@ type RemoteSlave struct {
 	diskMu        sync.RWMutex
 
 	// Transfers
-	transfers    sync.Map // TransferIndex (int32) -> *RemoteTransfer
-	activeCount  atomic.Int32 // number of currently-active uploads (for load balancing)
+	transfers          sync.Map // TransferIndex (int32) -> *RemoteTransfer
+	completedTransfers sync.Map // TransferIndex (int32) -> protocol.TransferStatus
+	activeCount        atomic.Int32 // number of currently-active uploads (for load balancing)
 
 	// Timing
 	lastResponseReceived atomic.Int64
@@ -275,9 +276,12 @@ func (rs *RemoteSlave) Run(masterSlaveManager *SlaveManager) {
 				rt := val.(*RemoteTransfer)
 				rt.UpdateStatus(resp.Status)
 				if resp.Status.Finished {
+					rs.completedTransfers.Store(resp.Status.TransferIndex, resp.Status)
 					rs.transfers.Delete(resp.Status.TransferIndex)
 					masterSlaveManager.publishDiskStatus(rs)
 				}
+			} else if resp.Status.Finished {
+				rs.completedTransfers.Store(resp.Status.TransferIndex, resp.Status)
 			}
 
 		case *protocol.AsyncResponseTransfer:
@@ -372,4 +376,28 @@ func (rs *RemoteSlave) GetTransfer(idx int32) (*RemoteTransfer, bool) {
 		return nil, false
 	}
 	return val.(*RemoteTransfer), true
+}
+
+func (rs *RemoteSlave) WaitTransferStatus(idx int32, timeout time.Duration) (protocol.TransferStatus, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		if val, ok := rs.completedTransfers.LoadAndDelete(idx); ok {
+			return val.(protocol.TransferStatus), nil
+		}
+		if val, ok := rs.transfers.Load(idx); ok {
+			rt := val.(*RemoteTransfer)
+			if rt.IsFinished() {
+				status := rt.GetStatus()
+				rs.transfers.Delete(idx)
+				return status, nil
+			}
+		}
+		if !rs.IsOnline() {
+			return protocol.TransferStatus{}, fmt.Errorf("slave %s went offline during transfer %d", rs.name, idx)
+		}
+		if time.Now().After(deadline) {
+			return protocol.TransferStatus{}, fmt.Errorf("timeout waiting for transfer %d from slave %s", idx, rs.name)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }

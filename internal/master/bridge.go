@@ -831,55 +831,36 @@ func (b *Bridge) SlaveReceivePassthrough(filePath string, transferIdx int32, sla
 	}
 
 	// Wait for transfer to complete — poll the RemoteTransfer status
-	rt, ok := slave.GetTransfer(transferIdx)
-	if !ok {
-		// Transfer might have already completed, check for a short time
-		for i := 0; i < 600; i++ { // 5 minutes max
-			time.Sleep(500 * time.Millisecond)
-			rt, ok = slave.GetTransfer(transferIdx)
-			if ok && rt.IsFinished() {
-				break
-			}
-			if !ok {
-				// Transfer was deleted because it finished — need status from somewhere else
-				break
-			}
+	status, err := slave.WaitTransferStatus(transferIdx, 2*time.Hour)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	if status.Error != "" {
+		return status.Transferred, status.Checksum, status.Elapsed, fmt.Errorf("%s", status.Error)
+	}
+
+	b.sm.GetVFS().AddFile(filePath, VFSFile{
+		Path:         filePath,
+		Size:         status.Transferred,
+		IsDir:        false,
+		LastModified: time.Now().Unix(),
+		SlaveName:    slaveName,
+		Owner:        owner,
+		Group:        group,
+		XferTime:     status.Elapsed,
+		Checksum:     status.Checksum,
+	})
+
+	log.Printf("[Passthrough] Upload %s on %s (%d bytes, %dms, CRC=%08X)",
+		filePath, slaveName, status.Transferred, status.Elapsed, status.Checksum)
+
+	if b.raceDB != nil {
+		if err := b.raceDB.RecordUpload(filePath, owner, group, status.Transferred, status.Elapsed, status.Checksum); err != nil {
+			log.Printf("[Passthrough] RaceDB record failed: %v", err)
 		}
 	}
 
-	if rt != nil {
-		// Poll until finished
-		for !rt.IsFinished() {
-			time.Sleep(100 * time.Millisecond)
-		}
-		status := rt.GetStatus()
-
-		// Add to VFS
-		b.sm.GetVFS().AddFile(filePath, VFSFile{
-			Path:         filePath,
-			Size:         status.Transferred,
-			IsDir:        false,
-			LastModified: time.Now().Unix(),
-			SlaveName:    slaveName,
-			Owner:        owner,
-			Group:        group,
-			XferTime:     status.Elapsed,
-			Checksum:     status.Checksum,
-		})
-
-		log.Printf("[Passthrough] Upload %s on %s (%d bytes, %dms, CRC=%08X)",
-			filePath, slaveName, status.Transferred, status.Elapsed, status.Checksum)
-
-		if b.raceDB != nil {
-			if err := b.raceDB.RecordUpload(filePath, owner, group, status.Transferred, status.Elapsed, status.Checksum); err != nil {
-				log.Printf("[Passthrough] RaceDB record failed: %v", err)
-			}
-		}
-
-		return status.Transferred, status.Checksum, status.Elapsed, nil
-	}
-
-	return 0, 0, 0, fmt.Errorf("transfer status not available")
+	return status.Transferred, status.Checksum, status.Elapsed, nil
 }
 
 // SlaveSendPassthrough tells a slave to send a file (client already connected directly).
@@ -899,12 +880,12 @@ func (b *Bridge) SlaveSendPassthrough(filePath string, transferIdx int32, slaveN
 		return fmt.Errorf("send ack: %w", err)
 	}
 
-	// Wait for transfer to complete
-	rt, ok := slave.GetTransfer(transferIdx)
-	if ok {
-		for !rt.IsFinished() {
-			time.Sleep(100 * time.Millisecond)
-		}
+	status, err := slave.WaitTransferStatus(transferIdx, 2*time.Hour)
+	if err != nil {
+		return err
+	}
+	if status.Error != "" {
+		return fmt.Errorf("%s", status.Error)
 	}
 
 	return nil
