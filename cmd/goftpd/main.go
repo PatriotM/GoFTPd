@@ -20,6 +20,7 @@ import (
 	"goftpd/internal/plugin"
 	"goftpd/internal/protocol"
 	"goftpd/internal/slave"
+	"goftpd/internal/timeutil"
 	"goftpd/plugins/dateddirs"
 	"goftpd/plugins/imdb"
 	"goftpd/plugins/mediainfo"
@@ -33,6 +34,9 @@ func main() {
 	cfg, err := core.LoadConfig("etc/config.yml")
 	if err != nil {
 		log.Fatalf("Failed to load etc/config.yml: %v", err)
+	}
+	if err := timeutil.Set(cfg.Timezone); err != nil {
+		log.Fatalf("Invalid timezone %q in etc/config.yml: %v", cfg.Timezone, err)
 	}
 
 	// 1a. Install file logger (active only when debug=true AND log_file is set).

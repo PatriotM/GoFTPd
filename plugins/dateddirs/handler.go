@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"goftpd/internal/plugin"
+	"goftpd/internal/timeutil"
 )
 
 type Handler struct {
@@ -66,13 +67,13 @@ func (h *Handler) loop() {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 
-	h.apply(time.Now())
+	h.apply(timeutil.Now())
 	for {
 		select {
 		case <-h.stopCh:
 			return
 		case now := <-ticker.C:
-			h.apply(now)
+			h.apply(timeutil.In(now))
 		}
 	}
 }

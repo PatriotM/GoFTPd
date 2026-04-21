@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"goftpd/internal/plugin"
+	"goftpd/internal/timeutil"
 	"gopkg.in/yaml.v3"
 )
 
@@ -151,7 +152,7 @@ func (p *Plugin) HandleSiteCommand(ctx plugin.SiteContext, command string, args 
 	src := path.Join(affil.Predir, relname)
 	destSection := cleanAbs(section)
 	if sectionIsDated(p.datedSections, section) {
-		destSection = path.Join(destSection, time.Now().Format("0102"))
+		destSection = path.Join(destSection, timeutil.Now().Format("0102"))
 	}
 	dst := path.Join(destSection, relname)
 
