@@ -102,7 +102,7 @@ func (p *AnnouncePlugin) vars(evt *event.Event) map[string]string {
 		"filename": evt.Filename,
 		"path":     evt.Path,
 		"u_speed":  speedMB(evt),
-		"t_mbytes": mb(evt.Size),
+		"file_mbytes": mb(evt.Size),
 	}
 	for k, val := range evt.Data {
 		v[k] = val
@@ -214,7 +214,12 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 				st.Users[evt.User] = true
 				if !st.FirstRar {
 					st.FirstRar = true
-					outs = append(outs, plugin.Output{Type: "RACE", Text: p.render("UPDATE_RAR", vars, fmt.Sprintf("RACE: [%s] %s got its first rar file from %s at %s.", section, rel, evt.User, speedMB(evt)))})
+					key := "UPDATE_RAR"
+					fallback := fmt.Sprintf("RACE: [%s] %s got its first rar file from %s at %s.", section, rel, evt.User, speedMB(evt))
+					if strings.TrimSpace(vars["t_mbytes"]) == "" {
+						key = "UPDATE_RAR_UNKNOWN"
+					}
+					outs = append(outs, plugin.Output{Type: "RACE", Text: p.render(key, vars, fallback)})
 				} else {
 					outs = append(outs, plugin.Output{Type: "RACE", Text: p.render("RACE_RAR", vars, fmt.Sprintf("RACE: [%s] %s - %s joined the race at %s.", section, rel, evt.User, speedMB(evt)))})
 				}

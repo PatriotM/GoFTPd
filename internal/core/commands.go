@@ -1099,7 +1099,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					}
 				}
 				if regexp.MustCompile(`(?i)\.(rar|r\d\d)$`).MatchString(fileName) {
-					data["t_mbytes"] = mbString(fileSize)
+					data["file_mbytes"] = mbString(fileSize)
 					if sfvEntries := bridge.GetSFVData(s.CurrentDir); sfvEntries != nil {
 						users, _, totalBytes, present, total := bridge.GetVFSRaceStats(s.CurrentDir)
 						if total > 0 {
@@ -1242,7 +1242,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					}
 				}
 				if regexp.MustCompile(`(?i)\.(rar|r\d\d)$`).MatchString(fileName) {
-					data["t_mbytes"] = mbString(fileSize)
+					data["file_mbytes"] = mbString(fileSize)
 					if sfvEntries := bridge.GetSFVData(s.CurrentDir); sfvEntries != nil {
 						users, _, totalBytes, present, total := bridge.GetVFSRaceStats(s.CurrentDir)
 						if total > 0 {

@@ -283,6 +283,7 @@ func (p *TVMazePlugin) doLookup(job tvmazeJob) {
 	for k, v := range job.data {
 		vars[k] = v
 	}
+	p.addSectionPalette(vars, job.section)
 
 	var text string
 	if p.theme != nil {
@@ -298,4 +299,33 @@ func (p *TVMazePlugin) doLookup(job tvmazeJob) {
 	if p.asyncEmit != nil {
 		p.asyncEmit("TV_INFO", text, job.section, job.relpath)
 	}
+}
+
+func (p *TVMazePlugin) addSectionPalette(vars map[string]string, section string) {
+	for i := 1; i <= 5; i++ {
+		key := fmt.Sprintf("sec_c%d", i)
+		vars[key] = p.sectionColor(section, i)
+	}
+}
+
+func (p *TVMazePlugin) sectionColor(section string, slot int) string {
+	fallback := "02"
+	if p.theme != nil {
+		keys := []string{
+			fmt.Sprintf("COLOR_%s_%d", strings.ToUpper(section), slot),
+			fmt.Sprintf("section_color.%s.%d", section, slot),
+			fmt.Sprintf("section_color.%s.%d", strings.ToUpper(section), slot),
+			fmt.Sprintf("COLOR_DEFAULT_%d", slot),
+			fmt.Sprintf("section_color.default.%d", slot),
+			"section_color." + section,
+			"section_color." + strings.ToUpper(section),
+			"section_color.default",
+		}
+		for _, key := range keys {
+			if c := strings.TrimSpace(p.theme.Vars[key]); c != "" {
+				return strings.TrimLeft(c, "cC")
+			}
+		}
+	}
+	return fallback
 }

@@ -199,7 +199,13 @@ func main() {
 		cfg.Plugins = make(map[string]map[string]interface{})
 	}
 
+	pluginConfigs := make(map[string]map[string]interface{}, len(cfg.Plugins))
 	for pluginName, pluginCfg := range cfg.Plugins {
+		canonicalName := strings.ToLower(strings.TrimSpace(pluginName))
+		if canonicalName == "" {
+			continue
+		}
+		pluginConfigs[canonicalName] = pluginCfg
 		enabled, ok := pluginCfg["enabled"].(bool)
 		if !ok || !enabled {
 			if cfg.Debug {
@@ -219,7 +225,7 @@ func main() {
 		}
 
 		var p plugin.Plugin
-		switch pluginName {
+		switch canonicalName {
 		case "dateddirs":
 			p = dateddirs.New()
 		case "tvmaze":
@@ -244,7 +250,7 @@ func main() {
 	}
 
 	// 7b. Initialize all plugins with config
-	if err := cfg.PluginManager.InitializePlugins(cfg.Plugins); err != nil {
+	if err := cfg.PluginManager.InitializePlugins(pluginConfigs); err != nil {
 		log.Fatalf("Failed to initialize plugins: %v", err)
 	}
 	if cfg.Debug {

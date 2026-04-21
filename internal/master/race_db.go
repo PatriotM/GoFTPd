@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
 	"goftpd/internal/core"
@@ -132,6 +133,10 @@ func (r *RaceDB) SaveSFV(dirPath, sfvName string, entries map[string]uint32) err
 	}
 
 	for fileName, crc := range entries {
+		fileName = raceDBFileKey(fileName)
+		if fileName == "" {
+			continue
+		}
 		if _, err := tx.Exec(`
             INSERT INTO release_files(
                 release_id, filename, expected_crc32, is_expected, updated_at
@@ -150,7 +155,10 @@ func (r *RaceDB) SaveSFV(dirPath, sfvName string, entries map[string]uint32) err
 
 func (r *RaceDB) RecordUpload(filePath, owner, group string, size int64, durationMs int64, checksum uint32) error {
 	dirPath := filepath.Dir(filePath)
-	fileName := filepath.Base(filePath)
+	fileName := raceDBFileKey(filepath.Base(filePath))
+	if fileName == "" {
+		return nil
+	}
 
 	releaseID, err := r.getOrCreateReleaseID(dirPath)
 	if err != nil {
@@ -181,7 +189,7 @@ func (r *RaceDB) DeletePath(path string, isDir bool) error {
 	}
 
 	dirPath := filepath.Dir(path)
-	fileName := filepath.Base(path)
+	fileName := raceDBFileKey(filepath.Base(path))
 	_, err := r.db.Exec(`
         UPDATE release_files
         SET is_present = 0,
@@ -230,6 +238,8 @@ func (r *RaceDB) RenamePath(from, to string, isDir bool) error {
 
 	oldDir, oldName := filepath.Dir(from), filepath.Base(from)
 	newDir, newName := filepath.Dir(to), filepath.Base(to)
+	oldName = raceDBFileKey(oldName)
+	newName = raceDBFileKey(newName)
 
 	oldReleaseID, err := r.getOrCreateReleaseID(oldDir)
 	if err != nil {
@@ -288,10 +298,17 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 	var totalBytes int64
 	if err := r.db.QueryRow(`
         SELECT COALESCE(COUNT(*), 0), COALESCE(SUM(size_bytes), 0)
-        FROM release_files
-        WHERE release_id = (SELECT id FROM releases WHERE path = ?)
-          AND is_present = 1
-          AND is_expected = 1
+        FROM (
+            SELECT LOWER(e.filename) AS filename_key, MAX(p.size_bytes) AS size_bytes
+            FROM release_files e
+            JOIN release_files p
+              ON p.release_id = e.release_id
+             AND p.is_present = 1
+             AND LOWER(p.filename) = LOWER(e.filename)
+            WHERE e.release_id = (SELECT id FROM releases WHERE path = ?)
+              AND e.is_expected = 1
+            GROUP BY LOWER(e.filename)
+        )
     `, dirPath).Scan(&present, &totalBytes); err != nil {
 		log.Printf("[RaceDB] present query failed for %s: %v", dirPath, err)
 		return nil, nil, 0, 0, 0
@@ -299,10 +316,15 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 
 	userRows, err := r.db.Query(`
         SELECT uploader, grp, COUNT(*), COALESCE(SUM(size_bytes),0), COALESCE(SUM(duration_ms),0)
-        FROM release_files
-        WHERE release_id = (SELECT id FROM releases WHERE path = ?)
-          AND is_present = 1
-          AND is_expected = 1
+        FROM release_files p
+        WHERE p.release_id = (SELECT id FROM releases WHERE path = ?)
+          AND p.is_present = 1
+          AND EXISTS (
+              SELECT 1 FROM release_files e
+              WHERE e.release_id = p.release_id
+                AND e.is_expected = 1
+                AND LOWER(e.filename) = LOWER(p.filename)
+          )
         GROUP BY uploader, grp
         ORDER BY COALESCE(SUM(size_bytes),0) DESC, COUNT(*) DESC, uploader ASC
     `, dirPath)
@@ -342,7 +364,13 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
             SELECT size_bytes, duration_ms FROM release_files
             WHERE release_id = (SELECT id FROM releases WHERE path = ?)
               AND uploader = ?
-              AND is_present = 1 AND is_expected = 1
+              AND is_present = 1
+              AND EXISTS (
+                  SELECT 1 FROM release_files e
+                  WHERE e.release_id = release_files.release_id
+                    AND e.is_expected = 1
+                    AND LOWER(e.filename) = LOWER(release_files.filename)
+              )
               AND duration_ms > 0
             ORDER BY (CAST(size_bytes AS REAL) / CAST(duration_ms AS REAL)) DESC
             LIMIT 1
@@ -363,10 +391,15 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 
 	groupRows, err := r.db.Query(`
         SELECT grp, COUNT(*), COALESCE(SUM(size_bytes),0), COALESCE(SUM(duration_ms),0)
-        FROM release_files
-        WHERE release_id = (SELECT id FROM releases WHERE path = ?)
-          AND is_present = 1
-          AND is_expected = 1
+        FROM release_files p
+        WHERE p.release_id = (SELECT id FROM releases WHERE path = ?)
+          AND p.is_present = 1
+          AND EXISTS (
+              SELECT 1 FROM release_files e
+              WHERE e.release_id = p.release_id
+                AND e.is_expected = 1
+                AND LOWER(e.filename) = LOWER(p.filename)
+          )
         GROUP BY grp
         ORDER BY COALESCE(SUM(size_bytes),0) DESC, COUNT(*) DESC, grp ASC
     `, dirPath)
@@ -401,6 +434,12 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 	}
 
 	return users, groups, totalBytes, present, total
+}
+
+func raceDBFileKey(name string) string {
+	name = strings.TrimSpace(filepath.ToSlash(name))
+	name = strings.TrimPrefix(name, "./")
+	return strings.ToLower(name)
 }
 
 // GetRaceWallClockSeconds returns the wall-clock duration of a release race in

@@ -316,6 +316,19 @@ func (vfs *VirtualFileSystem) RenameFile(from, to string) {
 		f.Path = mv.new
 		vfs.files[mv.new] = f
 	}
+
+	metaPrefix := from + "/"
+	var metaMove []struct{ old, new string }
+	for k := range vfs.dirMeta {
+		if k == from || strings.HasPrefix(k, metaPrefix) {
+			metaMove = append(metaMove, struct{ old, new string }{k, to + k[len(from):]})
+		}
+	}
+	for _, mv := range metaMove {
+		meta := vfs.dirMeta[mv.old]
+		delete(vfs.dirMeta, mv.old)
+		vfs.dirMeta[mv.new] = meta
+	}
 }
 
 // ClearSlave removes all files belonging to a slave (called when slave goes offline)
@@ -500,8 +513,15 @@ func (vfs *VirtualFileSystem) SetSFVData(dirPath string, sfvName string, entries
 	vfs.mu.Lock()
 	defer vfs.mu.Unlock()
 	dirPath = filepath.Clean(dirPath)
+	normalized := make(map[string]uint32, len(entries))
+	for name, crc := range entries {
+		name = raceFileKey(name)
+		if name != "" {
+			normalized[name] = crc
+		}
+	}
 	vfs.dirMeta[dirPath] = &VFSDirMeta{
-		SFVEntries: entries,
+		SFVEntries: normalized,
 		SFVName:    sfvName,
 	}
 }
@@ -554,10 +574,21 @@ func (vfs *VirtualFileSystem) GetRaceStats(dirPath string) (users []RaceUserStat
 		prefix = "/"
 	}
 
+	presentFiles := make(map[string]*VFSFile)
+	for path, f := range vfs.files {
+		if f == nil || f.IsDir || !strings.HasPrefix(path, prefix) {
+			continue
+		}
+		rel := path[len(prefix):]
+		if strings.Contains(rel, "/") || strings.Contains(rel, "\\") {
+			continue
+		}
+		presentFiles[raceFileKey(rel)] = f
+	}
+
 	for sfvFile := range meta.SFVEntries {
-		filePath := prefix + sfvFile
-		f := vfs.files[filePath]
-		if f == nil || f.IsDir {
+		f := presentFiles[raceFileKey(sfvFile)]
+		if f == nil {
 			continue
 		}
 		present++
@@ -622,4 +653,10 @@ func (vfs *VirtualFileSystem) GetRaceStats(dirPath string) (users []RaceUserStat
 	}
 
 	return
+}
+
+func raceFileKey(name string) string {
+	name = strings.TrimSpace(filepath.ToSlash(name))
+	name = strings.TrimPrefix(name, "./")
+	return strings.ToLower(name)
 }

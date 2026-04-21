@@ -173,7 +173,7 @@ plugins:
     sections: ["MOVIE", "X264", "X265", "BLURAY", "DVDR"]
     debug:    false
   mediainfo:
-    enabled: false
+    enabled: true
     binary: "mediainfo"
     timeout_seconds: 20
     sections: ["FLAC", "MP3", "TV", "MOVIE", "X264", "X265", "BLURAY"]

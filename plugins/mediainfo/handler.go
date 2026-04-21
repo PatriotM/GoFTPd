@@ -5,6 +5,7 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"time"
 
 	"goftpd/internal/plugin"
 )
@@ -57,6 +58,9 @@ func (h *Handler) Init(svc *plugin.Services, cfg map[string]interface{}) error {
 	if h.timeoutSeconds <= 0 {
 		h.timeoutSeconds = 20
 	}
+	if h.timeoutSeconds > 10 {
+		h.timeoutSeconds = 10
+	}
 	if h.enabled {
 		go h.worker()
 	}
@@ -71,9 +75,15 @@ func (h *Handler) OnEvent(evt *plugin.Event) error {
 		return nil
 	}
 	if h.svc == nil || h.svc.Bridge == nil || h.svc.EmitEvent == nil {
+		if h.debug {
+			log.Printf("[MEDIAINFO] skipping %s: bridge/event emitter not available", evt.Path)
+		}
 		return nil
 	}
 	if len(h.sections) > 0 && !matchSection(evt.Section, h.sections) {
+		if h.debug {
+			log.Printf("[MEDIAINFO] skipping %s: section %q not in %v", evt.Path, evt.Section, h.sections)
+		}
 		return nil
 	}
 
@@ -83,11 +93,17 @@ func (h *Handler) OnEvent(evt *plugin.Event) error {
 		eventType = "AUDIOINFO"
 	} else if h.videoExtensions[ext] {
 		if h.sampleOnly && !isSamplePath(evt.Path) {
+			if h.debug {
+				log.Printf("[MEDIAINFO] skipping %s: video file is not a sample", evt.Path)
+			}
 			return nil
 		}
 		eventType = "MEDIAINFO"
 	}
 	if eventType == "" {
+		if h.debug {
+			log.Printf("[MEDIAINFO] skipping %s: extension %q is not configured", evt.Path, ext)
+		}
 		return nil
 	}
 
@@ -104,6 +120,9 @@ func (h *Handler) OnEvent(evt *plugin.Event) error {
 	}
 	select {
 	case h.jobs <- j:
+		if h.debug {
+			log.Printf("[MEDIAINFO] queued %s for %s", eventType, evt.Path)
+		}
 	default:
 		log.Printf("[MEDIAINFO] job queue full, dropping %s", evt.Path)
 	}
@@ -121,7 +140,20 @@ func (h *Handler) worker() {
 		case <-h.stopCh:
 			return
 		case j := <-h.jobs:
-			h.probe(j)
+			done := make(chan struct{})
+			go func() {
+				h.probe(j)
+				close(done)
+			}()
+			select {
+			case <-h.stopCh:
+				return
+			case <-done:
+			case <-time.After(time.Duration(h.timeoutSeconds+5) * time.Second):
+				if h.debug {
+					log.Printf("[MEDIAINFO] probe timed out in worker for %s", j.filePath)
+				}
+			}
 		}
 	}
 }
@@ -129,9 +161,7 @@ func (h *Handler) worker() {
 func (h *Handler) probe(j job) {
 	fields, err := h.svc.Bridge.ProbeMediaInfo(j.filePath, h.binary, h.timeoutSeconds)
 	if err != nil {
-		if h.debug {
-			log.Printf("[MEDIAINFO] %s failed: %v", j.filePath, err)
-		}
+		log.Printf("[MEDIAINFO] %s failed: %v", j.filePath, err)
 		return
 	}
 	fields["filename"] = j.fileName
@@ -139,6 +169,9 @@ func (h *Handler) probe(j job) {
 	fields["path"] = j.relPath
 	fields["relname"] = j.relName
 	fields["section"] = j.section
+	if h.debug {
+		log.Printf("[MEDIAINFO] emitting %s for %s (%d fields)", j.eventType, j.filePath, len(fields))
+	}
 	h.svc.EmitEvent(j.eventType, j.relPath, j.relName, j.section, j.size, j.speed, fields)
 }
 
