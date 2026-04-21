@@ -1107,7 +1107,10 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 							data["relname"] = path.Base(s.CurrentDir)
 							data["t_files"] = fmt.Sprintf("%d", total)
 							data["t_present"] = fmt.Sprintf("%d", present)
+							data["t_filesleft"] = fmt.Sprintf("%d", maxInt(0, total-present))
 							data["t_totalmb"] = fmt.Sprintf("%.1f", float64(totalBytes)/1024.0/1024.0)
+							data["t_avgspeed"] = fmt.Sprintf("%.2fMB/s", currentRaceSpeedMB(s.CurrentDir, totalBytes, bridge))
+							data["t_timeleft"] = estimateRaceTimeLeft(s.CurrentDir, totalBytes, present, total, bridge)
 							estBytes := fileSize * int64(total)
 							data["t_mbytes"] = fmt.Sprintf("%.0fMB", float64(estBytes)/1024.0/1024.0)
 							if len(users) > 0 {
@@ -1130,7 +1133,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				s.emitEvent(EventUpload, filePath, fileName, fileSize, speedMB, data)
 				if sfvEntries := bridge.GetSFVData(s.CurrentDir); sfvEntries != nil {
 					users, _, totalBytes, present, total := bridge.GetVFSRaceStats(s.CurrentDir)
-					if total > 0 && present >= total {
+					if total > 0 && present >= total && canTriggerRaceEnd(sfvEntries, fileName) {
 						// Race complete: fire COMPLETE/STATS sequence in a
 						// goroutine so the client gets 226 immediately. The
 						// FIFO writes + plugin dispatches were stacking up on
@@ -1251,7 +1254,10 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 							data["relname"] = path.Base(s.CurrentDir)
 							data["t_files"] = fmt.Sprintf("%d", total)
 							data["t_present"] = fmt.Sprintf("%d", present)
+							data["t_filesleft"] = fmt.Sprintf("%d", maxInt(0, total-present))
 							data["t_totalmb"] = fmt.Sprintf("%.1f", float64(totalBytes)/1024.0/1024.0)
+							data["t_avgspeed"] = fmt.Sprintf("%.2fMB/s", currentRaceSpeedMB(s.CurrentDir, totalBytes, bridge))
+							data["t_timeleft"] = estimateRaceTimeLeft(s.CurrentDir, totalBytes, present, total, bridge)
 							estBytes := fileSize * int64(total)
 							data["t_mbytes"] = fmt.Sprintf("%.0fMB", float64(estBytes)/1024.0/1024.0)
 							if len(users) > 0 {
@@ -1274,7 +1280,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				s.emitEvent(EventUpload, filePath, fileName, fileSize, speedMB, data)
 				if sfvEntries := bridge.GetSFVData(s.CurrentDir); sfvEntries != nil {
 					users, _, totalBytes, present, total := bridge.GetVFSRaceStats(s.CurrentDir)
-					if total > 0 && present >= total {
+					if total > 0 && present >= total && canTriggerRaceEnd(sfvEntries, fileName) {
 						// Async — see explanation at the other emitRaceEnd call.
 						go emitRaceEndAfter(s, users, totalBytes, total, xferMs, mediaInfoGraceDelay(fileName))
 					}
@@ -1552,6 +1558,41 @@ func max64(a, b int64) int64 {
 	return b
 }
 
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func currentRaceSpeedMB(dirPath string, totalBytes int64, bridge MasterBridge) float64 {
+	if bridge == nil || totalBytes <= 0 {
+		return 0
+	}
+	sec := bridge.GetRaceWallClockSeconds(dirPath)
+	if sec <= 0 {
+		return 0
+	}
+	return (float64(totalBytes) / 1024.0 / 1024.0) / float64(sec)
+}
+
+func estimateRaceTimeLeft(dirPath string, totalBytes int64, present, total int, bridge MasterBridge) string {
+	if totalBytes <= 0 || present <= 0 || total <= present {
+		return "0s"
+	}
+	speed := currentRaceSpeedMB(dirPath, totalBytes, bridge)
+	if speed <= 0 {
+		return "N/A"
+	}
+	avgBytesPerFile := float64(totalBytes) / float64(present)
+	bytesLeft := avgBytesPerFile * float64(total-present)
+	seconds := int((bytesLeft / 1024.0 / 1024.0) / speed)
+	if seconds < 1 {
+		seconds = 1
+	}
+	return fmt.Sprintf("%ds", seconds)
+}
+
 func isRacePayloadFile(fileName string) bool {
 	name := strings.ToLower(strings.TrimSpace(fileName))
 	if regexp.MustCompile(`(?i)\.(rar|r\d\d)$`).MatchString(name) {
@@ -1568,6 +1609,20 @@ func isMediaInfoFile(fileName string) bool {
 		}
 	}
 	return false
+}
+
+func canTriggerRaceEnd(sfvEntries map[string]uint32, fileName string) bool {
+	name := raceEntryKey(fileName)
+	if strings.HasSuffix(name, ".sfv") {
+		return true
+	}
+	_, ok := sfvEntries[name]
+	return ok
+}
+
+func raceEntryKey(fileName string) string {
+	name := strings.TrimSpace(path.Base(strings.ReplaceAll(fileName, "\\", "/")))
+	return strings.ToLower(name)
 }
 
 func mediaInfoGraceDelay(fileName string) time.Duration {

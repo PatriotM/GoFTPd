@@ -2,6 +2,7 @@ package announce
 
 import (
 	"fmt"
+	"log"
 	"path"
 	"strings"
 	"sync"
@@ -40,6 +41,11 @@ func (p *AnnouncePlugin) Initialize(config map[string]interface{}) error {
 		th, err := tmpl.LoadTheme(themeFile)
 		if err == nil {
 			p.theme = th
+			if p.debug {
+				log.Printf("[Announce] loaded theme %s (%d templates, %d vars)", themeFile, len(th.Announces), len(th.Vars))
+			}
+		} else {
+			log.Printf("[Announce] theme load failed for %s: %v", themeFile, err)
 		}
 	}
 	return nil
@@ -258,7 +264,15 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 					if t1 > 0 && p1*2 >= t1 && p1 < t1 {
 						st.HalfwayDone = true
 						left := t1 - p1
-						vars["t_filesleft"] = fmt.Sprintf("%d", left)
+						if vars["t_filesleft"] == "" {
+							vars["t_filesleft"] = fmt.Sprintf("%d", left)
+						}
+						if vars["t_timeleft"] == "" {
+							vars["t_timeleft"] = "N/A"
+						}
+						if vars["t_avgspeed"] == "" {
+							vars["t_avgspeed"] = "0.00MB/s"
+						}
 						outs = append(outs, plugin.Output{Type: "RACE", Text: p.render("HALFWAY", vars, fmt.Sprintf("HALFWAY: [%s] %s - leader: %s [%sMB/%sF/%s%%/%s] - %d files left.", section, rel, vars["leader_name"], vars["leader_mb"], vars["leader_files"], vars["leader_pct"], vars["leader_speed"], left))})
 					}
 				}
