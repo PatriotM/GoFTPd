@@ -128,6 +128,7 @@ type VFSRaceUser struct {
 	Bytes      int64
 	Speed      float64
 	PeakSpeed  float64
+	SlowSpeed  float64
 	Percent    int
 	DurationMs int64 // sum of file durations for this user (effective transfer time)
 }

@@ -113,6 +113,9 @@ func (p *AnnouncePlugin) vars(evt *event.Event) map[string]string {
 	if v["reldir"] == "" {
 		v["reldir"] = v["relname"]
 	}
+	if v["t_file_label"] == "" {
+		v["t_file_label"] = "file(s)"
+	}
 	p.addSectionPalette(v, v["section"])
 	return v
 }

@@ -1096,6 +1096,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				if strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
 					if sfvEntries := bridge.GetSFVData(s.CurrentDir); sfvEntries != nil {
 						data["t_filecount"] = fmt.Sprintf("%d", len(sfvEntries))
+						data["t_file_label"] = expectedFileLabel(s.CurrentDir)
 					}
 				}
 				if regexp.MustCompile(`(?i)\.(rar|r\d\d)$`).MatchString(fileName) {
@@ -1239,6 +1240,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				if strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
 					if sfvEntries := bridge.GetSFVData(s.CurrentDir); sfvEntries != nil {
 						data["t_filecount"] = fmt.Sprintf("%d", len(sfvEntries))
+						data["t_file_label"] = expectedFileLabel(s.CurrentDir)
 					}
 				}
 				if regexp.MustCompile(`(?i)\.(rar|r\d\d)$`).MatchString(fileName) {
@@ -1548,4 +1550,17 @@ func max64(a, b int64) int64 {
 		return a
 	}
 	return b
+}
+
+func expectedFileLabel(dirPath string) string {
+	section := strings.ToUpper(strings.Trim(path.Clean(dirPath), "/"))
+	if idx := strings.Index(section, "/"); idx >= 0 {
+		section = section[:idx]
+	}
+	switch section {
+	case "MP3", "FLAC":
+		return "track(s)"
+	default:
+		return "file(s)"
+	}
 }

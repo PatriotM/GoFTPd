@@ -541,6 +541,7 @@ type RaceUserStat struct {
 	Bytes     int64
 	Speed     float64 // bytes/sec average across this user's files
 	PeakSpeed float64 // bytes/sec of this user's fastest single file
+	SlowSpeed float64 // bytes/sec of this user's slowest single file
 	Percent   int
 }
 
@@ -616,6 +617,9 @@ func (vfs *VirtualFileSystem) GetRaceStats(dirPath string) (users []RaceUserStat
 			us.Speed += fileSpeed
 			if fileSpeed > us.PeakSpeed {
 				us.PeakSpeed = fileSpeed
+			}
+			if us.SlowSpeed == 0 || fileSpeed < us.SlowSpeed {
+				us.SlowSpeed = fileSpeed
 			}
 		}
 

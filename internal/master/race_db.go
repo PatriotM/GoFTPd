@@ -381,6 +381,28 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 		if peakBytes.Valid && peakMs.Valid && peakMs.Int64 > 0 {
 			u.PeakSpeed = float64(peakBytes.Int64) / (float64(peakMs.Int64) / 1000.0)
 		}
+		var slowBytes, slowMs sql.NullInt64
+		err = r.db.QueryRow(`
+            SELECT size_bytes, duration_ms FROM release_files
+            WHERE release_id = (SELECT id FROM releases WHERE path = ?)
+              AND uploader = ?
+              AND is_present = 1
+              AND EXISTS (
+                  SELECT 1 FROM release_files e
+                  WHERE e.release_id = release_files.release_id
+                    AND e.is_expected = 1
+                    AND LOWER(e.filename) = LOWER(release_files.filename)
+              )
+              AND duration_ms > 0
+            ORDER BY (CAST(size_bytes AS REAL) / CAST(duration_ms AS REAL)) ASC
+            LIMIT 1
+        `, dirPath, u.Name).Scan(&slowBytes, &slowMs)
+		if err != nil && err != sql.ErrNoRows {
+			log.Printf("[RaceDB] slowest query failed for %s user=%s: %v", dirPath, u.Name, err)
+		}
+		if slowBytes.Valid && slowMs.Valid && slowMs.Int64 > 0 {
+			u.SlowSpeed = float64(slowBytes.Int64) / (float64(slowMs.Int64) / 1000.0)
+		}
 		if total > 0 {
 			u.Percent = (u.Files * 100) / total
 			if u.Percent > 100 {

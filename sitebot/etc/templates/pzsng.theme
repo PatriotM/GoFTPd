@@ -50,7 +50,7 @@ announce.AUDIOINFO = "%b{%c%sec_c1{AUDIO-INFO:}} %c01{[}%section_colored%c01{]} 
 
 announce.MEDIAINFO = "%b{%c%sec_c1{MEDIA-INFO:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{Video:} %c%sec_c5{%video_format} %c01{%width}x%height %c01{- Audio:} %c%sec_c5{%audio_format} %c01{%channels} %c01{- Duration:} %c%sec_c5{%duration}"
 
-announce.SFV_RAR = "%b{%c10{RACE:}} %c01{[}%section_colored%c01{]} Got SFV for %c06{%b{%relname}} %c01{uploaded by} %c04{%u_name}%c01{. Now expecting} %c05{%b{%t_filecount}} %c01{rar file(s).}"
+announce.SFV_RAR = "%b{%c10{RACE:}} %c01{[}%section_colored%c01{]} Got SFV for %c06{%b{%relname}} %c01{uploaded by} %c04{%u_name}%c01{. Now expecting} %c05{%b{%t_filecount}} %c01{%t_file_label.}"
 
 announce.UPDATE_RAR = "%b{%c10{RACE:}} %c01{[}%section_colored%c01{]} %c06{%b{%relname}} %c01{got its first rar file from} %c04{%u_name} %c01{at} %c05{%u_speed}%c01{. Now expecting} %c05{%b{%t_mbytes}}%c01{.}"
 

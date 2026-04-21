@@ -678,6 +678,7 @@ func (b *Bridge) GetVFSRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFS
 			Bytes:     u.Bytes,
 			Speed:     u.Speed,
 			PeakSpeed: u.PeakSpeed,
+			SlowSpeed: u.SlowSpeed,
 			Percent:   u.Percent,
 		}
 	}
