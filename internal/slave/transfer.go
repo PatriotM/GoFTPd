@@ -63,7 +63,9 @@ func (t *Transfer) ReceiveFile(path string) protocol.TransferStatus {
 
 	// Accept connection if passive
 	if t.conn == nil && t.listener != nil {
-		t.listener.(*net.TCPListener).SetDeadline(time.Now().Add(30 * time.Second))
+		if deadlineListener, ok := t.listener.(interface{ SetDeadline(time.Time) error }); ok {
+			deadlineListener.SetDeadline(time.Now().Add(30 * time.Second))
+		}
 		conn, err := t.listener.Accept()
 		t.listener.Close()
 		if err != nil {
@@ -144,7 +146,9 @@ func (t *Transfer) SendFile(path string) protocol.TransferStatus {
 
 	// Accept connection if passive
 	if t.conn == nil && t.listener != nil {
-		t.listener.(*net.TCPListener).SetDeadline(time.Now().Add(30 * time.Second))
+		if deadlineListener, ok := t.listener.(interface{ SetDeadline(time.Time) error }); ok {
+			deadlineListener.SetDeadline(time.Now().Add(30 * time.Second))
+		}
 		conn, err := t.listener.Accept()
 		t.listener.Close()
 		if err != nil {
