@@ -5,6 +5,7 @@ import (
 	"os"
 	"sync"
 
+	"goftpd/internal/timeutil"
 	"gopkg.in/yaml.v3"
 )
 
@@ -19,6 +20,7 @@ type Config struct {
 	Version       string `yaml:"version"`
 	Email         string `yaml:"email"`
 	LoginPrompt   string `yaml:"login_prompt"`
+	Timezone      string `yaml:"timezone"`
 
 	// Network
 	ListenPort int    `yaml:"listen_port"`
@@ -191,6 +193,9 @@ func (c *Config) Rehash() (string, error) {
 	if err != nil {
 		return path, err
 	}
+	if err := timeutil.Set(fresh.Timezone); err != nil {
+		return path, fmt.Errorf("invalid timezone %q: %w", fresh.Timezone, err)
+	}
 
 	c.rehashMu.Lock()
 	defer c.rehashMu.Unlock()
@@ -201,6 +206,7 @@ func (c *Config) Rehash() (string, error) {
 	c.Version = fresh.Version
 	c.Email = fresh.Email
 	c.LoginPrompt = fresh.LoginPrompt
+	c.Timezone = fresh.Timezone
 
 	// File-show-diz map
 	c.ShowDiz = fresh.ShowDiz

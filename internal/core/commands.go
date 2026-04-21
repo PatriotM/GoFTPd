@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"goftpd/internal/timeutil"
 	"goftpd/internal/user"
 )
 
@@ -449,7 +450,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				found := false
 				for _, e := range entries {
 					if e.Name == args[0] {
-						fmt.Fprintf(s.Conn, "213 %s\r\n", time.Unix(e.ModTime, 0).Format("20060102150405"))
+						fmt.Fprintf(s.Conn, "213 %s\r\n", timeutil.FTPMachineUnix(e.ModTime))
 						found = true
 						break
 					}
@@ -644,7 +645,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					name := path.Base(target)
 					for _, e := range bridge.ListDir(parent) {
 						if e.Name == name {
-							ts := time.Unix(e.ModTime, 0).Format("20060102150405")
+							ts := timeutil.FTPMachineUnix(e.ModTime)
 							var parts []string
 							if e.IsSymlink {
 								parts = []string{
@@ -740,7 +741,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						bar += "]"
 						statusName = fmt.Sprintf("%s - %3d%% Complete - [%s]", bar, pct, siteName)
 					}
-					nowTs := time.Now().Format("20060102150405")
+					nowTs := timeutil.FTPMachine(time.Now())
 					output.WriteString(fmt.Sprintf("Modify=%s;Perm=el;Type=dir; %s\r\n", nowTs, statusName))
 					if present < total {
 						if marker := incompleteMarkerName(s.Config.IncompleteIndicator, present, total); marker != "" {
@@ -760,7 +761,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					if !s.ACLEngine.CanPerform(s.User, "LIST", aclPath) {
 						continue
 					}
-					ts := time.Unix(e.ModTime, 0).Format("20060102150405")
+					ts := timeutil.FTPMachineUnix(e.ModTime)
 					var perm string
 					var facts []string
 					if e.IsSymlink {
@@ -820,7 +821,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					continue
 				}
 				facts := []string{
-					fmt.Sprintf("Modify=%s", info.ModTime().Format("20060102150405")),
+					fmt.Sprintf("Modify=%s", timeutil.FTPMachine(info.ModTime())),
 					fmt.Sprintf("Perm=%s", getMlsdPerm(info, isSymlink)),
 				}
 				if isSymlink {
@@ -860,7 +861,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		if s.Config.Mode == "master" && s.MasterManager != nil {
 			if bridge, ok := s.MasterManager.(MasterBridge); ok {
 				entries := bridge.ListDir(s.CurrentDir)
-				now := time.Now().Format("Jan _2 15:04")
+				now := timeutil.Now().Format("Jan _2 15:04")
 				siteName := s.Config.SiteNameShort
 				if siteName == "" {
 					siteName = "GoFTPd"
@@ -941,7 +942,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					} else if e.IsDir {
 						size = "4096"
 					}
-					ts := time.Unix(e.ModTime, 0).Format("Jan _2 15:04")
+					ts := timeutil.Unix(e.ModTime).Format("Jan _2 15:04")
 					owner := "GoFTPd"
 					group := "GoFTPd"
 					output.WriteString(fmt.Sprintf("%s   1 %-8s %-8s %10s %s %s\r\n",
@@ -985,7 +986,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					} else if f.Type()&fs.ModeSymlink != 0 {
 						mode = "lrwxrwxrwx"
 					}
-					ts := info.ModTime().Format("Jan _2 15:04")
+					ts := timeutil.In(info.ModTime()).Format("Jan _2 15:04")
 					output.WriteString(fmt.Sprintf("%s   1 %-8s %-8s %10s %s %s\r\n",
 						mode, "GoFTPd", "GoFTPd", size, ts, f.Name()))
 				}
@@ -1436,7 +1437,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						mode = "drwxr-xr-x"
 						size = "4096"
 					}
-					ts := time.Unix(e.ModTime, 0).Format("Jan _2 15:04")
+					ts := timeutil.Unix(e.ModTime).Format("Jan _2 15:04")
 					fmt.Fprintf(s.Conn, " %s   1 %-8s %-8s %10s %s %s\r\n",
 						mode, "GoFTPd", "GoFTPd", size, ts, e.Name)
 				}
