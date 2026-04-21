@@ -120,7 +120,7 @@ type Config struct {
 	MasterManager   interface{}                       `yaml:"-"` // *master.Manager for master mode
 	RehashHook      func(*Config)                     `yaml:"-"` // called after Rehash() swaps fields
 
-	// SITE PRE — move a release from /PRE/<group>/<rel> to /<section>/<rel>
+	// SITE PRE moves a release from /PRE/<group>/<rel> to /<section>/<rel>
 	// and announce it. Affils are listed in `affils:`, which maps group
 	// name -> pre staging path (inside the site root). Example:
 	//   pre_enabled: true
@@ -133,14 +133,15 @@ type Config struct {
 	//       predir: "/PRE/GoFTPd"
 	//     - group: "B0MBARDiERS"
 	//       predir: "/PRE/B0MBARDiERS"
-	PreEnabled     bool        `yaml:"pre_enabled"`
-	PreBase        string      `yaml:"pre_base"`
-	PreSections    []string    `yaml:"pre_sections"`
+	PreEnabled       bool        `yaml:"pre_enabled"`
+	PreBase          string      `yaml:"pre_base"`
+	PreSections      []string    `yaml:"pre_sections"`
 	PreDatedSections []string  `yaml:"pre_dated_sections"` // use MMDD subdir (MP3/FLAC/0DAY)
-	PreBWDuration  int         `yaml:"pre_bw_duration"`    // seconds
-	PreBWIntervalMs int        `yaml:"pre_bw_interval_ms"` // polling interval
-	Affils         []AffilRule `yaml:"affils"`
+	PreBWDuration    int         `yaml:"pre_bw_duration"`    // seconds
+	PreBWIntervalMs  int         `yaml:"pre_bw_interval_ms"` // polling interval
+	Affils           []AffilRule `yaml:"affils"`
 
+	// DatedDirs creates daily race/upload directories independently of SITE PRE.
 	DatedDirs DatedDirsConfig `yaml:"dated_dirs"`
 
 	// Debug

@@ -50,8 +50,7 @@ func (s *Session) HandleSitePre(args []string) bool {
 	src := path.Join(affil.Predir, relname)
 
 	// Destination: /<section>/<relname>, or /<section>/<MMDD>/<relname> for
-	// dated sections (MP3/FLAC/0DAY typically). MMDD is today's date —
-	// matches the scene convention where /MP3/0419/ holds today's releases.
+	// PRE sections that use dated dirs, such as /MP3/0419/Release.Name.
 	destSection := "/" + section
 	if preSectionIsDated(s.Config.PreDatedSections, section) {
 		destSection = path.Join(destSection, time.Now().Format("0102"))
@@ -82,9 +81,8 @@ func (s *Session) HandleSitePre(args []string) bool {
 	_, _, totalBytes, present, _ := bridge.GetVFSRaceStats(src)
 	mbytes := float64(totalBytes) / 1024.0 / 1024.0
 
-	// For dated sections, verify the MMDD subdir exists before we try to
-	// rename into it. A separate midnight script is expected to pre-create
-	// /<section>/<MMDD>/ dirs; if it hasn't run we create it ourselves.
+	// For PRE destinations that use dated dirs, verify today's MMDD dir exists.
+	// The dated_dirs scheduler normally creates it; this fallback keeps SITE PRE usable.
 	if destSection != "/"+section {
 		exists := false
 		for _, e := range bridge.ListDir("/" + section) {

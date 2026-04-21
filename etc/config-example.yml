@@ -210,19 +210,36 @@ pre_sections:
   - FLAC
   - 0DAY
 
-# Sections that use dated subdirs (scene convention for MP3/FLAC/0DAY/etc).
-# When pre'ing to these, releases go to /<section>/<MMDD>/<rel> where MMDD
-# is today's date (e.g. 0419). A separate midnight script is expected to
-# pre-create the next day's dir + !Today_<SECTION> symlinks; if the MMDD
-# dir doesn't exist yet when SITE PRE fires, goftpd creates it on the fly.
+# PRE target sections that place releases below the current dated directory.
+# This only controls SITE PRE destination paths, for example /MP3/0419/Release.Name.
+# Daily creation of /MP3/0419 and !Today_MP3 is handled by dated_dirs below.
 pre_dated_sections:
   - MP3
   - FLAC
   - 0DAY
 
-# Map of affil groups → their staging dir. Only users whose primary or
+# Map of affil groups to their staging dir. Only users whose primary or
 # secondary group matches one of these can SITE PRE, and only from the
 # corresponding predir.
+affils:
+  - group:  "GoFTPd"
+    predir: "/PRE/GoFTPd"
+  - group:  "GRPTST"
+    predir: "/PRE/GRPTST"
+
+
+# =============================================================================
+#  DATED DIRS - daily race directories.
+#
+#  This is site maintenance, not SITE PRE. It creates daily upload/race
+#  directories at midnight, maintains !Today_<SECTION> symlinks, and makes
+#  the previous dated dir read-only after the configured delay.
+#
+#  Example:
+#    /MP3/0419
+#    /FLAC/0419
+#    /!Today_MP3 -> /MP3/0419
+# =============================================================================
 dated_dirs:
   enabled: true
   sections:
@@ -236,12 +253,6 @@ dated_dirs:
   today_symlink: true
   symlink_prefix: "!Today_"
   readonly_after_minutes: 60
-
-affils:
-  - group:  "GoFTPd"
-    predir: "/PRE/GoFTPd"
-  - group:  "GRPTST"
-    predir: "/PRE/GRPTST"
 
 
 # =============================================================================
