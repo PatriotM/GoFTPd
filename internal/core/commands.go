@@ -109,7 +109,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 
 		if s.Config.Passthrough && s.Config.Mode == "master" && s.MasterManager != nil {
 			if bridge, ok := s.MasterManager.(MasterBridge); ok {
-				slaveIP, port, xferIdx, slaveName, err := bridge.SlaveListenForPassthrough(s.CurrentDir)
+				slaveIP, port, xferIdx, slaveName, err := bridge.SlaveListenForPassthrough(s.CurrentDir, s.DataTLS)
 				if err != nil {
 					log.Printf("[CPSV] Passthrough slave listen failed: %v", err)
 					fmt.Fprintf(s.Conn, "421 No available slave for passthrough.\r\n")
@@ -285,6 +285,16 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			target = path.Join(s.CurrentDir, target)
 		}
 		s.CurrentDir = path.Clean(target)
+		if s.Config.Mode == "master" && s.MasterManager != nil {
+			if bridge, ok := s.MasterManager.(MasterBridge); ok {
+				for _, e := range bridge.ListDir(path.Dir(s.CurrentDir)) {
+					if e.Name == path.Base(s.CurrentDir) && e.IsSymlink && e.LinkTarget != "" {
+						s.CurrentDir = path.Clean(e.LinkTarget)
+						break
+					}
+				}
+			}
+		}
 
 		if s.Config.Mode == "master" && s.MasterManager != nil {
 			if bridge, ok := s.MasterManager.(MasterBridge); ok {
@@ -539,7 +549,21 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		if s.Config.Passthrough && s.Config.Mode == "master" && s.MasterManager != nil {
 			if s.PretCmd == "STOR" || s.PretCmd == "RETR" {
 				if bridge, ok := s.MasterManager.(MasterBridge); ok {
-					slaveIP, port, xferIdx, slaveName, err := bridge.SlaveListenForPassthrough(s.CurrentDir)
+					targetPath := s.CurrentDir
+					if strings.TrimSpace(s.PretArg) != "" {
+						targetPath = path.Join(s.CurrentDir, s.PretArg)
+					}
+
+					var slaveIP string
+					var port int
+					var xferIdx int32
+					var slaveName string
+					var err error
+					if s.PretCmd == "RETR" {
+						slaveIP, port, xferIdx, slaveName, err = bridge.SlaveListenForDownloadPassthrough(targetPath, s.DataTLS)
+					} else {
+						slaveIP, port, xferIdx, slaveName, err = bridge.SlaveListenForPassthrough(targetPath, s.DataTLS)
+					}
 					if err != nil {
 						log.Printf("[PASV] Passthrough slave listen failed: %v", err)
 						fmt.Fprintf(s.Conn, "421 No available slave for passthrough.\r\n")
@@ -581,6 +605,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		}
 		s.DataListen = l
 		s.PassthruSlave = nil 
+		s.PassthruXferIdx = 0
 		ip := strings.ReplaceAll(s.Config.PublicIP, ".", ",")
 		response := fmt.Sprintf("227 Entering Passive Mode (%s,%d,%d)\r\n", ip, port/256, port%256)
 		if s.Config.Debug {
@@ -629,10 +654,20 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						if e.Name == name {
 							ts := time.Unix(e.ModTime, 0).Format("20060102150405")
 							var parts []string
-							if e.IsDir {
+							if e.IsSymlink {
 								parts = []string{
 									fmt.Sprintf("Modify=%s", ts),
-									"Perm=elcmp",
+									"Perm=el",
+									"Type=" + mlsdSymlinkType(e),
+								}
+							} else if e.IsDir {
+								perm := "elcmp"
+								if e.Mode == 0555 {
+									perm = "el"
+								}
+								parts = []string{
+									fmt.Sprintf("Modify=%s", ts),
+									"Perm=" + perm,
 									"Type=dir",
 								}
 							} else {
@@ -715,10 +750,18 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					}
 					nowTs := time.Now().Format("20060102150405")
 					output.WriteString(fmt.Sprintf("Modify=%s;Perm=el;Type=dir; %s\r\n", nowTs, statusName))
+					if present < total {
+						if marker := incompleteMarkerName(s.Config.IncompleteIndicator, present, total); marker != "" {
+							output.WriteString(fmt.Sprintf("Modify=%s;Perm=el;Type=dir; %s\r\n", nowTs, marker))
+						}
+					}
 				}
 
 				for _, e := range entries {
 					if strings.HasPrefix(e.Name, ".") {
+						continue
+					}
+					if isIncompleteMarkerName(s.Config.IncompleteIndicator, e.Name) {
 						continue
 					}
 					aclPath := path.Join(s.Config.ACLBasePath, s.CurrentDir, e.Name)
@@ -728,8 +771,18 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					ts := time.Unix(e.ModTime, 0).Format("20060102150405")
 					var perm string
 					var facts []string
-					if e.IsDir {
+					if e.IsSymlink {
+						perm = "el"
+						facts = []string{
+							fmt.Sprintf("Modify=%s", ts),
+							"Perm=" + perm,
+							"Type=" + mlsdSymlinkType(e),
+						}
+					} else if e.IsDir {
 						perm = "elcmp" // enter, list, create, mkdir, purge
+						if e.Mode == 0555 {
+							perm = "el"
+						}
 						facts = []string{
 							fmt.Sprintf("Modify=%s", ts),
 							"Perm=" + perm,
@@ -857,6 +910,12 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					}
 					output.WriteString(fmt.Sprintf("drwxr-xr-x   1 %-8s %-8s %10s %s %s\r\n",
 						"GoFTPd", "GoFTPd", "4096", now, statusName))
+					if present < total {
+						if marker := incompleteMarkerName(s.Config.IncompleteIndicator, present, total); marker != "" {
+							output.WriteString(fmt.Sprintf("drwxr-xr-x   1 %-8s %-8s %10s %s %s\r\n",
+								"GoFTPd", "GoFTPd", "4096", now, marker))
+						}
+					}
 				}
 
 				for _, e := range entries {
@@ -866,7 +925,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					if strings.HasSuffix(e.Name, "-missing") || strings.HasSuffix(e.Name, "-MISSING") {
 						continue
 					}
-					if strings.HasPrefix(e.Name, "[incomplete]") {
+					if isIncompleteMarkerName(s.Config.IncompleteIndicator, e.Name) {
 						continue
 					}
 					if strings.HasPrefix(e.Name, "[#") || strings.HasPrefix(e.Name, "[:") {
@@ -881,17 +940,20 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						continue
 					}
 
-					mode := "-rw-r--r--"
+					mode := ftpListMode(e)
 					size := fmt.Sprintf("%d", e.Size)
-					if e.IsDir {
-						mode = "drwxr-xr-x"
+					name := e.Name
+					if e.IsSymlink {
+						size = "0"
+						name = fmt.Sprintf("%s -> %s", e.Name, e.LinkTarget)
+					} else if e.IsDir {
 						size = "4096"
 					}
 					ts := time.Unix(e.ModTime, 0).Format("Jan _2 15:04")
 					owner := "GoFTPd"
 					group := "GoFTPd"
 					output.WriteString(fmt.Sprintf("%s   1 %-8s %-8s %10s %s %s\r\n",
-						mode, owner, group, size, ts, e.Name))
+						mode, owner, group, size, ts, name))
 				}
 
 				if total > 0 && present < total {
@@ -1049,17 +1111,21 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				if strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
 					if sfvEntries := bridge.GetSFVData(s.CurrentDir); sfvEntries != nil {
 						data["t_filecount"] = fmt.Sprintf("%d", len(sfvEntries))
+						data["t_file_label"] = expectedFileLabel(s.CurrentDir)
 					}
 				}
-				if regexp.MustCompile(`(?i)\.(rar|r\d\d)$`).MatchString(fileName) {
-					data["t_mbytes"] = mbString(fileSize)
+				if isRacePayloadFile(fileName) {
+					data["file_mbytes"] = mbString(fileSize)
 					if sfvEntries := bridge.GetSFVData(s.CurrentDir); sfvEntries != nil {
 						users, _, totalBytes, present, total := bridge.GetVFSRaceStats(s.CurrentDir)
 						if total > 0 {
 							data["relname"] = path.Base(s.CurrentDir)
 							data["t_files"] = fmt.Sprintf("%d", total)
 							data["t_present"] = fmt.Sprintf("%d", present)
+							data["t_filesleft"] = fmt.Sprintf("%d", maxInt(0, total-present))
 							data["t_totalmb"] = fmt.Sprintf("%.1f", float64(totalBytes)/1024.0/1024.0)
+							data["t_avgspeed"] = fmt.Sprintf("%.2fMB/s", currentRaceSpeedMB(s.CurrentDir, totalBytes, bridge))
+							data["t_timeleft"] = estimateRaceTimeLeft(s.CurrentDir, totalBytes, present, total, bridge)
 							estBytes := fileSize * int64(total)
 							data["t_mbytes"] = fmt.Sprintf("%.0fMB", float64(estBytes)/1024.0/1024.0)
 							if len(users) > 0 {
@@ -1082,13 +1148,13 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				s.emitEvent(EventUpload, filePath, fileName, fileSize, speedMB, data)
 				if sfvEntries := bridge.GetSFVData(s.CurrentDir); sfvEntries != nil {
 					users, _, totalBytes, present, total := bridge.GetVFSRaceStats(s.CurrentDir)
-					if total > 0 && present >= total {
+					if total > 0 && present >= total && canTriggerRaceEnd(sfvEntries, fileName) {
 						// Race complete: fire COMPLETE/STATS sequence in a
 						// goroutine so the client gets 226 immediately. The
 						// FIFO writes + plugin dispatches were stacking up on
 						// the connection's hot path and delaying the final
 						// transfer ack by the time it took to do all that work.
-						go emitRaceEnd(s, users, totalBytes, total, xferMs)
+						go emitRaceEndAfter(s, users, totalBytes, total, xferMs, mediaInfoGraceDelay(fileName))
 					}
 				}
 
@@ -1122,6 +1188,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					fileSize, checksum, xferMs, err = bridge.SlaveReceivePassthrough(filePath, s.PassthruXferIdx, slaveName, s.User.Name, s.User.PrimaryGroup)
 					s.PassthruSlave = nil
 					s.PretCmd = ""
+					s.PretArg = ""
 
 					if err != nil {
 						log.Printf("[Passthrough] Upload failed: %v", err)
@@ -1192,17 +1259,21 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				if strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
 					if sfvEntries := bridge.GetSFVData(s.CurrentDir); sfvEntries != nil {
 						data["t_filecount"] = fmt.Sprintf("%d", len(sfvEntries))
+						data["t_file_label"] = expectedFileLabel(s.CurrentDir)
 					}
 				}
-				if regexp.MustCompile(`(?i)\.(rar|r\d\d)$`).MatchString(fileName) {
-					data["t_mbytes"] = mbString(fileSize)
+				if isRacePayloadFile(fileName) {
+					data["file_mbytes"] = mbString(fileSize)
 					if sfvEntries := bridge.GetSFVData(s.CurrentDir); sfvEntries != nil {
 						users, _, totalBytes, present, total := bridge.GetVFSRaceStats(s.CurrentDir)
 						if total > 0 {
 							data["relname"] = path.Base(s.CurrentDir)
 							data["t_files"] = fmt.Sprintf("%d", total)
 							data["t_present"] = fmt.Sprintf("%d", present)
+							data["t_filesleft"] = fmt.Sprintf("%d", maxInt(0, total-present))
 							data["t_totalmb"] = fmt.Sprintf("%.1f", float64(totalBytes)/1024.0/1024.0)
+							data["t_avgspeed"] = fmt.Sprintf("%.2fMB/s", currentRaceSpeedMB(s.CurrentDir, totalBytes, bridge))
+							data["t_timeleft"] = estimateRaceTimeLeft(s.CurrentDir, totalBytes, present, total, bridge)
 							estBytes := fileSize * int64(total)
 							data["t_mbytes"] = fmt.Sprintf("%.0fMB", float64(estBytes)/1024.0/1024.0)
 							if len(users) > 0 {
@@ -1225,9 +1296,9 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				s.emitEvent(EventUpload, filePath, fileName, fileSize, speedMB, data)
 				if sfvEntries := bridge.GetSFVData(s.CurrentDir); sfvEntries != nil {
 					users, _, totalBytes, present, total := bridge.GetVFSRaceStats(s.CurrentDir)
-					if total > 0 && present >= total {
+					if total > 0 && present >= total && canTriggerRaceEnd(sfvEntries, fileName) {
 						// Async — see explanation at the other emitRaceEnd call.
-						go emitRaceEnd(s, users, totalBytes, total, xferMs)
+						go emitRaceEndAfter(s, users, totalBytes, total, xferMs, mediaInfoGraceDelay(fileName))
 					}
 				}
 
@@ -1286,6 +1357,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					err := bridge.SlaveSendPassthrough(filePath, s.PassthruXferIdx, slaveName)
 					s.PassthruSlave = nil
 					s.PretCmd = ""
+					s.PretArg = ""
 
 					if err != nil {
 						log.Printf("[Passthrough] Download failed: %v", err)
@@ -1295,7 +1367,6 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						if fileSize > 0 {
 							s.User.UpdateStats(fileSize, false)
 						}
-						s.emitEvent(EventDownload, filePath, args[0], fileSize, 0, nil)
 						s.emitEvent(EventDownload, filePath, args[0], fileSize, 0, nil)
 					}
 				} else {
@@ -1312,6 +1383,8 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					}
 					err = bridge.DownloadFile(filePath, dataConn)
 					dataConn.Close()
+					s.PretCmd = ""
+					s.PretArg = ""
 					if err != nil {
 						log.Printf("[MASTER] Download failed: %v", err)
 						fmt.Fprintf(s.Conn, "550 Download failed: %v\r\n", err)
@@ -1423,9 +1496,176 @@ func (s *Session) showGlobalStats(code string, final bool) {
 }
 
 func mbString(size int64) string { return fmt.Sprintf("%.0fMB", float64(size)/1024.0/1024.0) }
+
+func ftpListMode(e MasterFileEntry) string {
+	switch {
+	case e.IsSymlink:
+		return "lrwxrwxrwx"
+	case e.IsDir:
+		if e.Mode == 0555 {
+			return "dr-xr-xr-x"
+		}
+		return "drwxr-xr-x"
+	default:
+		if e.Mode == 0444 {
+			return "-r--r--r--"
+		}
+		return "-rw-r--r--"
+	}
+}
+
+func mlsdSymlinkType(e MasterFileEntry) string {
+	target := strings.TrimSpace(e.LinkTarget)
+	if target == "" {
+		return "OS.unix=symlink"
+	}
+	return "OS.unix=slink:" + target
+}
+
+func incompleteMarkerName(pattern string, present, total int) string {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" || total <= 0 || present >= total {
+		return ""
+	}
+	return strings.ReplaceAll(pattern, "%0", progressBar(present, total, 20))
+}
+
+func isIncompleteMarkerName(pattern, name string) bool {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" {
+		return strings.HasPrefix(strings.ToLower(name), "[incomplete]")
+	}
+	if strings.Contains(pattern, "%0") {
+		prefix := strings.SplitN(pattern, "%0", 2)[0]
+		return prefix != "" && strings.HasPrefix(name, prefix)
+	}
+	return name == pattern
+}
+
+func progressBar(present, total, width int) string {
+	if total <= 0 {
+		total = 1
+	}
+	if width <= 0 {
+		width = 20
+	}
+	filled := (present * width) / total
+	if filled < 0 {
+		filled = 0
+	}
+	if filled > width {
+		filled = width
+	}
+	var b strings.Builder
+	b.WriteByte('[')
+	for i := 0; i < width; i++ {
+		if i < filled {
+			b.WriteByte('#')
+		} else {
+			b.WriteByte(':')
+		}
+	}
+	b.WriteByte(']')
+	return b.String()
+}
+
 func max64(a, b int64) int64 {
 	if a > b {
 		return a
 	}
 	return b
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func currentRaceSpeedMB(dirPath string, totalBytes int64, bridge MasterBridge) float64 {
+	if bridge == nil || totalBytes <= 0 {
+		return 0
+	}
+	sec := bridge.GetRaceWallClockSeconds(dirPath)
+	if sec <= 0 {
+		return 0
+	}
+	return (float64(totalBytes) / 1024.0 / 1024.0) / float64(sec)
+}
+
+func estimateRaceTimeLeft(dirPath string, totalBytes int64, present, total int, bridge MasterBridge) string {
+	if totalBytes <= 0 || present <= 0 || total <= present {
+		return "0s"
+	}
+	speed := currentRaceSpeedMB(dirPath, totalBytes, bridge)
+	if speed <= 0 {
+		return "N/A"
+	}
+	avgBytesPerFile := float64(totalBytes) / float64(present)
+	bytesLeft := avgBytesPerFile * float64(total-present)
+	seconds := int((bytesLeft / 1024.0 / 1024.0) / speed)
+	if seconds < 1 {
+		seconds = 1
+	}
+	return fmt.Sprintf("%ds", seconds)
+}
+
+func isRacePayloadFile(fileName string) bool {
+	name := strings.ToLower(strings.TrimSpace(fileName))
+	if regexp.MustCompile(`(?i)\.(rar|r\d\d)$`).MatchString(name) {
+		return true
+	}
+	return isMediaInfoFile(name)
+}
+
+func isMediaInfoFile(fileName string) bool {
+	name := strings.ToLower(strings.TrimSpace(fileName))
+	for _, suffix := range []string{".mp3", ".flac", ".m4a", ".wav", ".mkv", ".mp4", ".avi", ".m2ts"} {
+		if strings.HasSuffix(name, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+func canTriggerRaceEnd(sfvEntries map[string]uint32, fileName string) bool {
+	name := raceEntryKey(fileName)
+	if strings.HasSuffix(name, ".sfv") {
+		return true
+	}
+	_, ok := sfvEntries[name]
+	return ok
+}
+
+func raceEntryKey(fileName string) string {
+	name := strings.TrimSpace(path.Base(strings.ReplaceAll(fileName, "\\", "/")))
+	return strings.ToLower(name)
+}
+
+func mediaInfoGraceDelay(fileName string) time.Duration {
+	if isMediaInfoFile(fileName) {
+		return 2500 * time.Millisecond
+	}
+	return 0
+}
+
+func emitRaceEndAfter(s *Session, users []VFSRaceUser, totalBytes int64, total int, xferMs int64, delay time.Duration) {
+	if delay > 0 {
+		time.Sleep(delay)
+	}
+	emitRaceEnd(s, users, totalBytes, total, xferMs)
+}
+
+func expectedFileLabel(dirPath string) string {
+	section := strings.ToUpper(strings.Trim(path.Clean(dirPath), "/"))
+	if idx := strings.Index(section, "/"); idx >= 0 {
+		section = section[:idx]
+	}
+	switch section {
+	case "MP3", "FLAC":
+		return "track(s)"
+	default:
+		return "file(s)"
+	}
 }

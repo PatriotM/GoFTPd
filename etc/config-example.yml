@@ -138,9 +138,14 @@ nukedir_style:       "[NUKED]-%N"   # Renamed dir pattern (%N = release name)
 #  bridge for reading/writing files on slaves.
 #
 #  Built-in plugins:
+#    dateddirs - creates daily race dirs, !Today_<SECTION> symlinks,
+#                read-only old date dirs, and NEWDAY events
 #    tvmaze  — looks up TV shows on TVMaze when a release dir is created,
 #              writes .tvmaze into the dir (shown via show_diz above)
 #    imdb    — same for movies via imdbapi.dev, writes .imdb
+#    mediainfo - runs mediainfo on uploaded audio/sample files and emits
+#                AUDIOINFO / MEDIAINFO events for the sitebot
+#    pre     - handles SITE PRE for affil staging dirs and PREBW announces
 #
 #  To add your own plugin:
 #    1. Create /plugins/<name>/handler.go implementing plugin.Plugin
@@ -151,6 +156,14 @@ nukedir_style:       "[NUKED]-%N"   # Renamed dir pattern (%N = release name)
 #  TV-720P, TV-UHD, etc. Only plugins where enabled=true are loaded.
 # =============================================================================
 plugins:
+  dateddirs:
+    enabled: true
+    sections: ["EBOOKS", "MP3", "FLAC", "0DAY", "XXX-0DAY"]
+    format: "0102"
+    today_symlink: true
+    symlink_prefix: "!Today_"
+    readonly_after_minutes: 60
+    debug: false
   tvmaze:
     enabled:  true
     sections: ["TV"]
@@ -159,6 +172,40 @@ plugins:
     enabled:  true
     sections: ["MOVIE", "X264", "X265", "BLURAY", "DVDR"]
     debug:    false
+  mediainfo:
+    enabled: true
+    binary: "mediainfo"
+    timeout_seconds: 20
+    sections: ["FLAC", "MP3", "TV", "MOVIE", "X264", "X265", "BLURAY"]
+    audio_extensions: ["flac", "mp3", "m4a", "wav"]
+    video_extensions: ["mkv", "mp4", "avi", "m2ts"]
+    sample_only: true
+    debug: false
+  pre:
+    enabled: true
+    # Shared affil file used by the daemon PRE plugin and the sitebot Affils plugin.
+    affils_file: "etc/affils.yml"
+    permissions_file: "etc/permissions.yml"
+    group_file: "etc/group"
+    acl_base_path: "/site"
+    admin_flags: "1"
+    base: "/PRE"
+    bw_duration: 30
+    bw_interval_ms: 500
+    sections:
+      - TV-1080P
+      - TV-720P
+      - MOVIE
+      - X264
+      - X265
+      - BLURAY
+      - MP3
+      - FLAC
+      - 0DAY
+    dated_sections:
+      - MP3
+      - FLAC
+      - 0DAY
 
 
 # =============================================================================
@@ -177,57 +224,6 @@ sitebot_config: "/GoFTPd/sitebot/etc/config.yml"
 # =============================================================================
 xdupe_enabled: true
 xdupe_db_path: "./logs/xdupe.db"
-
-
-# =============================================================================
-#  SITE PRE — affil pre-releases.
-#
-#  Usage:  SITE PRE <releasename> <section>
-#
-#  Flow:
-#    1. User must be in an affil group (see `affils:` below).
-#    2. The release dir must exist under that group's predir.
-#    3. Section must be in pre_sections whitelist.
-#    4. Release moves from <predir>/<rel> → /<section>/<rel>
-#       (or /<section>/<MMDD>/<rel> for dated sections).
-#    5. A PRE event announces in IRC via the sitebot.
-#    6. Daemon samples race bandwidth for pre_bw_duration seconds and emits
-#       PREBW / PREBWINTERVAL / PREBWUSER announces.
-# =============================================================================
-pre_enabled:        true
-pre_base:           "/PRE"       # Root of all affil staging dirs (cosmetic, not enforced)
-pre_bw_duration:    30           # Seconds to measure bandwidth after the pre
-pre_bw_interval_ms: 500          # Polling interval (ms) — finer = more accurate peaks
-
-pre_sections:
-  - TV-1080P
-  - TV-720P
-  - MOVIE
-  - X264
-  - X265
-  - BLURAY
-  - MP3
-  - FLAC
-  - 0DAY
-
-# Sections that use dated subdirs (scene convention for MP3/FLAC/0DAY/etc).
-# When pre'ing to these, releases go to /<section>/<MMDD>/<rel> where MMDD
-# is today's date (e.g. 0419). A separate midnight script is expected to
-# pre-create the next day's dir + !Today_<SECTION> symlinks; if the MMDD
-# dir doesn't exist yet when SITE PRE fires, goftpd creates it on the fly.
-pre_dated_sections:
-  - MP3
-  - FLAC
-  - 0DAY
-
-# Map of affil groups → their staging dir. Only users whose primary or
-# secondary group matches one of these can SITE PRE, and only from the
-# corresponding predir.
-affils:
-  - group:  "GoFTPd"
-    predir: "/PRE/GoFTPd"
-  - group:  "GRPTST"
-    predir: "/PRE/GRPTST"
 
 
 # =============================================================================

@@ -2,6 +2,7 @@ package announce
 
 import (
 	"fmt"
+	"log"
 	"path"
 	"strings"
 	"sync"
@@ -40,6 +41,11 @@ func (p *AnnouncePlugin) Initialize(config map[string]interface{}) error {
 		th, err := tmpl.LoadTheme(themeFile)
 		if err == nil {
 			p.theme = th
+			if p.debug {
+				log.Printf("[Announce] loaded theme %s (%d templates, %d vars)", themeFile, len(th.Announces), len(th.Vars))
+			}
+		} else {
+			log.Printf("[Announce] theme load failed for %s: %v", themeFile, err)
 		}
 	}
 	return nil
@@ -73,11 +79,16 @@ func classifyFile(name string) string {
 		return "nfo"
 	case strings.Contains(l, "/sample/") || strings.Contains(l, ".sample."):
 		return "sample"
+	case isAudioFile(l):
+		return "audio"
 	case regexpRAR(l):
 		return "rar"
 	default:
 		return "other"
 	}
+}
+func isAudioFile(name string) bool {
+	return strings.HasSuffix(name, ".mp3") || strings.HasSuffix(name, ".flac") || strings.HasSuffix(name, ".m4a") || strings.HasSuffix(name, ".wav")
 }
 func regexpRAR(name string) bool {
 	if strings.HasSuffix(name, ".rar") {
@@ -102,7 +113,7 @@ func (p *AnnouncePlugin) vars(evt *event.Event) map[string]string {
 		"filename": evt.Filename,
 		"path":     evt.Path,
 		"u_speed":  speedMB(evt),
-		"t_mbytes": mb(evt.Size),
+		"file_mbytes": mb(evt.Size),
 	}
 	for k, val := range evt.Data {
 		v[k] = val
@@ -113,8 +124,46 @@ func (p *AnnouncePlugin) vars(evt *event.Event) map[string]string {
 	if v["reldir"] == "" {
 		v["reldir"] = v["relname"]
 	}
+	if v["t_file_label"] == "" {
+		v["t_file_label"] = "file(s)"
+	}
+	if v["subtitle_format"] == "" {
+		v["subtitle_format"] = "None"
+	}
+	p.addSectionPalette(v, v["section"])
 	return v
 }
+
+func (p *AnnouncePlugin) addSectionPalette(vars map[string]string, section string) {
+	for i := 1; i <= 5; i++ {
+		key := fmt.Sprintf("sec_c%d", i)
+		vars[key] = p.sectionColor(section, i)
+	}
+	vars["section_colored"] = "\x03" + vars["sec_c2"] + section + "\x03"
+}
+
+func (p *AnnouncePlugin) sectionColor(section string, slot int) string {
+	fallback := "02"
+	if p.theme != nil {
+		keys := []string{
+			fmt.Sprintf("COLOR_%s_%d", strings.ToUpper(section), slot),
+			fmt.Sprintf("section_color.%s.%d", section, slot),
+			fmt.Sprintf("section_color.%s.%d", strings.ToUpper(section), slot),
+			fmt.Sprintf("COLOR_DEFAULT_%d", slot),
+			fmt.Sprintf("section_color.default.%d", slot),
+			"section_color." + section,
+			"section_color." + strings.ToUpper(section),
+			"section_color.default",
+		}
+		for _, key := range keys {
+			if c := strings.TrimSpace(p.theme.Vars[key]); c != "" {
+				return strings.TrimLeft(c, "cC")
+			}
+		}
+	}
+	return fallback
+}
+
 func (p *AnnouncePlugin) render(key string, vars map[string]string, fallback string) string {
 	if p.theme != nil {
 		if raw, ok := p.theme.Announces[key]; ok && raw != "" {
@@ -147,9 +196,22 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 	outs := []plugin.Output{}
 
 	switch evt.Type {
+	case event.EventNewDay:
+		fallback := fmt.Sprintf("NEW DAY: -%s- A new day has come! %s has been created along with its symlink.", section, vars["date"])
+		if vars["symlink"] != "true" {
+			fallback = fmt.Sprintf("NEW DAY: -%s- A new day has come! %s has been created.", section, vars["date"])
+		}
+		outs = append(outs, plugin.Output{Type: "NEWDAY", Text: p.render("NEWDAY", vars, fallback)})
+	case event.EventAudioInfo:
+		fallback := fmt.Sprintf("AUDIO-INFO: [%s] %s Get ready for some %s from %s at %sHz in %s %s (%s).",
+			section, rel, vars["genre"], vars["year"], vars["sample_rate"], vars["channels"], vars["bitrate"], vars["bitrate_mode"])
+		outs = append(outs, plugin.Output{Type: "AUDIOINFO", Text: p.render("AUDIOINFO", vars, fallback)})
+	case event.EventMediaInfo:
+		fallback := fmt.Sprintf("MEDIA-INFO: [%s] %s %sx%s %s %s %s.",
+			section, rel, vars["width"], vars["height"], vars["video_format"], vars["audio_format"], vars["duration"])
+		outs = append(outs, plugin.Output{Type: "MEDIAINFO", Text: p.render("MEDIAINFO", vars, fallback)})
 	case event.EventMKDir:
-		// only top-level release dirs
-		if path.Base(path.Dir(path.Clean(evt.Path))) == strings.ToUpper(section) || strings.EqualFold(path.Dir(path.Clean(evt.Path)), "/"+section) {
+		if isReleaseDir(evt.Path, section) {
 			if !st.Created {
 				st.Created = true
 				outs = append(outs, plugin.Output{Type: "NEW", Text: p.render("NEWDIR", vars, fmt.Sprintf("NEW : [%s] %s by %s", section, rel, evt.User))})
@@ -164,12 +226,24 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 				st.HasSFV = true
 				outs = append(outs, plugin.Output{Type: "RACE", Text: p.render("SFV_RAR", vars, fmt.Sprintf("RACE: [%s] Got SFV for %s uploaded by %s.", section, rel, evt.User))})
 			}
-		case "rar":
+		case "rar", "audio":
 			if evt.User != "" && !st.Users[evt.User] {
 				st.Users[evt.User] = true
 				if !st.FirstRar {
 					st.FirstRar = true
-					outs = append(outs, plugin.Output{Type: "RACE", Text: p.render("UPDATE_RAR", vars, fmt.Sprintf("RACE: [%s] %s got its first rar file from %s at %s.", section, rel, evt.User, speedMB(evt)))})
+					key := "UPDATE_RAR"
+					fallback := fmt.Sprintf("RACE: [%s] %s got its first rar file from %s at %s.", section, rel, evt.User, speedMB(evt))
+					if fileType == "audio" {
+						key = "UPDATE_TRACK"
+						fallback = fmt.Sprintf("RACE: [%s] %s got first track from %s at %s.", section, rel, evt.User, speedMB(evt))
+					}
+					if strings.TrimSpace(vars["t_mbytes"]) == "" {
+						key = "UPDATE_RAR_UNKNOWN"
+						if fileType == "audio" {
+							key = "UPDATE_TRACK"
+						}
+					}
+					outs = append(outs, plugin.Output{Type: "RACE", Text: p.render(key, vars, fallback)})
 				} else {
 					outs = append(outs, plugin.Output{Type: "RACE", Text: p.render("RACE_RAR", vars, fmt.Sprintf("RACE: [%s] %s - %s joined the race at %s.", section, rel, evt.User, speedMB(evt)))})
 				}
@@ -190,7 +264,15 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 					if t1 > 0 && p1*2 >= t1 && p1 < t1 {
 						st.HalfwayDone = true
 						left := t1 - p1
-						vars["t_filesleft"] = fmt.Sprintf("%d", left)
+						if vars["t_filesleft"] == "" {
+							vars["t_filesleft"] = fmt.Sprintf("%d", left)
+						}
+						if vars["t_timeleft"] == "" {
+							vars["t_timeleft"] = "N/A"
+						}
+						if vars["t_avgspeed"] == "" {
+							vars["t_avgspeed"] = "0.00MB/s"
+						}
 						outs = append(outs, plugin.Output{Type: "RACE", Text: p.render("HALFWAY", vars, fmt.Sprintf("HALFWAY: [%s] %s - leader: %s [%sMB/%sF/%s%%/%s] - %d files left.", section, rel, vars["leader_name"], vars["leader_mb"], vars["leader_files"], vars["leader_pct"], vars["leader_speed"], left))})
 					}
 				}
@@ -265,4 +347,31 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 		outs = append(outs, plugin.Output{Type: "PREBW", Text: p.render("PREBWUSER", vars, fallback)})
 	}
 	return outs, nil
+}
+
+func isReleaseDir(eventPath, section string) bool {
+	clean := path.Clean(eventPath)
+	parent := path.Dir(clean)
+	sectionPath := "/" + strings.Trim(section, "/")
+	if strings.EqualFold(parent, sectionPath) {
+		return true
+	}
+
+	datedParent := path.Base(parent)
+	if !isDateDir(datedParent) {
+		return false
+	}
+	return strings.EqualFold(path.Dir(parent), sectionPath)
+}
+
+func isDateDir(name string) bool {
+	if len(name) != 4 {
+		return false
+	}
+	for _, r := range name {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }

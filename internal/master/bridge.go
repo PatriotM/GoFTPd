@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"goftpd/internal/core"
+	"goftpd/internal/plugin"
 	"goftpd/internal/protocol"
 )
 // Bridge implements core.MasterBridge by wrapping a SlaveManager.
@@ -39,6 +40,7 @@ func NewBridge(sm *SlaveManager) *Bridge {
 
 // Ensure Bridge implements MasterBridge at compile time.
 var _ core.MasterBridge = (*Bridge)(nil)
+var _ plugin.MasterBridge = (*Bridge)(nil)
 
 // ListDir returns directory entries from the master's VFS.
 func (b *Bridge) ListDir(dirPath string) []core.MasterFileEntry {
@@ -47,13 +49,36 @@ func (b *Bridge) ListDir(dirPath string) []core.MasterFileEntry {
 	entries := make([]core.MasterFileEntry, 0, len(vfsFiles))
 	for _, f := range vfsFiles {
 		entries = append(entries, core.MasterFileEntry{
-			Name:    filepath.Base(f.Path),
-			Size:    f.Size,
-			IsDir:   f.IsDir,
-			ModTime: f.LastModified,
-			Owner:   f.Owner,
-			Group:   f.Group,
-			Slave:   f.SlaveName,
+			Name:       filepath.Base(f.Path),
+			Size:       f.Size,
+			IsDir:      f.IsDir,
+			IsSymlink:  f.IsSymlink,
+			LinkTarget: f.LinkTarget,
+			Mode:       f.Mode,
+			ModTime:    f.LastModified,
+			Owner:      f.Owner,
+			Group:      f.Group,
+			Slave:      f.SlaveName,
+		})
+	}
+	return entries
+}
+
+func (b *Bridge) PluginListDir(dirPath string) []plugin.FileEntry {
+	coreEntries := b.ListDir(dirPath)
+	entries := make([]plugin.FileEntry, 0, len(coreEntries))
+	for _, e := range coreEntries {
+		entries = append(entries, plugin.FileEntry{
+			Name:       e.Name,
+			Size:       e.Size,
+			IsDir:      e.IsDir,
+			IsSymlink:  e.IsSymlink,
+			LinkTarget: e.LinkTarget,
+			Mode:       e.Mode,
+			ModTime:    e.ModTime,
+			Owner:      e.Owner,
+			Group:      e.Group,
+			Slave:      e.Slave,
 		})
 	}
 	return entries
@@ -265,13 +290,44 @@ func (b *Bridge) MakeDir(dirPath, owner, group string) {
 	}
 
 	if slave != nil {
-		// Fire and forget directory creation command to the slave
-		_ = slave.SendCommand(&protocol.AsyncCommand{
-			Index: "none",
-			Name:  "makedir",
-			Args:  []string{dirPath},
-		})
+		index, err := IssueMakeDir(slave, dirPath)
+		if err == nil {
+			_, _ = slave.FetchResponse(index, 30*time.Second)
+		}
 	}
+}
+
+func (b *Bridge) Symlink(linkPath, targetPath string) error {
+	b.sm.GetVFS().AddSymlink(linkPath, targetPath)
+	var lastErr error
+	for _, slave := range b.sm.GetAvailableSlaves() {
+		targetArg := strings.TrimPrefix(filepath.ToSlash(filepath.Clean(targetPath)), "/")
+		index, err := IssueSymlink(slave, linkPath, targetArg)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if _, err := slave.FetchResponse(index, 30*time.Second); err != nil {
+			lastErr = err
+		}
+	}
+	return lastErr
+}
+
+func (b *Bridge) Chmod(path string, mode uint32) error {
+	b.sm.GetVFS().Chmod(path, mode)
+	var lastErr error
+	for _, slave := range b.sm.GetAvailableSlaves() {
+		index, err := IssueChmod(slave, path, mode)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if _, err := slave.FetchResponse(index, 30*time.Second); err != nil {
+			lastErr = err
+		}
+	}
+	return lastErr
 }
 
 // GetFileSize returns file size, or -1 if not found.
@@ -310,6 +366,40 @@ func (b *Bridge) ReadFile(filePath string) ([]byte, error) {
 	}
 
 	return nil, fmt.Errorf("unexpected response type: %T", resp)
+}
+
+func (b *Bridge) ProbeMediaInfo(filePath, binary string, timeoutSeconds int) (map[string]string, error) {
+	if strings.TrimSpace(binary) == "" {
+		binary = "mediainfo"
+	}
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = 20
+	}
+	var lastErr error
+	for _, slave := range b.candidateSlavesForPath(filePath) {
+		index, err := IssueMediaInfo(slave, filePath, binary, timeoutSeconds)
+		if err != nil {
+			lastErr = fmt.Errorf("issue mediainfo to %s: %w", slave.Name(), err)
+			continue
+		}
+		resp, err := slave.FetchResponse(index, time.Duration(timeoutSeconds+5)*time.Second)
+		if err != nil {
+			lastErr = fmt.Errorf("%s: %w", slave.Name(), err)
+			continue
+		}
+		if errResp, ok := resp.(*protocol.AsyncResponseError); ok {
+			lastErr = fmt.Errorf("%s: %s", slave.Name(), errResp.Message)
+			continue
+		}
+		if mi, ok := resp.(*protocol.AsyncResponseMediaInfo); ok {
+			return mi.Fields, nil
+		}
+		lastErr = fmt.Errorf("%s: unexpected response type: %T", slave.Name(), resp)
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("file not found: %s", filePath)
 }
 
 // GetSFVInfo asks a slave to parse an SFV file and return the entries.
@@ -522,7 +612,7 @@ func (v *VFSAdapter) MkdirAll(dirPath string, perm os.FileMode) error {
 }
 
 func (v *VFSAdapter) Symlink(oldname, newname string) error {
-	return nil
+	return v.b.Symlink(newname, oldname)
 }
 
 // --- Virtual File Info & DirEntry Structs ---
@@ -588,6 +678,7 @@ func (b *Bridge) GetVFSRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFS
 			Bytes:     u.Bytes,
 			Speed:     u.Speed,
 			PeakSpeed: u.PeakSpeed,
+			SlowSpeed: u.SlowSpeed,
 			Percent:   u.Percent,
 		}
 	}
@@ -603,6 +694,32 @@ func (b *Bridge) GetVFSRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFS
 	}
 
 	return coreUsers, coreGroups, totalBytes, present, total
+}
+
+func (b *Bridge) PluginGetVFSRaceStats(dirPath string) ([]plugin.RaceUser, []plugin.RaceGroup, int64, int, int) {
+	coreUsers, coreGroups, totalBytes, present, total := b.GetVFSRaceStats(dirPath)
+	users := make([]plugin.RaceUser, 0, len(coreUsers))
+	for _, u := range coreUsers {
+		users = append(users, plugin.RaceUser{
+			Name:    u.Name,
+			Group:   u.Group,
+			Files:   u.Files,
+			Bytes:   u.Bytes,
+			Speed:   u.Speed,
+			Percent: u.Percent,
+		})
+	}
+	groups := make([]plugin.RaceGroup, 0, len(coreGroups))
+	for _, g := range coreGroups {
+		groups = append(groups, plugin.RaceGroup{
+			Name:    g.Name,
+			Files:   g.Files,
+			Bytes:   g.Bytes,
+			Speed:   g.Speed,
+			Percent: g.Percent,
+		})
+	}
+	return users, groups, totalBytes, present, total
 }
 
 // GetRaceWallClockSeconds returns wall-clock race duration (first file start
@@ -641,13 +758,39 @@ func (b *Bridge) SearchDirs(query string, limit int) []core.VFSSearchResult {
 // uploadPath may be empty if the eventual upload path is not yet known (pure PASV);
 // pass it when possible so section-affinity routing picks the right slave.
 // Returns the slave's public IP, the port it's listening on, and the transfer index.
-func (b *Bridge) SlaveListenForPassthrough(uploadPath string) (string, int, int32, string, error) {
+func (b *Bridge) SlaveListenForPassthrough(uploadPath string, encrypted bool) (string, int, int32, string, error) {
 	slave := b.sm.SelectSlaveForUpload(uploadPath)
 	if slave == nil {
 		return "", 0, 0, "", fmt.Errorf("no available slave")
 	}
 
-	listenIdx, err := IssueListen(slave, false, false)
+	listenIdx, err := IssueListen(slave, encrypted, false)
+	if err != nil {
+		return "", 0, 0, "", fmt.Errorf("issue listen to %s: %w", slave.Name(), err)
+	}
+
+	resp, err := slave.FetchResponse(listenIdx, 60*time.Second)
+	if err != nil {
+		return "", 0, 0, "", fmt.Errorf("slave %s listen failed: %w", slave.Name(), err)
+	}
+
+	transferResp, ok := resp.(*protocol.AsyncResponseTransfer)
+	if !ok {
+		return "", 0, 0, "", fmt.Errorf("unexpected response from slave")
+	}
+
+	return slave.GetPASVIP(), transferResp.Info.Port, transferResp.Info.TransferIndex, slave.Name(), nil
+}
+
+// SlaveListenForDownloadPassthrough asks the slave that owns filePath to open
+// a listener for direct client download.
+func (b *Bridge) SlaveListenForDownloadPassthrough(filePath string, encrypted bool) (string, int, int32, string, error) {
+	slave := b.sm.SelectSlaveForDownload(filePath)
+	if slave == nil {
+		return "", 0, 0, "", fmt.Errorf("file not found on any available slave: %s", filePath)
+	}
+
+	listenIdx, err := IssueListen(slave, encrypted, false)
 	if err != nil {
 		return "", 0, 0, "", fmt.Errorf("issue listen to %s: %w", slave.Name(), err)
 	}
@@ -688,55 +831,36 @@ func (b *Bridge) SlaveReceivePassthrough(filePath string, transferIdx int32, sla
 	}
 
 	// Wait for transfer to complete — poll the RemoteTransfer status
-	rt, ok := slave.GetTransfer(transferIdx)
-	if !ok {
-		// Transfer might have already completed, check for a short time
-		for i := 0; i < 600; i++ { // 5 minutes max
-			time.Sleep(500 * time.Millisecond)
-			rt, ok = slave.GetTransfer(transferIdx)
-			if ok && rt.IsFinished() {
-				break
-			}
-			if !ok {
-				// Transfer was deleted because it finished — need status from somewhere else
-				break
-			}
+	status, err := slave.WaitTransferStatus(transferIdx, 2*time.Hour)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	if status.Error != "" {
+		return status.Transferred, status.Checksum, status.Elapsed, fmt.Errorf("%s", status.Error)
+	}
+
+	b.sm.GetVFS().AddFile(filePath, VFSFile{
+		Path:         filePath,
+		Size:         status.Transferred,
+		IsDir:        false,
+		LastModified: time.Now().Unix(),
+		SlaveName:    slaveName,
+		Owner:        owner,
+		Group:        group,
+		XferTime:     status.Elapsed,
+		Checksum:     status.Checksum,
+	})
+
+	log.Printf("[Passthrough] Upload %s on %s (%d bytes, %dms, CRC=%08X)",
+		filePath, slaveName, status.Transferred, status.Elapsed, status.Checksum)
+
+	if b.raceDB != nil {
+		if err := b.raceDB.RecordUpload(filePath, owner, group, status.Transferred, status.Elapsed, status.Checksum); err != nil {
+			log.Printf("[Passthrough] RaceDB record failed: %v", err)
 		}
 	}
 
-	if rt != nil {
-		// Poll until finished
-		for !rt.IsFinished() {
-			time.Sleep(100 * time.Millisecond)
-		}
-		status := rt.GetStatus()
-
-		// Add to VFS
-		b.sm.GetVFS().AddFile(filePath, VFSFile{
-			Path:         filePath,
-			Size:         status.Transferred,
-			IsDir:        false,
-			LastModified: time.Now().Unix(),
-			SlaveName:    slaveName,
-			Owner:        owner,
-			Group:        group,
-			XferTime:     status.Elapsed,
-			Checksum:     status.Checksum,
-		})
-
-		log.Printf("[Passthrough] Upload %s on %s (%d bytes, %dms, CRC=%08X)",
-			filePath, slaveName, status.Transferred, status.Elapsed, status.Checksum)
-
-		if b.raceDB != nil {
-			if err := b.raceDB.RecordUpload(filePath, owner, group, status.Transferred, status.Elapsed, status.Checksum); err != nil {
-				log.Printf("[Passthrough] RaceDB record failed: %v", err)
-			}
-		}
-
-		return status.Transferred, status.Checksum, status.Elapsed, nil
-	}
-
-	return 0, 0, 0, fmt.Errorf("transfer status not available")
+	return status.Transferred, status.Checksum, status.Elapsed, nil
 }
 
 // SlaveSendPassthrough tells a slave to send a file (client already connected directly).
@@ -756,12 +880,12 @@ func (b *Bridge) SlaveSendPassthrough(filePath string, transferIdx int32, slaveN
 		return fmt.Errorf("send ack: %w", err)
 	}
 
-	// Wait for transfer to complete
-	rt, ok := slave.GetTransfer(transferIdx)
-	if ok {
-		for !rt.IsFinished() {
-			time.Sleep(100 * time.Millisecond)
-		}
+	status, err := slave.WaitTransferStatus(transferIdx, 2*time.Hour)
+	if err != nil {
+		return err
+	}
+	if status.Error != "" {
+		return fmt.Errorf("%s", status.Error)
 	}
 
 	return nil

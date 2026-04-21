@@ -21,6 +21,7 @@ func init() {
 	gob.Register(&AsyncResponseSiteBotMessage{})
 	gob.Register(&AsyncResponseSFVInfo{})
 	gob.Register(&AsyncResponseFileContent{})
+	gob.Register(&AsyncResponseMediaInfo{})
 	gob.Register(&ConnectInfo{})
 	gob.Register(&TransferStatus{})
 	gob.Register(&DiskStatus{})
@@ -28,6 +29,7 @@ func init() {
 	gob.Register([]LightRemoteInode{})
 	gob.Register(&SFVEntry{})
 	gob.Register([]SFVEntry{})
+	gob.Register(map[string]string{})
 }
 
 // --------------------------------------------------------------------------
@@ -114,6 +116,8 @@ func (ar *AsyncResponseRemerge) GetIndex() string { return "Remerge" }
 type LightRemoteInode struct {
 	Name         string
 	IsDir        bool
+	IsSymlink    bool
+	LinkTarget   string
 	Size         int64
 	LastModified int64
 	Owner        string
@@ -211,3 +215,10 @@ type AsyncResponseFileContent struct {
 
 func (ar *AsyncResponseFileContent) GetIndex() string { return ar.Index }
 
+// AsyncResponseMediaInfo returns flattened mediainfo metadata from a slave.
+type AsyncResponseMediaInfo struct {
+	Index  string
+	Fields map[string]string
+}
+
+func (ar *AsyncResponseMediaInfo) GetIndex() string { return ar.Index }

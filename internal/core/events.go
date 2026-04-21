@@ -33,10 +33,10 @@ const (
 	EventUnnuke       EventType = "UNNUKE"
 	EventInvite       EventType = "INVITE"
 	EventDiskStatus   EventType = "DISKSTATUS"
-	EventPre          EventType = "PRE"          // release pre'd — relname, section, group, files, mbytes
-	EventPreBW        EventType = "PREBW"        // race-bw totals after pre
-	EventPreBWUser    EventType = "PREBWUSER"    // per-user race-bw after pre
-	EventPreBWInterval EventType = "PREBWINTERVAL" // interval snapshots after pre
+	EventPre           EventType = "PRE"              // release pre'd — relname, section, group, files, mbytes
+	EventPreBW         EventType = "PREBW"            // race-bw totals after pre
+	EventPreBWUser     EventType = "PREBWUSER"        // per-user race-bw after pre
+	EventPreBWInterval EventType = "PREBWINTERVAL"    // interval snapshots after pre
 )
 
 // Event is the daemon-side event payload written to the event FIFO as JSON lines.
@@ -58,6 +58,9 @@ type EventSink interface {
 	Publish(Event) error
 	Close() error
 }
+
+var completedRaceMu sync.Mutex
+var completedRaces = map[string]time.Time{}
 
 // EventDispatcher fans out events to all registered sinks.
 type EventDispatcher struct {
@@ -334,6 +337,16 @@ func (s *Session) emitEvent(evtType EventType, eventPath, fileName string, size 
 // use max(user.DurationMs) as the wall-clock span instead, which is the
 // effective critical-path time across all racers.
 func emitRaceEnd(s *Session, users []VFSRaceUser, totalBytes int64, total int, xferMs int64) {
+	if s == nil {
+		return
+	}
+	if !markRaceCompleteOnce(s.CurrentDir, totalBytes, total) {
+		if s.Config != nil && s.Config.Debug {
+			log.Printf("[RACE] duplicate complete suppressed for %s", s.CurrentDir)
+		}
+		return
+	}
+
 	// Prefer wall-clock race duration from the race DB (first file start to
 	// last file end). Summing per-file durations (u.DurationMs) overcounts
 	// heavily when uploads run in parallel — a 52s race with 8 parallel
@@ -389,7 +402,7 @@ func emitRaceEnd(s *Session, users []VFSRaceUser, totalBytes int64, total int, x
 	// Figure out slowest/fastest based on each user's peak single-file speed
 	slowest, fastest := users[0], users[0]
 	for _, u := range users {
-		if u.PeakSpeed < slowest.PeakSpeed {
+		if userSlowSpeed(u) < userSlowSpeed(slowest) {
 			slowest = u
 		}
 		if u.PeakSpeed > fastest.PeakSpeed {
@@ -400,7 +413,7 @@ func emitRaceEnd(s *Session, users []VFSRaceUser, totalBytes int64, total int, x
 	// HOF header + speeds line (RACESTATS)
 	statsData := copyMap(common)
 	statsData["u_slowest_name"] = slowest.Name
-	statsData["u_slowest_speed"] = fmt.Sprintf("%.2fMB/s", slowest.PeakSpeed/1024.0/1024.0)
+	statsData["u_slowest_speed"] = fmt.Sprintf("%.2fMB/s", userSlowSpeed(slowest)/1024.0/1024.0)
 	statsData["u_fastest_name"] = fastest.Name
 	statsData["u_fastest_speed"] = fmt.Sprintf("%.2fMB/s", fastest.PeakSpeed/1024.0/1024.0)
 	s.emitEvent(EventRaceStats, s.CurrentDir, rel, totalBytes, avgMB, statsData)
@@ -420,6 +433,31 @@ func emitRaceEnd(s *Session, users []VFSRaceUser, totalBytes int64, total int, x
 
 	// Footer
 	s.emitEvent(EventRaceFooter, s.CurrentDir, rel, totalBytes, avgMB, copyMap(common))
+}
+
+func userSlowSpeed(u VFSRaceUser) float64 {
+	if u.SlowSpeed > 0 {
+		return u.SlowSpeed
+	}
+	return u.PeakSpeed
+}
+
+func markRaceCompleteOnce(dirPath string, totalBytes int64, total int) bool {
+	key := fmt.Sprintf("%s|%d|%d", path.Clean(dirPath), totalBytes, total)
+	now := time.Now()
+
+	completedRaceMu.Lock()
+	defer completedRaceMu.Unlock()
+	for k, seenAt := range completedRaces {
+		if now.Sub(seenAt) > 24*time.Hour {
+			delete(completedRaces, k)
+		}
+	}
+	if _, ok := completedRaces[key]; ok {
+		return false
+	}
+	completedRaces[key] = now
+	return true
 }
 
 func copyMap(in map[string]string) map[string]string {

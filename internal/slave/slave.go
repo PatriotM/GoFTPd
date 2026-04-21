@@ -1,13 +1,16 @@
 package slave
 
 import (
+	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"hash/crc32"
 	"io"
 	"log"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -32,6 +35,7 @@ type Slave struct {
 	roots         []string // local filesystem roots (1, slave.root.2)
 	pasvPortMin   int
 	pasvPortMax   int
+	pasvNext       uint32
 	tlsEnabled    bool
 	tlsCert       string
 	tlsKey        string
@@ -228,6 +232,12 @@ func (s *Slave) handleCommand(ac *protocol.AsyncCommand) interface{} {
 	case "rename":
 		return s.handleRename(ac)
 
+	case "chmod":
+		return s.handleChmod(ac)
+
+	case "symlink":
+		return s.handleSymlink(ac)
+
 	case "checksum":
 		return s.handleChecksum(ac)
 
@@ -255,10 +265,12 @@ func (s *Slave) handleCommand(ac *protocol.AsyncCommand) interface{} {
 	case "readFile":
 		return s.handleReadFile(ac)
 
+	case "mediainfo":
+		return s.handleMediaInfo(ac)
+
 	case "writeFile":
 		return s.handleWriteFile(ac)
 		
-	// [ADDED] Added handler for makedir so empty folders exist on disk and survive remerge!
 	case "makedir":
 		return s.handleMakeDir(ac)
 
@@ -340,7 +352,53 @@ func (s *Slave) handleRename(ac *protocol.AsyncCommand) interface{} {
 	return &protocol.AsyncResponse{Index: ac.Index}
 }
 
-// [ADDED] handleMakeDir physically creates empty directories on the slave disk.
+func (s *Slave) handleChmod(ac *protocol.AsyncCommand) interface{} {
+	if len(ac.Args) < 2 {
+		return &protocol.AsyncResponseError{Index: ac.Index, Message: "chmod: need path and mode"}
+	}
+	mode64, err := strconv.ParseUint(ac.Args[1], 8, 32)
+	if err != nil {
+		return &protocol.AsyncResponseError{Index: ac.Index, Message: "chmod: invalid mode"}
+	}
+	changed := false
+	for _, root := range s.roots {
+		fullPath := filepath.Join(root, ac.Args[0])
+		if _, err := os.Lstat(fullPath); err != nil {
+			continue
+		}
+		if err := os.Chmod(fullPath, os.FileMode(mode64)); err != nil {
+			return &protocol.AsyncResponseError{Index: ac.Index, Message: fmt.Sprintf("chmod failed: %v", err)}
+		}
+		changed = true
+	}
+	if !changed {
+		return &protocol.AsyncResponseError{Index: ac.Index, Message: "chmod: path not found"}
+	}
+	return &protocol.AsyncResponse{Index: ac.Index}
+}
+
+func (s *Slave) handleSymlink(ac *protocol.AsyncCommand) interface{} {
+	if len(ac.Args) < 2 {
+		return &protocol.AsyncResponseError{Index: ac.Index, Message: "symlink: need link and target"}
+	}
+	linkPath := ac.Args[0]
+	targetPath := ac.Args[1]
+	for _, root := range s.roots {
+		fullLink := filepath.Join(root, linkPath)
+		fullTarget := filepath.Join(root, targetPath)
+		if _, err := os.Stat(fullTarget); err != nil {
+			continue
+		}
+		_ = os.Remove(fullLink)
+		if err := os.Symlink(targetPath, fullLink); err != nil {
+			return &protocol.AsyncResponseError{Index: ac.Index, Message: fmt.Sprintf("symlink failed: %v", err)}
+		}
+		return &protocol.AsyncResponse{Index: ac.Index}
+	}
+	return &protocol.AsyncResponseError{Index: ac.Index, Message: "symlink: target not found"}
+}
+
+// handleMakeDir physically creates empty directories on the slave disk.
 func (s *Slave) handleMakeDir(ac *protocol.AsyncCommand) interface{} {
 	if len(ac.Args) < 1 {
 		return &protocol.AsyncResponseError{Index: ac.Index, Message: "makedir: missing path"}
@@ -393,6 +451,16 @@ func (s *Slave) handleListen(ac *protocol.AsyncCommand) interface{} {
 		return &protocol.AsyncResponseError{Index: ac.Index, Message: fmt.Sprintf("listen failed: %v", err)}
 	}
 
+	encrypted, _ := parseListenFlags(ac.Args)
+	if encrypted {
+		cert, err := tls.LoadX509KeyPair(s.tlsCert, s.tlsKey)
+		if err != nil {
+			listener.Close()
+			return &protocol.AsyncResponseError{Index: ac.Index, Message: fmt.Sprintf("load TLS cert: %v", err)}
+		}
+		listener = tls.NewListener(listener, &tls.Config{Certificates: []tls.Certificate{cert}})
+	}
+
 	idx := atomic.AddInt32(&s.nextTransferIdx, 1)
 	t := NewTransfer(listener, nil, idx, s)
 	s.transfers.Store(idx, t)
@@ -406,6 +474,18 @@ func (s *Slave) handleListen(ac *protocol.AsyncCommand) interface{} {
 			TransferIndex: idx,
 		},
 	}
+}
+
+func parseListenFlags(args []string) (encrypted bool, sslClientMode bool) {
+	if len(args) == 0 {
+		return false, false
+	}
+	parts := strings.SplitN(args[0], ":", 2)
+	encrypted, _ = strconv.ParseBool(parts[0])
+	if len(parts) > 1 {
+		sslClientMode, _ = strconv.ParseBool(parts[1])
+	}
+	return encrypted, sslClientMode
 }
 
 // handleConnect - slave connects out to a given address (active mode).
@@ -620,11 +700,17 @@ func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
 			currentFiles = append(currentFiles, protocol.LightRemoteInode{
 				Name:         info.Name(),
 				IsDir:        info.IsDir(),
+				IsSymlink:    info.Mode()&os.ModeSymlink != 0,
 				Size:         info.Size(),
 				LastModified: info.ModTime().Unix(),
 				Owner:        getFileOwner(info),
 				Group:        getFileGroup(info),
 			})
+			if info.Mode()&os.ModeSymlink != 0 {
+				if target, err := os.Readlink(fullPath); err == nil {
+					currentFiles[len(currentFiles)-1].LinkTarget = filepath.ToSlash(target)
+				}
+			}
 
 			if info.IsDir() {
 				totalDirs++
@@ -731,6 +817,231 @@ func (s *Slave) handleReadFile(ac *protocol.AsyncCommand) interface{} {
 	return &protocol.AsyncResponseError{Index: ac.Index, Message: "file not found: " + filePath}
 }
 
+func (s *Slave) handleMediaInfo(ac *protocol.AsyncCommand) interface{} {
+	if len(ac.Args) < 1 {
+		return &protocol.AsyncResponseError{Index: ac.Index, Message: "mediainfo: missing path"}
+	}
+	filePath := ac.Args[0]
+	binary := "mediainfo"
+	if len(ac.Args) > 1 && strings.TrimSpace(ac.Args[1]) != "" {
+		binary = strings.TrimSpace(ac.Args[1])
+	}
+	timeout := 20 * time.Second
+	if len(ac.Args) > 2 {
+		if n, err := strconv.Atoi(strings.TrimSpace(ac.Args[2])); err == nil && n > 0 {
+			timeout = time.Duration(n) * time.Second
+		}
+	}
+
+	for _, root := range s.roots {
+		fullPath := filepath.Join(root, filePath)
+		info, err := os.Stat(fullPath)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		cmd := exec.CommandContext(ctx, binary, "--Output=JSON", fullPath)
+		out, err := cmd.Output()
+		cancel()
+		if ctx.Err() == context.DeadlineExceeded {
+			return &protocol.AsyncResponseError{Index: ac.Index, Message: "mediainfo: timeout"}
+		}
+		if err != nil {
+			return &protocol.AsyncResponseError{Index: ac.Index, Message: fmt.Sprintf("mediainfo failed: %v", err)}
+		}
+		fields, err := flattenMediaInfo(out)
+		if err != nil {
+			return &protocol.AsyncResponseError{Index: ac.Index, Message: fmt.Sprintf("mediainfo parse failed: %v", err)}
+		}
+		return &protocol.AsyncResponseMediaInfo{Index: ac.Index, Fields: fields}
+	}
+	return &protocol.AsyncResponseError{Index: ac.Index, Message: "file not found: " + filePath}
+}
+
+func flattenMediaInfo(data []byte) (map[string]string, error) {
+	var root map[string]interface{}
+	if err := json.Unmarshal(data, &root); err != nil {
+		return nil, err
+	}
+	fields := map[string]string{}
+	media, _ := root["media"].(map[string]interface{})
+	tracks, _ := media["track"].([]interface{})
+	for _, rawTrack := range tracks {
+		track, _ := rawTrack.(map[string]interface{})
+		kind := mediaTrackKind(track)
+		if kind == "" {
+			continue
+		}
+		prefix := string(kind[0]) + "_"
+		for key, val := range track {
+			value := stringifyMediaValue(val)
+			if value == "" {
+				continue
+			}
+			fields[prefix+mediaKey(key)] = value
+		}
+	}
+	deriveMediaInfoFields(fields)
+	return fields, nil
+}
+
+func mediaTrackKind(track map[string]interface{}) string {
+	raw, _ := track["@type"].(string)
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "general":
+		return "general"
+	case "video":
+		return "video"
+	case "audio":
+		return "audio"
+	case "text":
+		return "subtitle"
+	default:
+		return ""
+	}
+}
+
+func mediaKey(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	var b strings.Builder
+	lastUnderscore := false
+	for _, r := range s {
+		ok := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if ok {
+			b.WriteRune(r)
+			lastUnderscore = false
+		} else if !lastUnderscore {
+			b.WriteByte('_')
+			lastUnderscore = true
+		}
+	}
+	return strings.Trim(b.String(), "_")
+}
+
+func stringifyMediaValue(v interface{}) string {
+	switch x := v.(type) {
+	case string:
+		return strings.TrimSpace(x)
+	case float64:
+		return strconv.FormatFloat(x, 'f', -1, 64)
+	case bool:
+		return strconv.FormatBool(x)
+	default:
+		return ""
+	}
+}
+
+func deriveMediaInfoFields(f map[string]string) {
+	copyFirst := func(dst string, srcs ...string) {
+		if f[dst] != "" {
+			return
+		}
+		for _, src := range srcs {
+			if val := f[src]; val != "" {
+				f[dst] = val
+				return
+			}
+		}
+	}
+	copyFirst("title", "g_title", "g_album", "g_completename", "g_complete_name")
+	copyFirst("genre", "g_genre")
+	copyFirst("year", "g_recordeddate", "g_recorded_date", "g_originalreleaseddate", "g_original_released_date", "g_encodeddate", "g_encoded_date")
+	copyFirst("format", "g_format")
+	copyFirst("audio_format", "a_format", "a_commercialname", "a_commercial_name")
+	copyFirst("bitrate", "a_bitrate_string", "a_bitrate", "a_bit_rate", "g_overallbitrate_string", "g_overallbitrate", "g_overall_bit_rate")
+	copyFirst("bitrate_mode", "a_bitrate_mode", "a_bitratemode", "a_bit_rate_mode", "g_overallbitrate_mode", "g_overall_bit_rate_mode")
+	copyFirst("sample_rate", "a_samplingrate_string", "a_samplingrate", "a_sampling_rate")
+	copyFirst("channels", "a_channels_string", "a_channel_s_string", "a_channels", "a_channel_s_")
+	copyFirst("video_format", "v_format", "v_commercialname", "v_commercial_name")
+	copyFirst("width", "v_width")
+	copyFirst("height", "v_height")
+	copyFirst("frame_rate", "v_framerate", "v_frame_rate")
+	copyFirst("duration", "g_duration", "v_duration", "a_duration")
+	copyFirst("subtitle_format", "s_format", "s_commercialname", "s_commercial_name")
+	f["year"] = normalizeMediaYear(f["year"])
+	f["bitrate"] = normalizeMediaBitrate(f["bitrate"])
+	f["sample_rate"] = normalizeMediaSampleRate(f["sample_rate"])
+	f["channels"] = normalizeMediaChannels(f["channels"])
+	f["duration"] = normalizeMediaDuration(f["duration"])
+}
+
+func normalizeMediaYear(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) >= 4 {
+		year := s[:4]
+		if _, err := strconv.Atoi(year); err == nil {
+			return year
+		}
+	}
+	return s
+}
+
+func normalizeMediaBitrate(s string) string {
+	raw := strings.TrimSpace(s)
+	if raw == "" {
+		return raw
+	}
+	lower := strings.ToLower(raw)
+	if strings.Contains(lower, "kb") || strings.Contains(lower, "mb") {
+		return raw
+	}
+	digits := strings.NewReplacer(" ", "", ",", "", ".", "").Replace(raw)
+	if n, err := strconv.Atoi(digits); err == nil && n > 0 {
+		if n >= 1000 {
+			return fmt.Sprintf("%dkbps", n/1000)
+		}
+		return fmt.Sprintf("%dbps", n)
+	}
+	return raw
+}
+
+func normalizeMediaSampleRate(s string) string {
+	raw := strings.TrimSpace(s)
+	if raw == "" {
+		return raw
+	}
+	lower := strings.ToLower(raw)
+	if strings.Contains(lower, "hz") {
+		return strings.TrimSuffix(strings.TrimSuffix(lower, " hz"), "hz")
+	}
+	return raw
+}
+
+func normalizeMediaChannels(s string) string {
+	raw := strings.TrimSpace(s)
+	switch raw {
+	case "1":
+		return "Mono"
+	case "2":
+		return "Stereo"
+	case "6":
+		return "5.1"
+	case "8":
+		return "7.1"
+	default:
+		return raw
+	}
+}
+
+func normalizeMediaDuration(s string) string {
+	raw := strings.TrimSpace(s)
+	if raw == "" {
+		return raw
+	}
+	if strings.Contains(strings.ToLower(raw), "min") || strings.Contains(raw, ":") {
+		return raw
+	}
+	if seconds, err := strconv.ParseFloat(raw, 64); err == nil && seconds > 0 {
+		min := int(seconds) / 60
+		sec := int(seconds) % 60
+		if min > 0 {
+			return fmt.Sprintf("%dm%02ds", min, sec)
+		}
+		return fmt.Sprintf("%ds", sec)
+	}
+	return raw
+}
+
 // handleWriteFile - master writes a small file to slave (e.g. .message).
 func (s *Slave) handleWriteFile(ac *protocol.AsyncCommand) interface{} {
 	if len(ac.Args) < 1 {
@@ -811,8 +1122,11 @@ func (s *Slave) getDirForUpload(relPath string) (string, error) {
 }
 
 func (s *Slave) listenOnPortRange() (net.Listener, error) {
-	if s.pasvPortMin > 0 && s.pasvPortMax > s.pasvPortMin {
-		for port := s.pasvPortMin; port <= s.pasvPortMax; port++ {
+	if s.pasvPortMin > 0 && s.pasvPortMax >= s.pasvPortMin {
+		span := s.pasvPortMax - s.pasvPortMin + 1
+		start := int(atomic.AddUint32(&s.pasvNext, 1)-1) % span
+		for i := 0; i < span; i++ {
+			port := s.pasvPortMin + ((start + i) % span)
 			bindAddr := fmt.Sprintf("%s:%d", s.bindIP, port)
 			l, err := net.Listen("tcp", bindAddr)
 			if err == nil {

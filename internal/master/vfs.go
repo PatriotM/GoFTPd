@@ -17,6 +17,9 @@ type VFSFile struct {
 	Path         string
 	Size         int64
 	IsDir        bool
+	IsSymlink    bool
+	LinkTarget   string
+	Mode         uint32
 	LastModified int64
 	SlaveName    string
 	Owner        string
@@ -66,6 +69,9 @@ func (vfs *VirtualFileSystem) AddFile(path string, file VFSFile) {
 	// Normalize path
 	path = cleanVFSPath(path)
 	file.Path = path
+	if file.LinkTarget != "" {
+		file.LinkTarget = cleanVFSPath(file.LinkTarget)
+	}
 	if vfs.protectedDirs == nil {
 		vfs.protectedDirs = make(map[string]bool)
 	}
@@ -74,8 +80,18 @@ func (vfs *VirtualFileSystem) AddFile(path string, file VFSFile) {
 	}
 	if vfs.protectedDirs[path] {
 		file.IsDir = true
+		file.IsSymlink = false
+		file.LinkTarget = ""
 		file.Seen = true
 		file.SlaveName = ""
+	}
+	if file.IsSymlink && file.LinkTarget != "" {
+		if existing := vfs.files[path]; existing != nil && existing.IsDir {
+			file.IsDir = true
+		}
+		if target := vfs.files[file.LinkTarget]; target != nil && target.IsDir {
+			file.IsDir = true
+		}
 	}
 
 	vfs.files[path] = &file
@@ -98,7 +114,33 @@ func (vfs *VirtualFileSystem) AddFile(path string, file VFSFile) {
 	}
 }
 
-// [ADDED] Sync methods for Slave Remerge
+func (vfs *VirtualFileSystem) AddSymlink(linkPath, targetPath string) {
+	vfs.mu.Lock()
+	defer vfs.mu.Unlock()
+
+	linkPath = cleanVFSPath(linkPath)
+	targetPath = cleanVFSPath(targetPath)
+	vfs.files[linkPath] = &VFSFile{
+		Path:         linkPath,
+		IsDir:        true,
+		IsSymlink:    true,
+		LinkTarget:   targetPath,
+		Mode:         0777,
+		LastModified: time.Now().Unix(),
+		Seen:         true,
+	}
+}
+
+func (vfs *VirtualFileSystem) Chmod(path string, mode uint32) {
+	vfs.mu.Lock()
+	defer vfs.mu.Unlock()
+
+	path = cleanVFSPath(path)
+	if f := vfs.files[path]; f != nil {
+		f.Mode = mode
+		f.LastModified = time.Now().Unix()
+	}
+}
 
 // MarkAllUnseen flags all files for a specific slave as unseen before a remerge.
 func (vfs *VirtualFileSystem) MarkAllUnseen(slaveName string) {
@@ -150,14 +192,12 @@ func (vfs *VirtualFileSystem) SetProtectedDirs(paths []string) {
 		}
 		vfs.protectedDirs[p] = true
 		f := vfs.files[p]
-		if f == nil {
-			f = &VFSFile{Path: p, IsDir: true}
-			vfs.files[p] = f
+		if f != nil {
+			f.Path = p
+			f.IsDir = true
+			f.Seen = true
+			f.SlaveName = ""
 		}
-		f.Path = p
-		f.IsDir = true
-		f.Seen = true
-		f.SlaveName = ""
 	}
 }
 
@@ -275,6 +315,19 @@ func (vfs *VirtualFileSystem) RenameFile(from, to string) {
 		delete(vfs.files, mv.old)
 		f.Path = mv.new
 		vfs.files[mv.new] = f
+	}
+
+	metaPrefix := from + "/"
+	var metaMove []struct{ old, new string }
+	for k := range vfs.dirMeta {
+		if k == from || strings.HasPrefix(k, metaPrefix) {
+			metaMove = append(metaMove, struct{ old, new string }{k, to + k[len(from):]})
+		}
+	}
+	for _, mv := range metaMove {
+		meta := vfs.dirMeta[mv.old]
+		delete(vfs.dirMeta, mv.old)
+		vfs.dirMeta[mv.new] = meta
 	}
 }
 
@@ -460,8 +513,15 @@ func (vfs *VirtualFileSystem) SetSFVData(dirPath string, sfvName string, entries
 	vfs.mu.Lock()
 	defer vfs.mu.Unlock()
 	dirPath = filepath.Clean(dirPath)
+	normalized := make(map[string]uint32, len(entries))
+	for name, crc := range entries {
+		name = raceFileKey(name)
+		if name != "" {
+			normalized[name] = crc
+		}
+	}
 	vfs.dirMeta[dirPath] = &VFSDirMeta{
-		SFVEntries: entries,
+		SFVEntries: normalized,
 		SFVName:    sfvName,
 	}
 }
@@ -481,6 +541,7 @@ type RaceUserStat struct {
 	Bytes     int64
 	Speed     float64 // bytes/sec average across this user's files
 	PeakSpeed float64 // bytes/sec of this user's fastest single file
+	SlowSpeed float64 // bytes/sec of this user's slowest single file
 	Percent   int
 }
 
@@ -514,10 +575,21 @@ func (vfs *VirtualFileSystem) GetRaceStats(dirPath string) (users []RaceUserStat
 		prefix = "/"
 	}
 
+	presentFiles := make(map[string]*VFSFile)
+	for path, f := range vfs.files {
+		if f == nil || f.IsDir || !strings.HasPrefix(path, prefix) {
+			continue
+		}
+		rel := path[len(prefix):]
+		if strings.Contains(rel, "/") || strings.Contains(rel, "\\") {
+			continue
+		}
+		presentFiles[raceFileKey(rel)] = f
+	}
+
 	for sfvFile := range meta.SFVEntries {
-		filePath := prefix + sfvFile
-		f := vfs.files[filePath]
-		if f == nil || f.IsDir {
+		f := presentFiles[raceFileKey(sfvFile)]
+		if f == nil {
 			continue
 		}
 		present++
@@ -545,6 +617,9 @@ func (vfs *VirtualFileSystem) GetRaceStats(dirPath string) (users []RaceUserStat
 			us.Speed += fileSpeed
 			if fileSpeed > us.PeakSpeed {
 				us.PeakSpeed = fileSpeed
+			}
+			if us.SlowSpeed == 0 || fileSpeed < us.SlowSpeed {
+				us.SlowSpeed = fileSpeed
 			}
 		}
 
@@ -582,4 +657,10 @@ func (vfs *VirtualFileSystem) GetRaceStats(dirPath string) (users []RaceUserStat
 	}
 
 	return
+}
+
+func raceFileKey(name string) string {
+	name = strings.TrimSpace(filepath.ToSlash(name))
+	name = strings.TrimPrefix(name, "./")
+	return strings.ToLower(name)
 }

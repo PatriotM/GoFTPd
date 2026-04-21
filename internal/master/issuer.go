@@ -29,6 +29,22 @@ func IssueDelete(rs *RemoteSlave, path string) (string, error) {
 	return index, rs.SendCommand(&protocol.AsyncCommand{Index: index, Name: "delete", Args: []string{path}})
 }
 
+func IssueChmod(rs *RemoteSlave, path string, mode uint32) (string, error) {
+	index, err := rs.FetchIndex()
+	if err != nil {
+		return "", err
+	}
+	return index, rs.SendCommand(&protocol.AsyncCommand{Index: index, Name: "chmod", Args: []string{path, fmt.Sprintf("%o", mode)}})
+}
+
+func IssueSymlink(rs *RemoteSlave, linkPath, targetPath string) (string, error) {
+	index, err := rs.FetchIndex()
+	if err != nil {
+		return "", err
+	}
+	return index, rs.SendCommand(&protocol.AsyncCommand{Index: index, Name: "symlink", Args: []string{linkPath, targetPath}})
+}
+
 func IssueRename(rs *RemoteSlave, from, toDir, toName string) (string, error) {
 	index, err := rs.FetchIndex()
 	if err != nil {
@@ -37,12 +53,32 @@ func IssueRename(rs *RemoteSlave, from, toDir, toName string) (string, error) {
 	return index, rs.SendCommand(&protocol.AsyncCommand{Index: index, Name: "rename", Args: []string{from, toDir, toName}})
 }
 
+func IssueMakeDir(rs *RemoteSlave, path string) (string, error) {
+	index, err := rs.FetchIndex()
+	if err != nil {
+		return "", err
+	}
+	return index, rs.SendCommand(&protocol.AsyncCommand{Index: index, Name: "makedir", Args: []string{path}})
+}
+
 func IssueChecksum(rs *RemoteSlave, path string) (string, error) {
 	index, err := rs.FetchIndex()
 	if err != nil {
 		return "", err
 	}
 	return index, rs.SendCommand(&protocol.AsyncCommand{Index: index, Name: "checksum", Args: []string{path}})
+}
+
+func IssueMediaInfo(rs *RemoteSlave, path, binary string, timeoutSeconds int) (string, error) {
+	index, err := rs.FetchIndex()
+	if err != nil {
+		return "", err
+	}
+	return index, rs.SendCommand(&protocol.AsyncCommand{
+		Index: index,
+		Name:  "mediainfo",
+		Args:  []string{path, binary, fmt.Sprintf("%d", timeoutSeconds)},
+	})
 }
 
 // IssueListen tells the slave to open a passive data port.

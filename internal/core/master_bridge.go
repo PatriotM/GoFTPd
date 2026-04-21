@@ -31,6 +31,12 @@ type MasterBridge interface {
 	// MakeDir creates a directory in the VFS.
 	MakeDir(dirPath, owner, group string)
 
+	// Symlink creates or replaces a symbolic link in VFS/slaves.
+	Symlink(linkPath, targetPath string) error
+
+	// Chmod changes permissions in VFS/slaves.
+	Chmod(path string, mode uint32) error
+
 	// GetFileSize returns file size from VFS, or -1 if not found.
 	GetFileSize(filePath string) int64
 
@@ -77,7 +83,10 @@ type MasterBridge interface {
 	SlaveConnectAndReceive(filePath, remoteAddr, owner, group string) (int64, uint32, int64, error)
 
 	// Passthrough: ask a slave to listen and return its IP:port + transfer index
-	SlaveListenForPassthrough(uploadPath string) (slaveIP string, port int, transferIdx int32, slaveName string, err error)
+	SlaveListenForPassthrough(uploadPath string, encrypted bool) (slaveIP string, port int, transferIdx int32, slaveName string, err error)
+
+	// Passthrough: ask the slave that owns filePath to listen for a download
+	SlaveListenForDownloadPassthrough(filePath string, encrypted bool) (slaveIP string, port int, transferIdx int32, slaveName string, err error)
 
 	// Passthrough: tell slave to receive a file, wait for completion, return size/checksum
 	SlaveReceivePassthrough(filePath string, transferIdx int32, slaveName string, owner, group string) (int64, uint32, int64, error)
@@ -91,6 +100,9 @@ type MasterFileEntry struct {
 	Name    string
 	Size    int64
 	IsDir   bool
+	IsSymlink bool
+	LinkTarget string
+	Mode    uint32
 	ModTime int64
 	Owner   string
 	Group   string
@@ -119,6 +131,7 @@ type VFSRaceUser struct {
 	Bytes      int64
 	Speed      float64
 	PeakSpeed  float64
+	SlowSpeed  float64
 	Percent    int
 	DurationMs int64 // sum of file durations for this user (effective transfer time)
 }

@@ -162,6 +162,9 @@ func (p *MyPlugin) SetAsyncEmitter(fn func(outType, text, section, relpath strin
 | `EventInvite`         | SITE INVITE — handled by bot directly, plugins skipped  |
 | `EventCommand`        | IRC `!cmd` from a user (news, free, etc.)               |
 | `EventDiskStatus`     | Slave disk status report                                |
+| `EventNewDay`         | Dated dir rollover announcement                         |
+| `EventAudioInfo`      | Audio metadata announce                                 |
+| `EventMediaInfo`      | Video/sample metadata announce                          |
 | `EventPre`            | SITE PRE                                                |
 | `EventPreBW`          | Bandwidth summary at end of PRE                         |
 | `EventPreBWUser`      | Per-user bandwidth in PRE                               |

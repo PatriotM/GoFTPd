@@ -104,9 +104,10 @@ type Config struct {
 	FreeSpaceMB  int  `yaml:"free_space_mb"`
 
 	// Display
-	DisplaySize  string `yaml:"display_size_unit"`
-	DisplaySpeed string `yaml:"display_speed_unit"`
-	ColorMode    int    `yaml:"color_mode"`
+	DisplaySize         string `yaml:"display_size_unit"`
+	DisplaySpeed        string `yaml:"display_speed_unit"`
+	ColorMode           int    `yaml:"color_mode"`
+	IncompleteIndicator string `yaml:"incomplete_indicator"`
 
 	// Nuke
 	NukeMaxMultiplier int    `yaml:"nuke_max_multiplier"`
@@ -119,27 +120,6 @@ type Config struct {
 	EventDispatcher *EventDispatcher                  `yaml:"-"` // Set at runtime
 	MasterManager   interface{}                       `yaml:"-"` // *master.Manager for master mode
 	RehashHook      func(*Config)                     `yaml:"-"` // called after Rehash() swaps fields
-
-	// SITE PRE — move a release from /PRE/<group>/<rel> to /<section>/<rel>
-	// and announce it. Affils are listed in `affils:`, which maps group
-	// name -> pre staging path (inside the site root). Example:
-	//   pre_enabled: true
-	//   pre_base: "/PRE"
-	//   pre_sections: ["TV-1080P", "MOVIE", "MP3", "FLAC", "X264", "X265"]
-	//   pre_bw_duration: 30        # seconds to sample bandwidth after pre
-	//   pre_bw_interval_ms: 500    # polling interval (ms)
-	//   affils:
-	//     - group: "GoFTPd"
-	//       predir: "/PRE/GoFTPd"
-	//     - group: "B0MBARDiERS"
-	//       predir: "/PRE/B0MBARDiERS"
-	PreEnabled     bool        `yaml:"pre_enabled"`
-	PreBase        string      `yaml:"pre_base"`
-	PreSections    []string    `yaml:"pre_sections"`
-	PreDatedSections []string  `yaml:"pre_dated_sections"` // use MMDD subdir (MP3/FLAC/0DAY)
-	PreBWDuration  int         `yaml:"pre_bw_duration"`    // seconds
-	PreBWIntervalMs int        `yaml:"pre_bw_interval_ms"` // polling interval
-	Affils         []AffilRule `yaml:"affils"`
 
 	// Debug
 	Debug bool `yaml:"debug"`
@@ -173,14 +153,6 @@ type SlavePolicyConfig struct {
 	Sections []string `yaml:"sections"` // e.g. ["TV-1080P", "MP3"] (case-insensitive)
 	Paths    []string `yaml:"paths"`    // e.g. ["/TV-1080P/*"]
 	Weight   int      `yaml:"weight"`   // default 1, higher = more uploads routed here
-}
-
-// AffilRule maps a group name to a pre-staging directory. Used by SITE PRE
-// to enforce that only members of the affil group can pre from that group's
-// dir. `Predir` is relative to the site root (ACLBasePath), e.g. "/PRE/GoFTPd".
-type AffilRule struct {
-	Group  string `yaml:"group"`
-	Predir string `yaml:"predir"`
 }
 
 func LoadConfig(filePath string) (*Config, error) {
@@ -247,15 +219,6 @@ func (c *Config) Rehash() (string, error) {
 	// custom plugins can implement live reload by reading c.Plugins.
 	c.Plugins = fresh.Plugins
 
-	// SITE PRE
-	c.PreEnabled = fresh.PreEnabled
-	c.PreBase = fresh.PreBase
-	c.PreSections = fresh.PreSections
-	c.PreDatedSections = fresh.PreDatedSections
-	c.PreBWDuration = fresh.PreBWDuration
-	c.PreBWIntervalMs = fresh.PreBWIntervalMs
-	c.Affils = fresh.Affils
-
 	// Slaves policy
 	c.Slaves = fresh.Slaves
 
@@ -270,6 +233,7 @@ func (c *Config) Rehash() (string, error) {
 	c.MaxUsers = fresh.MaxUsers
 	c.MaxUsersPerIP = fresh.MaxUsersPerIP
 	c.TotalUsers = fresh.TotalUsers
+	c.IncompleteIndicator = fresh.IncompleteIndicator
 
 	// Debug toggle
 	c.Debug = fresh.Debug
