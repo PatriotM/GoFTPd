@@ -121,6 +121,9 @@ func (p *AnnouncePlugin) vars(evt *event.Event) map[string]string {
 	if v["t_file_label"] == "" {
 		v["t_file_label"] = "file(s)"
 	}
+	if v["subtitle_format"] == "" {
+		v["subtitle_format"] = "None"
+	}
 	p.addSectionPalette(v, v["section"])
 	return v
 }

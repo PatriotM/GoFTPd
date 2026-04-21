@@ -1099,7 +1099,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						data["t_file_label"] = expectedFileLabel(s.CurrentDir)
 					}
 				}
-				if regexp.MustCompile(`(?i)\.(rar|r\d\d)$`).MatchString(fileName) {
+				if isRacePayloadFile(fileName) {
 					data["file_mbytes"] = mbString(fileSize)
 					if sfvEntries := bridge.GetSFVData(s.CurrentDir); sfvEntries != nil {
 						users, _, totalBytes, present, total := bridge.GetVFSRaceStats(s.CurrentDir)
@@ -1136,7 +1136,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						// FIFO writes + plugin dispatches were stacking up on
 						// the connection's hot path and delaying the final
 						// transfer ack by the time it took to do all that work.
-						go emitRaceEnd(s, users, totalBytes, total, xferMs)
+						go emitRaceEndAfter(s, users, totalBytes, total, xferMs, mediaInfoGraceDelay(fileName))
 					}
 				}
 
@@ -1243,7 +1243,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						data["t_file_label"] = expectedFileLabel(s.CurrentDir)
 					}
 				}
-				if regexp.MustCompile(`(?i)\.(rar|r\d\d)$`).MatchString(fileName) {
+				if isRacePayloadFile(fileName) {
 					data["file_mbytes"] = mbString(fileSize)
 					if sfvEntries := bridge.GetSFVData(s.CurrentDir); sfvEntries != nil {
 						users, _, totalBytes, present, total := bridge.GetVFSRaceStats(s.CurrentDir)
@@ -1276,7 +1276,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					users, _, totalBytes, present, total := bridge.GetVFSRaceStats(s.CurrentDir)
 					if total > 0 && present >= total {
 						// Async — see explanation at the other emitRaceEnd call.
-						go emitRaceEnd(s, users, totalBytes, total, xferMs)
+						go emitRaceEndAfter(s, users, totalBytes, total, xferMs, mediaInfoGraceDelay(fileName))
 					}
 				}
 
@@ -1550,6 +1550,38 @@ func max64(a, b int64) int64 {
 		return a
 	}
 	return b
+}
+
+func isRacePayloadFile(fileName string) bool {
+	name := strings.ToLower(strings.TrimSpace(fileName))
+	if regexp.MustCompile(`(?i)\.(rar|r\d\d)$`).MatchString(name) {
+		return true
+	}
+	return isMediaInfoFile(name)
+}
+
+func isMediaInfoFile(fileName string) bool {
+	name := strings.ToLower(strings.TrimSpace(fileName))
+	for _, suffix := range []string{".mp3", ".flac", ".m4a", ".wav", ".mkv", ".mp4", ".avi", ".m2ts"} {
+		if strings.HasSuffix(name, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+func mediaInfoGraceDelay(fileName string) time.Duration {
+	if isMediaInfoFile(fileName) {
+		return 2500 * time.Millisecond
+	}
+	return 0
+}
+
+func emitRaceEndAfter(s *Session, users []VFSRaceUser, totalBytes int64, total int, xferMs int64, delay time.Duration) {
+	if delay > 0 {
+		time.Sleep(delay)
+	}
+	emitRaceEnd(s, users, totalBytes, total, xferMs)
 }
 
 func expectedFileLabel(dirPath string) string {

@@ -934,6 +934,89 @@ func deriveMediaInfoFields(f map[string]string) {
 	copyFirst("height", "v_height")
 	copyFirst("frame_rate", "v_framerate", "v_frame_rate")
 	copyFirst("duration", "g_duration", "v_duration", "a_duration")
+	copyFirst("subtitle_format", "s_format", "s_commercialname", "s_commercial_name")
+	f["year"] = normalizeMediaYear(f["year"])
+	f["bitrate"] = normalizeMediaBitrate(f["bitrate"])
+	f["sample_rate"] = normalizeMediaSampleRate(f["sample_rate"])
+	f["channels"] = normalizeMediaChannels(f["channels"])
+	f["duration"] = normalizeMediaDuration(f["duration"])
+}
+
+func normalizeMediaYear(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) >= 4 {
+		year := s[:4]
+		if _, err := strconv.Atoi(year); err == nil {
+			return year
+		}
+	}
+	return s
+}
+
+func normalizeMediaBitrate(s string) string {
+	raw := strings.TrimSpace(s)
+	if raw == "" {
+		return raw
+	}
+	lower := strings.ToLower(raw)
+	if strings.Contains(lower, "kb") || strings.Contains(lower, "mb") {
+		return raw
+	}
+	digits := strings.NewReplacer(" ", "", ",", "", ".", "").Replace(raw)
+	if n, err := strconv.Atoi(digits); err == nil && n > 0 {
+		if n >= 1000 {
+			return fmt.Sprintf("%dkbps", n/1000)
+		}
+		return fmt.Sprintf("%dbps", n)
+	}
+	return raw
+}
+
+func normalizeMediaSampleRate(s string) string {
+	raw := strings.TrimSpace(s)
+	if raw == "" {
+		return raw
+	}
+	lower := strings.ToLower(raw)
+	if strings.Contains(lower, "hz") {
+		return strings.TrimSuffix(strings.TrimSuffix(lower, " hz"), "hz")
+	}
+	return raw
+}
+
+func normalizeMediaChannels(s string) string {
+	raw := strings.TrimSpace(s)
+	switch raw {
+	case "1":
+		return "Mono"
+	case "2":
+		return "Stereo"
+	case "6":
+		return "5.1"
+	case "8":
+		return "7.1"
+	default:
+		return raw
+	}
+}
+
+func normalizeMediaDuration(s string) string {
+	raw := strings.TrimSpace(s)
+	if raw == "" {
+		return raw
+	}
+	if strings.Contains(strings.ToLower(raw), "min") || strings.Contains(raw, ":") {
+		return raw
+	}
+	if seconds, err := strconv.ParseFloat(raw, 64); err == nil && seconds > 0 {
+		min := int(seconds) / 60
+		sec := int(seconds) % 60
+		if min > 0 {
+			return fmt.Sprintf("%dm%02ds", min, sec)
+		}
+		return fmt.Sprintf("%ds", sec)
+	}
+	return raw
 }
 
 // handleWriteFile - master writes a small file to slave (e.g. .message).

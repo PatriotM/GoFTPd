@@ -48,7 +48,7 @@ announce.NEWDAY = "%b{%c%sec_c1{NEW DAY:}} %c01{-}%section_colored%c01{- A new d
 
 announce.AUDIOINFO = "%b{%c%sec_c1{AUDIO-INFO:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{Get ready for some} %c%sec_c5{%genre} %c01{from} %c%sec_c5{%year} %c01{at} %c%sec_c5{%sample_rate}Hz %c01{in} %c%sec_c5{%channels} %c%sec_c5{%bitrate} %c01{(}%c%sec_c5{%bitrate_mode}%c01{).}"
 
-announce.MEDIAINFO = "%b{%c%sec_c1{MEDIA-INFO:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{Video:} %c%sec_c5{%video_format} %c01{%width}x%height %c01{- Audio:} %c%sec_c5{%audio_format} %c01{%channels} %c01{- Duration:} %c%sec_c5{%duration}"
+announce.MEDIAINFO = "%b{%c%sec_c1{SAMPLE-INFO:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{Video:} %c%sec_c5{%video_format} %c01{%width}x%height %c01{- Audio:} %c%sec_c5{%audio_format} %c01{%channels} %c01{- Subs:} %c%sec_c5{%subtitle_format} %c01{- Duration:} %c%sec_c5{%duration}"
 
 announce.SFV_RAR = "%b{%c10{RACE:}} %c01{[}%section_colored%c01{]} Got SFV for %c06{%b{%relname}} %c01{uploaded by} %c04{%u_name}%c01{. Now expecting} %c05{%b{%t_filecount}} %c01{%t_file_label.}"
 
