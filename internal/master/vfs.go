@@ -69,6 +69,9 @@ func (vfs *VirtualFileSystem) AddFile(path string, file VFSFile) {
 	// Normalize path
 	path = cleanVFSPath(path)
 	file.Path = path
+	if file.LinkTarget != "" {
+		file.LinkTarget = cleanVFSPath(file.LinkTarget)
+	}
 	if vfs.protectedDirs == nil {
 		vfs.protectedDirs = make(map[string]bool)
 	}
@@ -81,6 +84,14 @@ func (vfs *VirtualFileSystem) AddFile(path string, file VFSFile) {
 		file.LinkTarget = ""
 		file.Seen = true
 		file.SlaveName = ""
+	}
+	if file.IsSymlink && file.LinkTarget != "" {
+		if existing := vfs.files[path]; existing != nil && existing.IsDir {
+			file.IsDir = true
+		}
+		if target := vfs.files[file.LinkTarget]; target != nil && target.IsDir {
+			file.IsDir = true
+		}
 	}
 
 	vfs.files[path] = &file

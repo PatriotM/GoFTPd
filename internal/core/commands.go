@@ -643,7 +643,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 								parts = []string{
 									fmt.Sprintf("Modify=%s", ts),
 									"Perm=el",
-									"Type=OS.unix=symlink",
+									"Type=" + mlsdSymlinkType(e),
 								}
 							} else if e.IsDir {
 								perm := "elcmp"
@@ -735,10 +735,18 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					}
 					nowTs := time.Now().Format("20060102150405")
 					output.WriteString(fmt.Sprintf("Modify=%s;Perm=el;Type=dir; %s\r\n", nowTs, statusName))
+					if present < total {
+						if marker := incompleteMarkerName(s.Config.IncompleteIndicator, present, total); marker != "" {
+							output.WriteString(fmt.Sprintf("Modify=%s;Perm=el;Type=dir; %s\r\n", nowTs, marker))
+						}
+					}
 				}
 
 				for _, e := range entries {
 					if strings.HasPrefix(e.Name, ".") {
+						continue
+					}
+					if isIncompleteMarkerName(s.Config.IncompleteIndicator, e.Name) {
 						continue
 					}
 					aclPath := path.Join(s.Config.ACLBasePath, s.CurrentDir, e.Name)
@@ -753,7 +761,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						facts = []string{
 							fmt.Sprintf("Modify=%s", ts),
 							"Perm=" + perm,
-							"Type=OS.unix=symlink",
+							"Type=" + mlsdSymlinkType(e),
 						}
 					} else if e.IsDir {
 						perm = "elcmp" // enter, list, create, mkdir, purge
@@ -887,6 +895,12 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					}
 					output.WriteString(fmt.Sprintf("drwxr-xr-x   1 %-8s %-8s %10s %s %s\r\n",
 						"GoFTPd", "GoFTPd", "4096", now, statusName))
+					if present < total {
+						if marker := incompleteMarkerName(s.Config.IncompleteIndicator, present, total); marker != "" {
+							output.WriteString(fmt.Sprintf("drwxr-xr-x   1 %-8s %-8s %10s %s %s\r\n",
+								"GoFTPd", "GoFTPd", "4096", now, marker))
+						}
+					}
 				}
 
 				for _, e := range entries {
@@ -896,7 +910,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					if strings.HasSuffix(e.Name, "-missing") || strings.HasSuffix(e.Name, "-MISSING") {
 						continue
 					}
-					if strings.HasPrefix(e.Name, "[incomplete]") {
+					if isIncompleteMarkerName(s.Config.IncompleteIndicator, e.Name) {
 						continue
 					}
 					if strings.HasPrefix(e.Name, "[#") || strings.HasPrefix(e.Name, "[:") {
@@ -1472,6 +1486,61 @@ func ftpListMode(e MasterFileEntry) string {
 		}
 		return "-rw-r--r--"
 	}
+}
+
+func mlsdSymlinkType(e MasterFileEntry) string {
+	target := strings.TrimSpace(e.LinkTarget)
+	if target == "" {
+		return "OS.unix=symlink"
+	}
+	return "OS.unix=slink:" + target
+}
+
+func incompleteMarkerName(pattern string, present, total int) string {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" || total <= 0 || present >= total {
+		return ""
+	}
+	return strings.ReplaceAll(pattern, "%0", progressBar(present, total, 20))
+}
+
+func isIncompleteMarkerName(pattern, name string) bool {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" {
+		return strings.HasPrefix(strings.ToLower(name), "[incomplete]")
+	}
+	if strings.Contains(pattern, "%0") {
+		prefix := strings.SplitN(pattern, "%0", 2)[0]
+		return prefix != "" && strings.HasPrefix(name, prefix)
+	}
+	return name == pattern
+}
+
+func progressBar(present, total, width int) string {
+	if total <= 0 {
+		total = 1
+	}
+	if width <= 0 {
+		width = 20
+	}
+	filled := (present * width) / total
+	if filled < 0 {
+		filled = 0
+	}
+	if filled > width {
+		filled = width
+	}
+	var b strings.Builder
+	b.WriteByte('[')
+	for i := 0; i < width; i++ {
+		if i < filled {
+			b.WriteByte('#')
+		} else {
+			b.WriteByte(':')
+		}
+	}
+	b.WriteByte(']')
+	return b.String()
 }
 
 func max64(a, b int64) int64 {

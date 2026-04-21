@@ -104,9 +104,10 @@ type Config struct {
 	FreeSpaceMB  int  `yaml:"free_space_mb"`
 
 	// Display
-	DisplaySize  string `yaml:"display_size_unit"`
-	DisplaySpeed string `yaml:"display_speed_unit"`
-	ColorMode    int    `yaml:"color_mode"`
+	DisplaySize         string `yaml:"display_size_unit"`
+	DisplaySpeed        string `yaml:"display_speed_unit"`
+	ColorMode           int    `yaml:"color_mode"`
+	IncompleteIndicator string `yaml:"incomplete_indicator"`
 
 	// Nuke
 	NukeMaxMultiplier int    `yaml:"nuke_max_multiplier"`
@@ -283,6 +284,7 @@ func (c *Config) Rehash() (string, error) {
 	c.MaxUsers = fresh.MaxUsers
 	c.MaxUsersPerIP = fresh.MaxUsersPerIP
 	c.TotalUsers = fresh.TotalUsers
+	c.IncompleteIndicator = fresh.IncompleteIndicator
 
 	// Debug toggle
 	c.Debug = fresh.Debug
