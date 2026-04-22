@@ -1,13 +1,22 @@
-
 debug: true
 log_file:      "logs/sitebot.log"
 log_keep_days: 1
 
 event_fifo: "/GoFTPd/etc/goftpd.sitebot.fifo"
 
+# Channel sets are YAML anchors. The sitebot ignores this top-level block, but
+# YAML expands the anchors anywhere they are referenced below.
+channel_sets:
+  main:    &chan_main    ["#goftpd"]
+  spam:    &chan_spam    ["#goftpd-spam"]
+  staff:   &chan_staff   ["#goftpd-staff"]
+  foreign: &chan_foreign ["#goftpd-foreign"]
+  archive: &chan_archive ["#goftpd-archive"]
+  nuke:    &chan_nuke    ["#goftpd-nuke"]
+
 irc:
-  host: "45.45.54.54"
-  port: 48400
+  host: "irc.example.net"
+  port: 6697
   nick: "GoSitebot"
   user: "sitebot"
   realname: "GoSitebot v1.0"
@@ -20,19 +29,15 @@ irc:
   autojoin_delay_ms: 250
   channels:
     - "#goftpd"
-    - "#goftpd-announce"
+    - "#goftpd-spam"
+    - "#goftpd-staff"
 
 # ============================================================================
 # SITE INVITE channel visibility
 # ============================================================================
 # Channels listed here are restricted to users with at least one of the given
 # flags. Any channel NOT listed is considered public and returned to everyone.
-# Flags are matched character-by-character — "12" means flag 1 OR flag 2.
-#
-# Example: keep #goftpd and #goftpd-spam public, restrict #goftpd-staff to
-# siteops only. SITE INVITE then returns:
-#   - siteop       -> #goftpd, #goftpd-spam, #goftpd-staff
-#   - regular user -> #goftpd, #goftpd-spam
+# Flags are matched character-by-character: "12" means flag 1 OR flag 2.
 # ============================================================================
 invite_channels:
   - channel: "#goftpd-staff"
@@ -44,41 +49,284 @@ encryption:
     "#goftpd": "cbc:YourBlowfishKeyHere123456"
     "#goftpd-spam": "cbc:YourBlowfishKeyHere123456"
     "#goftpd-staff": "cbc:YourBlowfishKeyHere123456"
+    "#goftpd-foreign": "cbc:YourBlowfishKeyHere123456"
+    "#goftpd-archive": "cbc:YourBlowfishKeyHere123456"
+    "#goftpd-nuke": "cbc:YourBlowfishKeyHere123456"
 
 announce:
   default_channel: "#goftpd-staff"
   theme_file: "./etc/templates/pzsng.theme"
   type_routes:
-    NUKE:
-      - "#goftpd-nuke"
-    UNNUKE:
-      - "#goftpd-nuke"
-    NEWDAY:
-      - "#goftpd"
-    SPEEDTEST:
-      - "#goftpd"
+    NUKE: *chan_nuke
+    UNNUKE: *chan_nuke
+    NEWDAY: *chan_main
+    SPEEDTEST: *chan_main
 
 sections:
   - name: "DEFAULT"
-    channels:
-      - "#goftpd-staff"
+    channels: *chan_staff
     paths: []
-  - name: "TV-1080P"
-    channels:
-      - "#goftpd"
+
+#########################
+# #goftpd-foreign
+#########################
+
+  - name: "FOREIGN"
+    channels: *chan_foreign
     paths:
-      - "/TV-1080P/*"
-  - name: "MP3"
-    channels:
-      - "#goftpd-spam"
+      - "/FOREIGN/*"
+
+  - name: "TV-CZ"
+    channels: *chan_foreign
     paths:
-      - "/MP3/*"
+      - "/TV-CZ/*"
+
+  - name: "TV-DE"
+    channels: *chan_foreign
+    paths:
+      - "/TV-DE/*"
+
+  - name: "TV-DK"
+    channels: *chan_foreign
+    paths:
+      - "/TV-DK/*"
+
+  - name: "TV-ES"
+    channels: *chan_foreign
+    paths:
+      - "/TV-ES/*"
+
+  - name: "TV-FI"
+    channels: *chan_foreign
+    paths:
+      - "/TV-FI/*"
+
+  - name: "TV-FR"
+    channels: *chan_foreign
+    paths:
+      - "/TV-FR/*"
+
+  - name: "TV-IT"
+    channels: *chan_foreign
+    paths:
+      - "/TV-IT/*"
+
+  - name: "TV-NL"
+    channels: *chan_foreign
+    paths:
+      - "/TV-NL/*"
+
+  - name: "TV-NO"
+    channels: *chan_foreign
+    paths:
+      - "/TV-NO/*"
+
+  - name: "TV-PL"
+    channels: *chan_foreign
+    paths:
+      - "/TV-PL/*"
+
+  - name: "TV-SE"
+    channels: *chan_foreign
+    paths:
+      - "/TV-SE/*"
+
+  - name: "TV-SK"
+    channels: *chan_foreign
+    paths:
+      - "/TV-SK/*"
+
+  - name: "X264-HD-FOREIGN"
+    channels: *chan_foreign
+    paths:
+      - "/X264-HD-FOREIGN/*"
+
+  - name: "X264-SD-FOREIGN"
+    channels: *chan_foreign
+    paths:
+      - "/X264-SD-FOREIGN/*"
+
+  - name: "X265-FOREIGN"
+    channels: *chan_foreign
+    paths:
+      - "/X265-FOREIGN/*"
+
+#########################
+# #goftpd-archive
+#########################
+
+  - name: "ARCHIVE"
+    channels: *chan_archive
+    paths:
+      - "/ARCHIVE/*"
+
+#########################
+# #goftpd
+#########################
+
+  - name: "APPS"
+    channels: *chan_main
+    paths:
+      - "/APPS/*"
+
+  - name: "BLURAY"
+    channels: *chan_main
+    paths:
+      - "/BLURAY/*"
+
+  - name: "BLURAY-UHD"
+    channels: *chan_main
+    paths:
+      - "/BLURAY-UHD/*"
+
+  - name: "DVDR"
+    channels: *chan_main
+    paths:
+      - "/DVDR/*"
+
+  - name: "GAMES"
+    channels: *chan_main
+    paths:
+      - "/GAMES/*"
+
+  - name: "MBLURAY"
+    channels: *chan_main
+    paths:
+      - "/MBLURAY/*"
+
+  - name: "MDVDR"
+    channels: *chan_main
+    paths:
+      - "/MDVDR/*"
+
+  - name: "NSW"
+    channels: *chan_main
+    paths:
+      - "/NSW/*"
+
+  - name: "PRE"
+    channels: *chan_main
+    paths:
+      - "/PRE/*"
+
+  - name: "PS5"
+    channels: *chan_main
+    paths:
+      - "/PS5/*"
+
+  - name: "REQUESTS"
+    channels: *chan_main
+    paths:
+      - "/REQUESTS/*"
+
   - name: "SPEEDTEST"
-    channels:
-      - "#goftpd"
+    channels: *chan_main
     paths:
       - "/SPEEDTEST/*"
 
+  - name: "TV-1080P"
+    channels: *chan_main
+    paths:
+      - "/TV-1080P/*"
+
+  - name: "TV-2160P"
+    channels: *chan_main
+    paths:
+      - "/TV-2160P/*"
+
+  - name: "TV-720P"
+    channels: *chan_main
+    paths:
+      - "/TV-720P/*"
+
+  - name: "TV-BLURAY"
+    channels: *chan_main
+    paths:
+      - "/TV-BLURAY/*"
+
+  - name: "TV-HDRIP"
+    channels: *chan_main
+    paths:
+      - "/TV-HDRIP/*"
+
+  - name: "TV-SD"
+    channels: *chan_main
+    paths:
+      - "/TV-SD/*"
+
+  - name: "TV-SPORTS"
+    channels: *chan_main
+    paths:
+      - "/TV-SPORTS/*"
+
+  - name: "X264-HD-1080P"
+    channels: *chan_main
+    paths:
+      - "/X264-HD-1080P/*"
+
+  - name: "X264-HD-720P"
+    channels: *chan_main
+    paths:
+      - "/X264-HD-720P/*"
+
+  - name: "X264-SD"
+    channels: *chan_main
+    paths:
+      - "/X264-SD/*"
+
+  - name: "X265"
+    channels: *chan_main
+    paths:
+      - "/X265/*"
+
+#########################
+# #goftpd-spam
+#########################
+
+  - name: "MP3"
+    channels: *chan_spam
+    paths:
+      - "/MP3/*/*"
+
+  - name: "EBOOKS"
+    channels: *chan_spam
+    paths:
+      - "/EBOOKS/*/*"
+
+  - name: "FLAC"
+    channels: *chan_spam
+    paths:
+      - "/FLAC/*/*"
+
+  - name: "XXX-0DAY"
+    channels: *chan_spam
+    paths:
+      - "/XXX-0DAY/*/*"
+
+  - name: "0DAY"
+    channels: *chan_spam
+    paths:
+      - "/0DAY/*/*"
+
+  - name: "XXX-HD"
+    channels: *chan_spam
+    paths:
+      - "/XXX-HD/*"
+
+  - name: "XXX-IMAGESETS"
+    channels: *chan_spam
+    paths:
+      - "/XXX-IMAGESETS/*"
+
+  - name: "XXX-SD"
+    channels: *chan_spam
+    paths:
+      - "/XXX-SD/*"
+
+  - name: "MVID"
+    channels: *chan_spam
+    paths:
+      - "/MVID/*"
 
 plugins:
   enabled:
@@ -91,14 +339,42 @@ plugins:
   config:
     debug: true
 
-
     # Section matching is case-insensitive substring based.
     # "TV" matches TV-1080P, TV-720P, TV-X265, etc.
     tvmaze:
-      sections: ["TV-1080P", "TV-720P"]
+      sections:
+        - TV-1080P
+        - TV-2160P
+        - TV-720P
+        - TV-BLURAY
+        - TV-HDRIP
+        - TV-SD
+        - TV-SPORTS
+        - TV-CZ
+        - TV-DE
+        - TV-DK
+        - TV-ES
+        - TV-FI
+        - TV-FR
+        - TV-IT
+        - TV-NL
+        - TV-NO
+        - TV-PL
+        - TV-SE
+        - TV-SK
 
     imdb:
-      sections: ["X264-SD", "X265", "BLURAY"]
+      sections:
+        - BLURAY
+        - BLURAY-UHD
+        - DVDR
+        - X264-HD-1080P
+        - X264-HD-720P
+        - X264-HD-FOREIGN
+        - X264-SD
+        - X264-SD-FOREIGN
+        - X265
+        - X265-FOREIGN
 
     news:
       file: "./data/news.jsonl"
@@ -110,8 +386,8 @@ plugins:
       #   "notice"   = reply as a private NOTICE to the user
       #   "#channel" = always reply in that fixed IRC channel
       reply_target: "channel"
-      channels: ["#goftpd"]
-      staff_channels: ["#goftpd-staff"]
+      channels: *chan_main
+      staff_channels: *chan_staff
       staff_hosts: []
 
     free:
