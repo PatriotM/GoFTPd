@@ -55,8 +55,6 @@ announce:
       - "#goftpd-nuke"
     NEWDAY:
       - "#goftpd"
-    SPEEDTEST:
-      - "#goftpd"
 
 sections:
   - name: "DEFAULT"
@@ -73,11 +71,6 @@ sections:
       - "#goftpd-spam"
     paths:
       - "/MP3/*"
-  - name: "SPEEDTEST"
-    channels:
-      - "#goftpd"
-    paths:
-      - "/SPEEDTEST/*"
 
 
 plugins:

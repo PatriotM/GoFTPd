@@ -7,10 +7,8 @@ release nuked, etc.) and doing work with the master's VFS bridge.
 
 - **tvmaze** — async TV show lookup on MKD, writes `.tvmaze` into the release dir
 - **imdb**   — async movie lookup on MKD (via imdbapi.dev), writes `.imdb`
-- **speedtest** — creates fixed-size test files and emits SPEEDTEST events
 
-TVMaze and IMDb metadata files are shown on `CWD` via the daemon's
-`show_diz` mechanism.
+Both are shown on `CWD` via the daemon's `show_diz` mechanism.
 
 ## Writing a new plugin
 
@@ -122,7 +120,6 @@ type Services struct {
 type MasterBridge interface {
     PluginListDir(path string) []FileEntry
     WriteFile(path string, content []byte) error
-    CreateSparseFile(path string, size int64, owner, group string) error
     ReadFile(path string) ([]byte, error)
     FileExists(path string) bool
     GetFileSize(path string) int64

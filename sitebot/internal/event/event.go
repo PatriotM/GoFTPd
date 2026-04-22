@@ -24,7 +24,6 @@ const (
 	EventNewDay        EventType = "NEWDAY"
 	EventAudioInfo     EventType = "AUDIOINFO"
 	EventMediaInfo     EventType = "MEDIAINFO"
-	EventSpeedtest     EventType = "SPEEDTEST"
 	EventPre           EventType = "PRE"
 	EventPreBW         EventType = "PREBW"
 	EventPreBWUser     EventType = "PREBWUSER"
