@@ -110,21 +110,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 
 		if s.Config.Passthrough && s.Config.Mode == "master" && s.MasterManager != nil {
 			if bridge, ok := s.MasterManager.(MasterBridge); ok {
-				targetPath := s.CurrentDir
-				if strings.TrimSpace(s.PretArg) != "" {
-					targetPath = path.Join(s.CurrentDir, s.PretArg)
-				}
-
-				var slaveIP string
-				var port int
-				var xferIdx int32
-				var slaveName string
-				var err error
-				if s.PretCmd == "RETR" {
-					slaveIP, port, xferIdx, slaveName, err = bridge.SlaveListenForDownloadPassthrough(targetPath, s.DataTLS)
-				} else {
-					slaveIP, port, xferIdx, slaveName, err = bridge.SlaveListenForPassthrough(targetPath, s.DataTLS)
-				}
+				slaveIP, port, xferIdx, slaveName, err := bridge.SlaveListenForPassthrough(s.CurrentDir, s.DataTLS)
 				if err != nil {
 					log.Printf("[CPSV] Passthrough slave listen failed: %v", err)
 					fmt.Fprintf(s.Conn, "421 No available slave for passthrough.\r\n")
@@ -1068,12 +1054,11 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				filePath := path.Join(s.CurrentDir, fileName)
 				portAddr := s.ActiveAddr
 				s.ActiveAddr = ""
-				sslClientHandshake := s.DataTLS && (s.SSCN || isFXPActiveAddr(s.Conn.RemoteAddr(), portAddr))
 
 				log.Printf("[Passthrough] PORT STOR %s → slave connects to %s", filePath, portAddr)
 				fmt.Fprintf(s.Conn, "150 Opening binary mode data connection.\r\n")
 
-				fileSize, checksum, xferMs, err := bridge.SlaveConnectAndReceive(filePath, portAddr, s.User.Name, s.User.PrimaryGroup, sslClientHandshake)
+				fileSize, checksum, xferMs, err := bridge.SlaveConnectAndReceive(filePath, portAddr, s.User.Name, s.User.PrimaryGroup)
 				_ = xferMs
 
 				if err != nil {
@@ -1539,21 +1524,6 @@ func transferSpeedMB(size int64, xferMs int64) float64 {
 		return 0
 	}
 	return (float64(size) / 1024.0 / 1024.0) / (float64(xferMs) / 1000.0)
-}
-
-func isFXPActiveAddr(controlAddr net.Addr, dataAddr string) bool {
-	if controlAddr == nil || strings.TrimSpace(dataAddr) == "" {
-		return false
-	}
-	controlHost, _, err := net.SplitHostPort(controlAddr.String())
-	if err != nil {
-		return false
-	}
-	dataHost, _, err := net.SplitHostPort(dataAddr)
-	if err != nil {
-		return false
-	}
-	return controlHost != "" && dataHost != "" && !strings.EqualFold(controlHost, dataHost)
 }
 
 func ftpListMode(e MasterFileEntry) string {
