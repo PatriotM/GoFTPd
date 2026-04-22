@@ -1,28 +1,154 @@
 ############################################################
-#  GoFTPd sitebot theme — light background friendly         #
-#  All colors are dark shades readable on white/light mIRC: #
-#    c02 = blue                                              #
-#    c03 = green                                             #
-#    c04 = red                                               #
-#    c05 = brown                                             #
-#    c06 = purple                                            #
-#    c10 = teal/cyan                                         #
-#    c13 = pink/magenta                                      #
-#  Avoids: c00 (white), c08 (yellow), c09 (light green),    #
-#          c11 (light cyan), c14/15 (greys)                 #
+#  GoFTPd sitebot theme - pzs-ng style palettes            #
 ############################################################
+#
+# mIRC colors:
+# 00 White       01 Black       02 Blue        03 Green
+# 04 Light Red   05 Brown       06 Purple      07 Orange
+# 08 Yellow      09 Light Green 10 Cyan        11 Light Cyan
+# 12 Light Blue  13 Pink        14 Grey        15 Light Grey
 
-COLOR_DEFAULT_1 = "03"
-COLOR_DEFAULT_2 = "02"
-COLOR_DEFAULT_3 = "06"
-COLOR_DEFAULT_4 = "04"
-COLOR_DEFAULT_5 = "05"
+COLOR_DEFAULT_1 = "01"
+COLOR_DEFAULT_2 = "03"
+COLOR_DEFAULT_3 = "07"
+COLOR_DEFAULT_4 = "14"
+COLOR_DEFAULT_5 = "06"
 
+# Generic/admin sections
+COLOR_ARCHIVE_1 = "14"
+COLOR_ARCHIVE_2 = "02"
+COLOR_ARCHIVE_3 = "14"
+COLOR_ARCHIVE_4 = "02"
+COLOR_ARCHIVE_5 = "07"
+
+COLOR_FOREIGN_1 = "14"
+COLOR_FOREIGN_2 = "10"
+COLOR_FOREIGN_3 = "14"
+COLOR_FOREIGN_4 = "10"
+COLOR_FOREIGN_5 = "07"
+
+COLOR_PRE_1 = "14"
+COLOR_PRE_2 = "02"
+COLOR_PRE_3 = "14"
+COLOR_PRE_4 = "02"
+COLOR_PRE_5 = "07"
+
+COLOR_REQUESTS_1 = "14"
+COLOR_REQUESTS_2 = "02"
+COLOR_REQUESTS_3 = "14"
+COLOR_REQUESTS_4 = "02"
+COLOR_REQUESTS_5 = "07"
+
+COLOR_SPEEDTEST_1 = "14"
+COLOR_SPEEDTEST_2 = "03"
+COLOR_SPEEDTEST_3 = "14"
+COLOR_SPEEDTEST_4 = "03"
+COLOR_SPEEDTEST_5 = "07"
+
+# TV foreign
+COLOR_TV-CZ_1 = "14"
+COLOR_TV-CZ_2 = "10"
+COLOR_TV-CZ_3 = "14"
+COLOR_TV-CZ_4 = "10"
+COLOR_TV-CZ_5 = "07"
+
+COLOR_TV-DE_1 = "14"
+COLOR_TV-DE_2 = "06"
+COLOR_TV-DE_3 = "14"
+COLOR_TV-DE_4 = "06"
+COLOR_TV-DE_5 = "07"
+
+COLOR_TV-DK_1 = "14"
+COLOR_TV-DK_2 = "03"
+COLOR_TV-DK_3 = "14"
+COLOR_TV-DK_4 = "03"
+COLOR_TV-DK_5 = "07"
+
+COLOR_TV-ES_1 = "14"
+COLOR_TV-ES_2 = "05"
+COLOR_TV-ES_3 = "14"
+COLOR_TV-ES_4 = "05"
+COLOR_TV-ES_5 = "07"
+
+COLOR_TV-FI_1 = "14"
+COLOR_TV-FI_2 = "02"
+COLOR_TV-FI_3 = "14"
+COLOR_TV-FI_4 = "02"
+COLOR_TV-FI_5 = "07"
+
+COLOR_TV-FR_1 = "14"
+COLOR_TV-FR_2 = "10"
+COLOR_TV-FR_3 = "14"
+COLOR_TV-FR_4 = "10"
+COLOR_TV-FR_5 = "07"
+
+COLOR_TV-IT_1 = "14"
+COLOR_TV-IT_2 = "06"
+COLOR_TV-IT_3 = "14"
+COLOR_TV-IT_4 = "06"
+COLOR_TV-IT_5 = "07"
+
+COLOR_TV-NL_1 = "14"
+COLOR_TV-NL_2 = "03"
+COLOR_TV-NL_3 = "14"
+COLOR_TV-NL_4 = "03"
+COLOR_TV-NL_5 = "07"
+
+COLOR_TV-NO_1 = "14"
+COLOR_TV-NO_2 = "05"
+COLOR_TV-NO_3 = "14"
+COLOR_TV-NO_4 = "05"
+COLOR_TV-NO_5 = "07"
+
+COLOR_TV-PL_1 = "14"
+COLOR_TV-PL_2 = "02"
+COLOR_TV-PL_3 = "14"
+COLOR_TV-PL_4 = "02"
+COLOR_TV-PL_5 = "07"
+
+COLOR_TV-SE_1 = "14"
+COLOR_TV-SE_2 = "05"
+COLOR_TV-SE_3 = "14"
+COLOR_TV-SE_4 = "05"
+COLOR_TV-SE_5 = "07"
+
+COLOR_TV-SK_1 = "14"
+COLOR_TV-SK_2 = "02"
+COLOR_TV-SK_3 = "14"
+COLOR_TV-SK_4 = "02"
+COLOR_TV-SK_5 = "07"
+
+# Movies foreign
+COLOR_X264-HD-FOREIGN_1 = "14"
+COLOR_X264-HD-FOREIGN_2 = "02"
+COLOR_X264-HD-FOREIGN_3 = "14"
+COLOR_X264-HD-FOREIGN_4 = "02"
+COLOR_X264-HD-FOREIGN_5 = "07"
+
+COLOR_X264-SD-FOREIGN_1 = "14"
+COLOR_X264-SD-FOREIGN_2 = "10"
+COLOR_X264-SD-FOREIGN_3 = "14"
+COLOR_X264-SD-FOREIGN_4 = "10"
+COLOR_X264-SD-FOREIGN_5 = "07"
+
+COLOR_X265-FOREIGN_1 = "14"
+COLOR_X265-FOREIGN_2 = "05"
+COLOR_X265-FOREIGN_3 = "14"
+COLOR_X265-FOREIGN_4 = "05"
+COLOR_X265-FOREIGN_5 = "07"
+
+# Apps/Ebook blue
 COLOR_0DAY_1 = "14"
 COLOR_0DAY_2 = "02"
 COLOR_0DAY_3 = "14"
 COLOR_0DAY_4 = "02"
 COLOR_0DAY_5 = "07"
+
+COLOR_APPS_1 = "14"
+COLOR_APPS_2 = "02"
+COLOR_APPS_3 = "14"
+COLOR_APPS_4 = "02"
+COLOR_APPS_5 = "07"
 
 COLOR_EBOOKS_1 = "14"
 COLOR_EBOOKS_2 = "02"
@@ -30,17 +156,166 @@ COLOR_EBOOKS_3 = "14"
 COLOR_EBOOKS_4 = "02"
 COLOR_EBOOKS_5 = "07"
 
-COLOR_MP3_1 = "03"
-COLOR_MP3_2 = "05"
-COLOR_MP3_3 = "06"
-COLOR_MP3_4 = "04"
-COLOR_MP3_5 = "10"
+# Music purple
+COLOR_MBLURAY_1 = "14"
+COLOR_MBLURAY_2 = "06"
+COLOR_MBLURAY_3 = "14"
+COLOR_MBLURAY_4 = "06"
+COLOR_MBLURAY_5 = "07"
 
-COLOR_FLAC_1 = "10"
-COLOR_FLAC_2 = "05"
-COLOR_FLAC_3 = "06"
-COLOR_FLAC_4 = "04"
-COLOR_FLAC_5 = "03"
+COLOR_MVID_1 = "14"
+COLOR_MVID_2 = "06"
+COLOR_MVID_3 = "14"
+COLOR_MVID_4 = "06"
+COLOR_MVID_5 = "07"
+
+COLOR_MDVDR_1 = "14"
+COLOR_MDVDR_2 = "06"
+COLOR_MDVDR_3 = "14"
+COLOR_MDVDR_4 = "06"
+COLOR_MDVDR_5 = "07"
+
+COLOR_MP3_1 = "14"
+COLOR_MP3_2 = "06"
+COLOR_MP3_3 = "14"
+COLOR_MP3_4 = "06"
+COLOR_MP3_5 = "07"
+
+COLOR_FLAC_1 = "14"
+COLOR_FLAC_2 = "06"
+COLOR_FLAC_3 = "14"
+COLOR_FLAC_4 = "06"
+COLOR_FLAC_5 = "07"
+
+# Games cyan
+COLOR_NSW_1 = "14"
+COLOR_NSW_2 = "10"
+COLOR_NSW_3 = "14"
+COLOR_NSW_4 = "10"
+COLOR_NSW_5 = "07"
+
+COLOR_PS5_1 = "14"
+COLOR_PS5_2 = "10"
+COLOR_PS5_3 = "14"
+COLOR_PS5_4 = "10"
+COLOR_PS5_5 = "07"
+
+COLOR_GAMES_1 = "14"
+COLOR_GAMES_2 = "10"
+COLOR_GAMES_3 = "14"
+COLOR_GAMES_4 = "10"
+COLOR_GAMES_5 = "07"
+
+# TV green
+COLOR_TV-BLURAY_1 = "14"
+COLOR_TV-BLURAY_2 = "03"
+COLOR_TV-BLURAY_3 = "14"
+COLOR_TV-BLURAY_4 = "03"
+COLOR_TV-BLURAY_5 = "07"
+
+COLOR_TV-2160P_1 = "14"
+COLOR_TV-2160P_2 = "03"
+COLOR_TV-2160P_3 = "14"
+COLOR_TV-2160P_4 = "03"
+COLOR_TV-2160P_5 = "07"
+
+COLOR_TV-1080P_1 = "14"
+COLOR_TV-1080P_2 = "03"
+COLOR_TV-1080P_3 = "14"
+COLOR_TV-1080P_4 = "03"
+COLOR_TV-1080P_5 = "07"
+
+COLOR_TV-720P_1 = "14"
+COLOR_TV-720P_2 = "03"
+COLOR_TV-720P_3 = "14"
+COLOR_TV-720P_4 = "03"
+COLOR_TV-720P_5 = "07"
+
+COLOR_TV-SD_1 = "14"
+COLOR_TV-SD_2 = "03"
+COLOR_TV-SD_3 = "14"
+COLOR_TV-SD_4 = "03"
+COLOR_TV-SD_5 = "07"
+
+COLOR_TV-SPORTS_1 = "14"
+COLOR_TV-SPORTS_2 = "03"
+COLOR_TV-SPORTS_3 = "14"
+COLOR_TV-SPORTS_4 = "03"
+COLOR_TV-SPORTS_5 = "07"
+
+COLOR_TV-HDRIP_1 = "14"
+COLOR_TV-HDRIP_2 = "03"
+COLOR_TV-HDRIP_3 = "14"
+COLOR_TV-HDRIP_4 = "03"
+COLOR_TV-HDRIP_5 = "07"
+
+# Movie orange/brown
+COLOR_BLURAY_1 = "14"
+COLOR_BLURAY_2 = "05"
+COLOR_BLURAY_3 = "14"
+COLOR_BLURAY_4 = "05"
+COLOR_BLURAY_5 = "07"
+
+COLOR_DVDR_1 = "14"
+COLOR_DVDR_2 = "05"
+COLOR_DVDR_3 = "14"
+COLOR_DVDR_4 = "05"
+COLOR_DVDR_5 = "07"
+
+COLOR_BLURAY-UHD_1 = "14"
+COLOR_BLURAY-UHD_2 = "05"
+COLOR_BLURAY-UHD_3 = "14"
+COLOR_BLURAY-UHD_4 = "05"
+COLOR_BLURAY-UHD_5 = "07"
+
+COLOR_X265_1 = "14"
+COLOR_X265_2 = "05"
+COLOR_X265_3 = "14"
+COLOR_X265_4 = "05"
+COLOR_X265_5 = "07"
+
+COLOR_X264-SD_1 = "14"
+COLOR_X264-SD_2 = "05"
+COLOR_X264-SD_3 = "14"
+COLOR_X264-SD_4 = "05"
+COLOR_X264-SD_5 = "07"
+
+COLOR_X264-HD-1080P_1 = "14"
+COLOR_X264-HD-1080P_2 = "05"
+COLOR_X264-HD-1080P_3 = "14"
+COLOR_X264-HD-1080P_4 = "05"
+COLOR_X264-HD-1080P_5 = "07"
+
+COLOR_X264-HD-720P_1 = "14"
+COLOR_X264-HD-720P_2 = "05"
+COLOR_X264-HD-720P_3 = "14"
+COLOR_X264-HD-720P_4 = "05"
+COLOR_X264-HD-720P_5 = "07"
+
+# XXX pink
+COLOR_XXX-IMAGESETS_1 = "14"
+COLOR_XXX-IMAGESETS_2 = "13"
+COLOR_XXX-IMAGESETS_3 = "14"
+COLOR_XXX-IMAGESETS_4 = "13"
+COLOR_XXX-IMAGESETS_5 = "07"
+
+COLOR_XXX-HD_1 = "14"
+COLOR_XXX-HD_2 = "13"
+COLOR_XXX-HD_3 = "14"
+COLOR_XXX-HD_4 = "13"
+COLOR_XXX-HD_5 = "07"
+
+COLOR_XXX-SD_1 = "14"
+COLOR_XXX-SD_2 = "13"
+COLOR_XXX-SD_3 = "14"
+COLOR_XXX-SD_4 = "13"
+COLOR_XXX-SD_5 = "07"
+
+COLOR_XXX-0DAY_1 = "14"
+COLOR_XXX-0DAY_2 = "13"
+COLOR_XXX-0DAY_3 = "14"
+COLOR_XXX-0DAY_4 = "13"
+COLOR_XXX-0DAY_5 = "07"
 
 announce.NEWDIR = "%b{%c%sec_c1{NEW :}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{by} %c%sec_c4{%u_name}"
 
@@ -72,7 +347,7 @@ announce.MOVIEINFO = "%b{%c%sec_c1{MOVIE-INFO:}} %c01{[}%section_colored%c01{]} 
 
 announce.COMPLETE = "%b{%c%sec_c1{COMPLETE:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{by} %c%sec_c5{%u_count} %c01{racers -} %c%sec_c5{%t_mbytes}%c01{/}%c%sec_c5{%t_files}%c01{/}%c%sec_c5{%t_avgspeed}%c01{/}%c%sec_c5{%t_duration}"
 
-announce.STATS_HOF = "%b{%c02{STATS:}} ▂▃▅▇█▓▒░۩۞۩  %c03{Users Hall Of Fame} ۩۞۩░▒▓█▇▅▃▂"
+announce.STATS_HOF = "%b{%c02{STATS:}} Users Hall Of Fame"
 
 announce.STATS_SPEEDS = "%b{%c02{STATS:}} %c01{Slowest:} %c04{%u_slowest_name} %c01{at} %c05{%u_slowest_speed} %c01{-} %c01{Fastest:} %c04{%u_fastest_name} %c01{at} %c05{%u_fastest_speed}%c01{.}"
 
