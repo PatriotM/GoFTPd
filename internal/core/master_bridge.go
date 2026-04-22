@@ -83,8 +83,9 @@ type MasterBridge interface {
 	// SearchDirs searches the master's VFS for directories matching query.
 	SearchDirs(query string, limit int) []VFSSearchResult
 
-	// Passthrough PORT: tell slave to connect out to remote address and receive file
-	SlaveConnectAndReceive(filePath, remoteAddr, owner, group string) (int64, uint32, int64, error)
+	// Passthrough PORT: tell slave to connect out to remote address and receive file.
+	// sslClientHandshake selects the TLS role for secure FXP data channels.
+	SlaveConnectAndReceive(filePath, remoteAddr, owner, group string, sslClientHandshake bool) (int64, uint32, int64, error)
 
 	// Passthrough: ask a slave to listen and return its IP:port + transfer index
 	SlaveListenForPassthrough(uploadPath string, encrypted bool) (slaveIP string, port int, transferIdx int32, slaveName string, err error)

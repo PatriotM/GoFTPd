@@ -925,7 +925,7 @@ func (b *Bridge) SlaveSendPassthrough(filePath string, transferIdx int32, slaveN
 
 // SlaveConnectAndReceive tells a slave to connect out to a remote address (PORT mode passthrough)
 // and receive a file. The slave connects directly to the remote site — master doesn't touch the data.
-func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group string) (int64, uint32, int64, error) {
+func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group string, sslClientHandshake bool) (int64, uint32, int64, error) {
 	slave := b.sm.SelectSlaveForUpload(filePath)
 	if slave == nil {
 		return 0, 0, 0, fmt.Errorf("no available slave")
@@ -942,9 +942,10 @@ func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group strin
 	remoteIP := parts[0]
 	remotePort, _ := strconv.Atoi(parts[1])
 
-	// Tell slave to connect out to the remote address (with TLS for FXP)
-	// sslClientHandshake=false: slave acts as TLS SERVER (other site did CPSV, is TLS client)
-	connectIdx, err := IssueConnect(slave, remoteIP, remotePort, true, false)
+	// Tell slave to connect out to the remote address (with TLS for FXP).
+	// For server-to-server FXP the passive side is the TLS server, so the
+	// connecting slave must sometimes be the TLS client.
+	connectIdx, err := IssueConnect(slave, remoteIP, remotePort, true, sslClientHandshake)
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("issue connect to %s: %w", slave.Name(), err)
 	}
