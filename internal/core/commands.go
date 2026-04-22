@@ -121,9 +121,9 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				var slaveName string
 				var err error
 				if s.PretCmd == "RETR" {
-					slaveIP, port, xferIdx, slaveName, err = bridge.SlaveListenForDownloadPassthrough(targetPath, s.DataTLS)
+					slaveIP, port, xferIdx, slaveName, err = bridge.SlaveListenForDownloadPassthrough(targetPath, s.DataTLS, true)
 				} else {
-					slaveIP, port, xferIdx, slaveName, err = bridge.SlaveListenForPassthrough(targetPath, s.DataTLS)
+					slaveIP, port, xferIdx, slaveName, err = bridge.SlaveListenForPassthrough(targetPath, s.DataTLS, true)
 				}
 				if err != nil {
 					log.Printf("[CPSV] Passthrough slave listen failed: %v", err)
@@ -572,9 +572,9 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					var slaveName string
 					var err error
 					if s.PretCmd == "RETR" {
-						slaveIP, port, xferIdx, slaveName, err = bridge.SlaveListenForDownloadPassthrough(targetPath, s.DataTLS)
+						slaveIP, port, xferIdx, slaveName, err = bridge.SlaveListenForDownloadPassthrough(targetPath, s.DataTLS, false)
 					} else {
-						slaveIP, port, xferIdx, slaveName, err = bridge.SlaveListenForPassthrough(targetPath, s.DataTLS)
+						slaveIP, port, xferIdx, slaveName, err = bridge.SlaveListenForPassthrough(targetPath, s.DataTLS, false)
 					}
 					if err != nil {
 						log.Printf("[PASV] Passthrough slave listen failed: %v", err)

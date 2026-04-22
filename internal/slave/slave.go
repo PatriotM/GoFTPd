@@ -454,18 +454,10 @@ func (s *Slave) handleListen(ac *protocol.AsyncCommand) interface{} {
 		return &protocol.AsyncResponseError{Index: ac.Index, Message: fmt.Sprintf("listen failed: %v", err)}
 	}
 
-	encrypted, _ := parseListenFlags(ac.Args)
-	if encrypted {
-		cert, err := tls.LoadX509KeyPair(s.tlsCert, s.tlsKey)
-		if err != nil {
-			listener.Close()
-			return &protocol.AsyncResponseError{Index: ac.Index, Message: fmt.Sprintf("load TLS cert: %v", err)}
-		}
-		listener = tls.NewListener(listener, &tls.Config{Certificates: []tls.Certificate{cert}})
-	}
+	encrypted, sslClientMode := parseListenFlags(ac.Args)
 
 	idx := atomic.AddInt32(&s.nextTransferIdx, 1)
-	t := NewTransfer(listener, nil, idx, s)
+	t := NewTransfer(listener, nil, idx, s, encrypted, sslClientMode)
 	s.transfers.Store(idx, t)
 
 	port := listener.Addr().(*net.TCPAddr).Port
@@ -544,7 +536,7 @@ func (s *Slave) handleConnect(ac *protocol.AsyncCommand) interface{} {
 
 	idx := atomic.AddInt32(&s.nextTransferIdx, 1)
 	port := conn.RemoteAddr().(*net.TCPAddr).Port
-	t := NewTransfer(nil, finalConn, idx, s)
+	t := NewTransfer(nil, finalConn, idx, s, false, false)
 	s.transfers.Store(idx, t)
 
 	return &protocol.AsyncResponseTransfer{

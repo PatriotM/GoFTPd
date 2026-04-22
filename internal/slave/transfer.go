@@ -1,6 +1,7 @@
 package slave
 
 import (
+	"crypto/tls"
 	"fmt"
 	"hash/crc32"
 	"io"
@@ -26,6 +27,8 @@ type Transfer struct {
 	conn          net.Conn     // non-nil for active (CONNECT) or after passive accept
 	transferIndex int32
 	slave         *Slave
+	encrypted     bool
+	sslClientMode bool
 
 	direction     byte
 	started       time.Time
@@ -36,12 +39,14 @@ type Transfer struct {
 	mu            sync.Mutex
 }
 
-func NewTransfer(listener net.Listener, conn net.Conn, idx int32, slave *Slave) *Transfer {
+func NewTransfer(listener net.Listener, conn net.Conn, idx int32, slave *Slave, encrypted bool, sslClientMode bool) *Transfer {
 	return &Transfer{
 		listener:      listener,
 		conn:          conn,
 		transferIndex: idx,
 		slave:         slave,
+		encrypted:     encrypted,
+		sslClientMode: sslClientMode,
 		direction:     TransferUnknown,
 	}
 }
@@ -61,17 +66,8 @@ func (t *Transfer) ReceiveFile(path string) protocol.TransferStatus {
 		t.slave.removeTransfer(t.transferIndex)
 	}()
 
-	// Accept connection if passive
-	if t.conn == nil && t.listener != nil {
-		if deadlineListener, ok := t.listener.(interface{ SetDeadline(time.Time) error }); ok {
-			deadlineListener.SetDeadline(time.Now().Add(30 * time.Second))
-		}
-		conn, err := t.listener.Accept()
-		t.listener.Close()
-		if err != nil {
-			return t.errorStatus(fmt.Sprintf("accept failed: %v", err))
-		}
-		t.conn = conn
+	if err := t.acceptPassiveConn(); err != nil {
+		return t.errorStatus(err.Error())
 	}
 
 	if t.conn == nil {
@@ -144,17 +140,8 @@ func (t *Transfer) SendFile(path string) protocol.TransferStatus {
 		t.slave.removeTransfer(t.transferIndex)
 	}()
 
-	// Accept connection if passive
-	if t.conn == nil && t.listener != nil {
-		if deadlineListener, ok := t.listener.(interface{ SetDeadline(time.Time) error }); ok {
-			deadlineListener.SetDeadline(time.Now().Add(30 * time.Second))
-		}
-		conn, err := t.listener.Accept()
-		t.listener.Close()
-		if err != nil {
-			return t.errorStatus(fmt.Sprintf("accept failed: %v", err))
-		}
-		t.conn = conn
+	if err := t.acceptPassiveConn(); err != nil {
+		return t.errorStatus(err.Error())
 	}
 
 	if t.conn == nil {
@@ -211,6 +198,50 @@ func (t *Transfer) SendFile(path string) protocol.TransferStatus {
 		Checksum:      h.Sum32(),
 		Finished:      true,
 	}
+}
+
+func (t *Transfer) acceptPassiveConn() error {
+	if t.conn != nil || t.listener == nil {
+		return nil
+	}
+	if deadlineListener, ok := t.listener.(interface{ SetDeadline(time.Time) error }); ok {
+		deadlineListener.SetDeadline(time.Now().Add(30 * time.Second))
+	}
+	conn, err := t.listener.Accept()
+	t.listener.Close()
+	if err != nil {
+		return fmt.Errorf("accept failed: %v", err)
+	}
+	if !t.encrypted {
+		t.conn = conn
+		return nil
+	}
+
+	_ = conn.SetDeadline(time.Now().Add(15 * time.Second))
+	defer conn.SetDeadline(time.Time{})
+
+	if t.sslClientMode {
+		tlsConn := tls.Client(conn, &tls.Config{InsecureSkipVerify: true})
+		if err := tlsConn.Handshake(); err != nil {
+			conn.Close()
+			return fmt.Errorf("TLS client handshake failed: %v", err)
+		}
+		t.conn = tlsConn
+		return nil
+	}
+
+	cert, err := tls.LoadX509KeyPair(t.slave.tlsCert, t.slave.tlsKey)
+	if err != nil {
+		conn.Close()
+		return fmt.Errorf("load TLS cert: %v", err)
+	}
+	tlsConn := tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{cert}})
+	if err := tlsConn.Handshake(); err != nil {
+		conn.Close()
+		return fmt.Errorf("TLS server handshake failed: %v", err)
+	}
+	t.conn = tlsConn
+	return nil
 }
 
 func (t *Transfer) Abort(reason string) {
