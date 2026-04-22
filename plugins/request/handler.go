@@ -26,6 +26,7 @@ type Plugin struct {
 	showOnFill                bool
 	doNotCreateDirUntilFilled bool
 	reqwipeFlags              string
+	proxyUsers                []string
 	sitename                  string
 	debug                     bool
 }
@@ -51,6 +52,7 @@ func New() *Plugin {
 		badChars:     `*{^~/,+&\`,
 		maxRequests:  30,
 		reqwipeFlags: "1",
+		proxyUsers:   []string{"goftpd"},
 		sitename:     "GoFTPd",
 	}
 }
@@ -79,6 +81,9 @@ func (p *Plugin) Init(svc *plugin.Services, cfg map[string]interface{}) error {
 	}
 	if s := stringConfig(cfg, "reqwipe_flags", ""); strings.TrimSpace(s) != "" {
 		p.reqwipeFlags = strings.TrimSpace(s)
+	}
+	if raw, ok := cfg["proxy_users"]; ok {
+		p.proxyUsers = toStringSlice(raw)
 	}
 	if s := stringConfig(cfg, "sitename", ""); strings.TrimSpace(s) != "" {
 		p.sitename = strings.TrimSpace(s)
@@ -145,6 +150,10 @@ func (p *Plugin) handleRequest(ctx plugin.SiteContext, args []string) bool {
 	}
 	if release == "" {
 		p.reply(ctx, "501", "Usage: SITE REQUEST <request> [-for:<user>] [-hide]")
+		return true
+	}
+	if byUser != "" && !p.canProxyUser(ctx) {
+		p.reply(ctx, "550", "Permission denied: -by is only available to configured request proxy users.")
 		return true
 	}
 
@@ -219,9 +228,13 @@ func (p *Plugin) handleReqFill(ctx plugin.SiteContext, args []string) bool {
 }
 
 func (p *Plugin) handleReqDel(ctx plugin.SiteContext, args []string) bool {
-	key := strings.TrimSpace(strings.Join(args, " "))
+	key, byUser := p.parseKeyArgs(args)
 	if key == "" {
 		p.reply(ctx, "501", "Usage: SITE REQDEL <number|request>")
+		return true
+	}
+	if byUser != "" && !p.canProxyUser(ctx) {
+		p.reply(ctx, "550", "Permission denied: -by is only available to configured request proxy users.")
 		return true
 	}
 	entries := p.loadRequests()
@@ -231,6 +244,15 @@ func (p *Plugin) handleReqDel(ctx plugin.SiteContext, args []string) bool {
 		return true
 	}
 	entry := entries[idx]
+	if byUser != "" {
+		if !strings.EqualFold(entry.By, byUser) {
+			p.reply(ctx, "550", fmt.Sprintf("Permission denied: request belongs to %s.", entry.By))
+			return true
+		}
+	} else if !strings.EqualFold(entry.By, ctx.UserName()) && !p.canReqWipe(ctx) {
+		p.reply(ctx, "550", fmt.Sprintf("Permission denied: request belongs to %s.", entry.By))
+		return true
+	}
 	if p.requestHead != "" && p.dirExists(p.requestDir(entry.Release)) {
 		_ = p.svc.Bridge.DeleteFile(p.requestDir(entry.Release))
 	}
@@ -323,6 +345,23 @@ func (p *Plugin) parseRequestArgs(args []string) (string, string, string, string
 		return "", forUser, byUser, "Only use alphabetical characters please."
 	}
 	return release, forUser, byUser, ""
+}
+
+func (p *Plugin) parseKeyArgs(args []string) (string, string) {
+	var keyParts []string
+	byUser := ""
+	for _, arg := range args {
+		arg = strings.TrimSpace(arg)
+		if arg == "" {
+			continue
+		}
+		if strings.HasPrefix(strings.ToLower(arg), "-by:") {
+			byUser = strings.TrimSpace(arg[4:])
+			continue
+		}
+		keyParts = append(keyParts, arg)
+	}
+	return strings.TrimSpace(strings.Join(keyParts, " ")), byUser
 }
 
 func (p *Plugin) loadRequests() []requestEntry {
@@ -489,6 +528,18 @@ func (p *Plugin) canReqWipe(ctx plugin.SiteContext) bool {
 	return false
 }
 
+func (p *Plugin) canProxyUser(ctx plugin.SiteContext) bool {
+	if len(p.proxyUsers) == 0 || ctx == nil {
+		return false
+	}
+	for _, user := range p.proxyUsers {
+		if strings.EqualFold(strings.TrimSpace(user), ctx.UserName()) {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *Plugin) reply(ctx plugin.SiteContext, code, line string) {
 	ctx.Reply("%s %s\r\n", code, line)
 }
@@ -571,4 +622,34 @@ func boolConfig(raw interface{}) (bool, bool) {
 		}
 	}
 	return false, false
+}
+
+func toStringSlice(raw interface{}) []string {
+	switch v := raw.(type) {
+	case []string:
+		return compactStrings(v)
+	case []interface{}:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return compactStrings(out)
+	case string:
+		return compactStrings(strings.Split(v, ","))
+	default:
+		return nil
+	}
+}
+
+func compactStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
 }
