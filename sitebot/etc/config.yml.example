@@ -430,9 +430,38 @@ plugins:
       # the staff channel is fully trusted and the FTP user is intentionally
       # allowed to run every SITE admin command.
       allowed_commands:
-        - ADDAFFIL
-        - DELAFFIL
+        # Info
+        - HELP
+        - RULES
+        - WHO
+        # Users / groups
+        - ADDUSER
+        - DELUSER
+        - CHPASS
+        - ADDIP
+        - DELIP
+        - FLAGS
+        - CHGRP
+        - CHPGRP
+        - GADMIN
+        - GRPADD
+        - GRPDEL
+        - INVITE
+        # Release / admin
         - NUKE
         - UNNUKE
+        - REHASH
+        # Misc / lookup
+        - RACE
+        - SEARCH
+        - RESCAN
+        - CHMOD
+        - XDUPE
+        - GRP
+        # PRE plugin SITE commands
+        - PRE
+        - ADDAFFIL
+        - DELAFFIL
+        - AFFILS
       # reply_target supports "channel", "notice", or a fixed "#channel".
       reply_target: "channel"

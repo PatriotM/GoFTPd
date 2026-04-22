@@ -42,12 +42,7 @@ func New() *Plugin {
 		timeout:       10 * time.Second,
 		replyTarget:   "channel",
 		staffChannels: []string{"#goftpd-staff"},
-		allowed: map[string]bool{
-			"ADDAFFIL": true,
-			"DELAFFIL": true,
-			"NUKE":     true,
-			"UNNUKE":   true,
-		},
+		allowed:       allowedSet(defaultAllowedCommands()),
 	}
 }
 
@@ -319,14 +314,42 @@ func allowedSet(commands []string) map[string]bool {
 		}
 	}
 	if len(out) == 0 {
-		return map[string]bool{
-			"ADDAFFIL": true,
-			"DELAFFIL": true,
-			"NUKE":     true,
-			"UNNUKE":   true,
-		}
+		return allowedSet(defaultAllowedCommands())
 	}
 	return out
+}
+
+func defaultAllowedCommands() []string {
+	return []string{
+		"HELP",
+		"RULES",
+		"WHO",
+		"ADDUSER",
+		"DELUSER",
+		"CHPASS",
+		"ADDIP",
+		"DELIP",
+		"FLAGS",
+		"CHGRP",
+		"CHPGRP",
+		"GADMIN",
+		"GRPADD",
+		"GRPDEL",
+		"INVITE",
+		"NUKE",
+		"UNNUKE",
+		"REHASH",
+		"RACE",
+		"SEARCH",
+		"RESCAN",
+		"CHMOD",
+		"XDUPE",
+		"GRP",
+		"PRE",
+		"ADDAFFIL",
+		"DELAFFIL",
+		"AFFILS",
+	}
 }
 
 func (p *Plugin) allowedCommand(command string) bool {
