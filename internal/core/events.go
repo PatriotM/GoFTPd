@@ -356,8 +356,8 @@ func emitRaceEnd(s *Session, users []VFSRaceUser, totalBytes int64, total int, x
 	var raceDurationMs int64
 	if s.Config.Mode == "master" && s.MasterManager != nil {
 		if bridge, ok := s.MasterManager.(MasterBridge); ok {
-			if sec := bridge.GetRaceWallClockSeconds(s.CurrentDir); sec > 0 {
-				raceDurationMs = sec * 1000
+			if ms := bridge.GetRaceWallClockMilliseconds(s.CurrentDir); ms > 0 {
+				raceDurationMs = ms
 			}
 		}
 	}
@@ -388,7 +388,7 @@ func emitRaceEnd(s *Session, users []VFSRaceUser, totalBytes int64, total int, x
 		"relname":    rel,
 		"t_files":    fmt.Sprintf("%dF", total),
 		"t_mbytes":   fmt.Sprintf("%.0fMB", float64(totalBytes)/1024.0/1024.0),
-		"t_duration": fmt.Sprintf("%ds", max64(1, raceDurationMs/1000)),
+		"t_duration": formatRaceDuration(raceDurationMs),
 		"t_avgspeed": fmt.Sprintf("%.2fMB/s", avgMB),
 		"u_count":    fmt.Sprintf("%d", len(users)),
 	}
@@ -434,6 +434,19 @@ func emitRaceEnd(s *Session, users []VFSRaceUser, totalBytes int64, total int, x
 
 	// Footer
 	s.emitEvent(EventRaceFooter, s.CurrentDir, rel, totalBytes, avgMB, copyMap(common))
+}
+
+func formatRaceDuration(ms int64) string {
+	if ms < 1 {
+		ms = 1
+	}
+	if ms < 1000 {
+		return fmt.Sprintf("%.4fs", float64(ms)/1000.0)
+	}
+	if ms%1000 != 0 {
+		return fmt.Sprintf("%.4fs", float64(ms)/1000.0)
+	}
+	return fmt.Sprintf("%ds", ms/1000)
 }
 
 func userSlowSpeed(u VFSRaceUser) float64 {

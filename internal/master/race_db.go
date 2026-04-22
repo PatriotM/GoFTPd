@@ -464,27 +464,30 @@ func raceDBFileKey(name string) string {
 	return strings.ToLower(name)
 }
 
-// GetRaceWallClockSeconds returns the wall-clock duration of a release race in
-// seconds: from the first recorded file upload (releases.created_at) to the
-// most recent file finish (max release_files.updated_at). Returns 0 if the
-// release isn't known. This is what pzs-ng uses for STATS_SPEED total time —
-// summing per-file durations overcounts when uploads are parallel.
-func (r *RaceDB) GetRaceWallClockSeconds(dirPath string) int64 {
+// GetRaceWallClockMilliseconds returns the wall-clock duration of a release
+// race in milliseconds. SQLite timestamps here are second-granular, so use each
+// file's stored duration_ms to reconstruct the earliest transfer start. This
+// keeps very fast races from being rounded up to 1s.
+func (r *RaceDB) GetRaceWallClockMilliseconds(dirPath string) int64 {
 	if r == nil || r.db == nil {
 		return 0
 	}
-	var start, end sql.NullInt64
+	var startMs, endMs sql.NullInt64
 	err := r.db.QueryRow(`
-        SELECT rel.created_at,
-               COALESCE((SELECT MAX(updated_at) FROM release_files
-                         WHERE release_id = rel.id AND is_present = 1),
-                        rel.created_at)
-        FROM releases rel WHERE rel.path = ?
-    `, dirPath).Scan(&start, &end)
-	if err != nil || !start.Valid || !end.Valid {
+        SELECT
+            COALESCE(MIN(CASE
+                WHEN f.duration_ms > 0 THEN (f.updated_at * 1000) - f.duration_ms
+                ELSE rel.created_at * 1000
+            END), rel.created_at * 1000),
+            COALESCE(MAX(f.updated_at * 1000), rel.created_at * 1000)
+        FROM releases rel
+        LEFT JOIN release_files f ON f.release_id = rel.id AND f.is_present = 1
+        WHERE rel.path = ?
+    `, dirPath).Scan(&startMs, &endMs)
+	if err != nil || !startMs.Valid || !endMs.Valid {
 		return 0
 	}
-	d := end.Int64 - start.Int64
+	d := endMs.Int64 - startMs.Int64
 	if d < 1 {
 		d = 1
 	}

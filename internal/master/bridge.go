@@ -754,13 +754,14 @@ func (b *Bridge) PluginGetVFSRaceStats(dirPath string) ([]plugin.RaceUser, []plu
 	return users, groups, totalBytes, present, total
 }
 
-// GetRaceWallClockSeconds returns wall-clock race duration (first file start
-// to last file end) in seconds. 0 if race db unavailable or dir unknown.
-func (b *Bridge) GetRaceWallClockSeconds(dirPath string) int64 {
+// GetRaceWallClockMilliseconds returns wall-clock race duration (first file
+// start to last file end) in milliseconds. 0 if race db unavailable or dir
+// unknown.
+func (b *Bridge) GetRaceWallClockMilliseconds(dirPath string) int64 {
 	if b.raceDB == nil {
 		return 0
 	}
-	return b.raceDB.GetRaceWallClockSeconds(filepath.Clean(dirPath))
+	return b.raceDB.GetRaceWallClockMilliseconds(filepath.Clean(dirPath))
 }
 
 // GetSFVData returns cached SFV entries for a directory.

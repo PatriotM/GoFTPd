@@ -71,10 +71,11 @@ type MasterBridge interface {
 	// GetVFSRaceStats returns race statistics computed from VFS metadata.
 	GetVFSRaceStats(dirPath string) (users []VFSRaceUser, groups []VFSRaceGroup, totalBytes int64, present int, total int)
 
-	// GetRaceWallClockSeconds returns the wall-clock race duration (first file
-	// start to last file end) in seconds. Used for accurate aggregate speed in
-	// STATS — summing per-file durations overcounts when uploads run in parallel.
-	GetRaceWallClockSeconds(dirPath string) int64
+	// GetRaceWallClockMilliseconds returns the wall-clock race duration (first
+	// file start to last file end) in milliseconds. Used for accurate aggregate
+	// speed in STATS — summing per-file durations overcounts when uploads run
+	// in parallel.
+	GetRaceWallClockMilliseconds(dirPath string) int64
 
 	// GetSFVData returns cached SFV entries for a directory (filename->CRC32 map).
 	// Returns nil if no SFV is cached for this directory.
