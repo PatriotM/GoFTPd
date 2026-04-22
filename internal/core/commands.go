@@ -1678,11 +1678,11 @@ func currentRaceSpeedMB(dirPath string, totalBytes int64, bridge MasterBridge) f
 	if bridge == nil || totalBytes <= 0 {
 		return 0
 	}
-	sec := bridge.GetRaceWallClockSeconds(dirPath)
-	if sec <= 0 {
+	ms := bridge.GetRaceWallClockMilliseconds(dirPath)
+	if ms <= 0 {
 		return 0
 	}
-	return (float64(totalBytes) / 1024.0 / 1024.0) / float64(sec)
+	return (float64(totalBytes) / 1024.0 / 1024.0) / (float64(ms) / 1000.0)
 }
 
 func estimateRaceTimeLeft(dirPath string, totalBytes int64, present, total int, bridge MasterBridge) string {
