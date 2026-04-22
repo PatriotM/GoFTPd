@@ -401,3 +401,9 @@ plugins:
       # reply_target supports "channel", "notice", or a fixed "#channel".
       reply_target: "channel"
       show_predirs: false
+      # IRC commands:
+      #   !affils
+      #   !addaffil <group> [predir]   # updates this affils file only
+      #   !delaffil <group>            # leaves existing predir on disk
+      # Use FTP SITE ADDAFFIL/DELAFFIL when you also want permissions/group
+      # files updated by the daemon.

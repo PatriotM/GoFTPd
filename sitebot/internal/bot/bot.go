@@ -153,7 +153,7 @@ func (b *Bot) initializePlugins() error {
 	}
 	if enabled, ok := b.Config.Plugins.Enabled["Affils"]; ok && enabled {
 		affils := affilsplugin.New()
-		cfg := map[string]interface{}{"debug": b.Debug}
+		cfg := map[string]interface{}{"debug": b.Debug, "theme_file": b.Config.Announce.ThemeFile}
 		for k, v := range b.Config.Plugins.Config {
 			cfg[k] = v
 		}
