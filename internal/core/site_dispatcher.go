@@ -33,8 +33,22 @@ func (s *Session) DispatchSiteCommand(args []string) bool {
 		return s.HandleSiteHelp(remainingArgs)
 	case "RULES":
 		return s.HandleSiteRules(remainingArgs)
-	case "WHO":
+	case "WHO", "SWHO":
 		return s.HandleSiteWho(remainingArgs)
+	case "USERS":
+		return s.HandleSiteUsers(remainingArgs)
+	case "USER":
+		return s.HandleSiteUser(remainingArgs)
+	case "SEEN", "LASTON", "LASTLOGIN":
+		return s.HandleSiteSeen(remainingArgs)
+	case "GROUPS":
+		return s.HandleSiteGroups(remainingArgs)
+	case "GROUP", "GINFO":
+		return s.HandleSiteGroup(remainingArgs)
+	case "GRPNFO":
+		return s.HandleSiteGrpNfo(remainingArgs)
+	case "TRAFFIC":
+		return s.HandleSiteTraffic(remainingArgs)
 
 	// Admin / User & Group Management (site_admin.go)
 	case "ADDUSER":
@@ -67,6 +81,12 @@ func (s *Session) DispatchSiteCommand(args []string) bool {
 		return s.HandleSiteNuke(remainingArgs)
 	case "UNNUKE":
 		return s.HandleSiteUnnuke(remainingArgs)
+	case "UNDUPE":
+		return s.HandleSiteUndupe(remainingArgs)
+	case "WIPE":
+		return s.HandleSiteWipe(remainingArgs)
+	case "KICK":
+		return s.HandleSiteKick(remainingArgs)
 	case "REHASH":
 		return s.HandleSiteRehash(remainingArgs)
 
@@ -100,7 +120,9 @@ func (s *Session) DispatchSiteCommand(args []string) bool {
 // commands such as NUKE/UNNUKE; this table protects account/site admin verbs.
 func requiredSiteCommandFlags(command string) string {
 	switch strings.ToUpper(strings.TrimSpace(command)) {
-	case "ADDUSER",
+	case "WHO",
+		"SWHO",
+		"ADDUSER",
 		"DELUSER",
 		"CHPASS",
 		"ADDIP",
@@ -111,6 +133,12 @@ func requiredSiteCommandFlags(command string) string {
 		"GADMIN",
 		"GRPADD",
 		"GRPDEL",
+		"USERS",
+		"GRPNFO",
+		"TRAFFIC",
+		"UNDUPE",
+		"WIPE",
+		"KICK",
 		"CHMOD",
 		"REHASH",
 		"ADDAFFIL",
