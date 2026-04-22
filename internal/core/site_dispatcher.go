@@ -22,6 +22,10 @@ func (s *Session) DispatchSiteCommand(args []string) bool {
 	if s.Config.Debug {
 		log.Printf("[SITE] siteCmd=%q remainingArgs=%q", siteCmd, remainingArgs)
 	}
+	if required := requiredSiteCommandFlags(siteCmd); required != "" && !siteCommandFlagsAllowed(s, required) {
+		fmt.Fprintf(s.Conn, "550 Access denied: SITE %s requires flag(s) %s.\r\n", siteCmd, required)
+		return false
+	}
 
 	switch siteCmd {
 	// Informational Commands (site_info.go)
@@ -89,6 +93,44 @@ func (s *Session) DispatchSiteCommand(args []string) bool {
 		fmt.Fprintf(s.Conn, "504 Unknown SITE command.\r\n")
 	}
 	return false
+}
+
+// requiredSiteCommandFlags is the daemon-side equivalent of glftpd's
+// -addip/-deluser/etc command restrictions. Path ACLs still handle release
+// commands such as NUKE/UNNUKE; this table protects account/site admin verbs.
+func requiredSiteCommandFlags(command string) string {
+	switch strings.ToUpper(strings.TrimSpace(command)) {
+	case "ADDUSER",
+		"DELUSER",
+		"CHPASS",
+		"ADDIP",
+		"DELIP",
+		"FLAGS",
+		"CHGRP",
+		"CHPGRP",
+		"GADMIN",
+		"GRPADD",
+		"GRPDEL",
+		"CHMOD",
+		"REHASH",
+		"ADDAFFIL",
+		"DELAFFIL":
+		return "1"
+	default:
+		return ""
+	}
+}
+
+func siteCommandFlagsAllowed(s *Session, required string) bool {
+	if s == nil || s.User == nil {
+		return false
+	}
+	for _, flag := range strings.Fields(required) {
+		if !s.User.HasFlag(flag) {
+			return false
+		}
+	}
+	return true
 }
 
 type pluginSiteContext struct {
