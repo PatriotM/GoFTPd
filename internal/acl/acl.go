@@ -145,25 +145,32 @@ func checkRequired(required string, u *user.User) bool {
 		return true
 	}
 
-	// Single flag like "1" or "A", or multiple flags like "1 A".
-	if !strings.Contains(required, "=") {
-		return hasAllFlags(u, strings.Fields(required))
+	var flags []string
+	var groups []string
+	for _, token := range strings.Fields(required) {
+		token = strings.TrimSpace(token)
+		if token == "" {
+			continue
+		}
+		if strings.HasPrefix(token, "=") {
+			group := strings.TrimSpace(strings.TrimPrefix(token, "="))
+			if group != "" {
+				groups = append(groups, group)
+			}
+			continue
+		}
+		flags = append(flags, token)
 	}
 
-	// Group check like "1 =SiteOP" or "A =NUKERS"
-	if strings.Contains(required, "=") {
-		parts := strings.Split(required, "=")
-		if len(parts) == 2 {
-			flagPart := strings.TrimSpace(parts[0])
-			groupName := strings.TrimSpace(parts[1])
-
-			// If flagPart is empty, just check group: "=Admin"
-			if flagPart == "" {
-				return u.IsInGroup(groupName)
-			}
-
-			// Otherwise check flag(s) AND group: "1 =SiteOP" or "1 A =NUKERS"
-			return hasAllFlags(u, strings.Fields(flagPart)) && u.IsInGroup(groupName)
+	if !hasAllFlags(u, flags) {
+		return false
+	}
+	if len(groups) == 0 {
+		return true
+	}
+	for _, group := range groups {
+		if u.IsInGroup(group) {
+			return true
 		}
 	}
 

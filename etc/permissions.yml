@@ -19,8 +19,10 @@
 #   "1"           user must have flag 1
 #   "A"           user must have flag A
 #   "=Admin"      user must be a member of group Admin
+#   "=GRP =SiteOP" user must be in group GRP OR group SiteOP
 #   "1 =SiteOP"   user must have flag 1 AND be in group SiteOP
 #   "1 A =NUKERS" user must have flags 1 and A AND be in group NUKERS
+#   "1 =GRP =SiteOP" user must have flag 1 AND be in GRP OR SiteOP
 #
 # rule types used here:
 #   privpath      hides/blocks paths unless the user matches required
@@ -41,7 +43,9 @@
 #
 rules:
   # ---------------------------------------------------------------------------
-  # Private paths: only flag-1 SiteOP users may enter or see these areas.
+  # Private paths: only matching users may enter or see these areas.
+  # Affil PRE dirs should only need one glftpd-style line:
+  #   privpath /site/PRE/GROUP =GROUP =SiteOP
   # ---------------------------------------------------------------------------
   - type: privpath
     path: /site/LINKS
