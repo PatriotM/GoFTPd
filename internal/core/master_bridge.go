@@ -86,11 +86,13 @@ type MasterBridge interface {
 	// Passthrough PORT: tell slave to connect out to remote address and receive file
 	SlaveConnectAndReceive(filePath, remoteAddr, owner, group string) (int64, uint32, int64, error)
 
-	// Passthrough: ask a slave to listen and return its IP:port + transfer index
-	SlaveListenForPassthrough(uploadPath string, encrypted bool) (slaveIP string, port int, transferIdx int32, slaveName string, err error)
+	// Passthrough: ask a slave to listen and return its IP:port + transfer index.
+	// sslClientMode selects the TLS role for secure FXP passive sockets.
+	SlaveListenForPassthrough(uploadPath string, encrypted bool, sslClientMode bool) (slaveIP string, port int, transferIdx int32, slaveName string, err error)
 
-	// Passthrough: ask the slave that owns filePath to listen for a download
-	SlaveListenForDownloadPassthrough(filePath string, encrypted bool) (slaveIP string, port int, transferIdx int32, slaveName string, err error)
+	// Passthrough: ask the slave that owns filePath to listen for a download.
+	// sslClientMode selects the TLS role for secure FXP passive sockets.
+	SlaveListenForDownloadPassthrough(filePath string, encrypted bool, sslClientMode bool) (slaveIP string, port int, transferIdx int32, slaveName string, err error)
 
 	// Passthrough: tell slave to receive a file, wait for completion, return size/checksum
 	SlaveReceivePassthrough(filePath string, transferIdx int32, slaveName string, owner, group string) (int64, uint32, int64, error)

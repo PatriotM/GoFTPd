@@ -790,13 +790,13 @@ func (b *Bridge) SearchDirs(query string, limit int) []core.VFSSearchResult {
 // uploadPath may be empty if the eventual upload path is not yet known (pure PASV);
 // pass it when possible so section-affinity routing picks the right slave.
 // Returns the slave's public IP, the port it's listening on, and the transfer index.
-func (b *Bridge) SlaveListenForPassthrough(uploadPath string, encrypted bool) (string, int, int32, string, error) {
+func (b *Bridge) SlaveListenForPassthrough(uploadPath string, encrypted bool, sslClientMode bool) (string, int, int32, string, error) {
 	slave := b.sm.SelectSlaveForUpload(uploadPath)
 	if slave == nil {
 		return "", 0, 0, "", fmt.Errorf("no available slave")
 	}
 
-	listenIdx, err := IssueListen(slave, encrypted, false)
+	listenIdx, err := IssueListen(slave, encrypted, sslClientMode)
 	if err != nil {
 		return "", 0, 0, "", fmt.Errorf("issue listen to %s: %w", slave.Name(), err)
 	}
@@ -816,13 +816,13 @@ func (b *Bridge) SlaveListenForPassthrough(uploadPath string, encrypted bool) (s
 
 // SlaveListenForDownloadPassthrough asks the slave that owns filePath to open
 // a listener for direct client download.
-func (b *Bridge) SlaveListenForDownloadPassthrough(filePath string, encrypted bool) (string, int, int32, string, error) {
+func (b *Bridge) SlaveListenForDownloadPassthrough(filePath string, encrypted bool, sslClientMode bool) (string, int, int32, string, error) {
 	slave := b.sm.SelectSlaveForDownload(filePath)
 	if slave == nil {
 		return "", 0, 0, "", fmt.Errorf("file not found on any available slave: %s", filePath)
 	}
 
-	listenIdx, err := IssueListen(slave, encrypted, false)
+	listenIdx, err := IssueListen(slave, encrypted, sslClientMode)
 	if err != nil {
 		return "", 0, 0, "", fmt.Errorf("issue listen to %s: %w", slave.Name(), err)
 	}
