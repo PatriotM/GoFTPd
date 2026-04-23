@@ -72,7 +72,7 @@ Main files:
 | `etc/groups/` | Group records |
 | `etc/groups/default.group` | Template for newly created groups |
 | `etc/affils.yml` | Shared affil PRE config |
-| `etc/msgs/` | Text shown by SITE HELP/RULES and login/logout messages |
+| `etc/msgs/` | Text shown by SITE RULES and login/logout messages |
 | `sitebot/etc/config.yml` | Active sitebot config |
 | `sitebot/etc/config.yml.example` | Annotated sitebot example |
 | `sitebot/etc/templates/pzsng.theme` | Sitebot theme templates |
