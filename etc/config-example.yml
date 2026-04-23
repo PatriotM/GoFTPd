@@ -248,7 +248,7 @@ zipscript:
     on_complete:
       enabled: false           # run an external command after a release completes
       command: "/usr/bin/python3"
-      args: ["/glftpd/bin/on_complete.py"]
+      args: ["/goftpd/bin/on_complete.py"]
       timeout_seconds: 30
       extra_env:
         EXAMPLE: "1"
@@ -267,7 +267,7 @@ zipscript:
       # plus GOFTPD_<KEY> for zipscript race vars such as T_MBYTES/T_FILES/etc.
 
   sfv:
-    force_first: false         # require the .sfv before other payload files
+    force_first: false         # pzs-ng style: allow payload before .sfv; the release is checked once the .sfv lands
     deny_double_sfv: true      # reject a second .sfv in the same release dir
     delete_bad_crc: true       # delete uploaded files that fail SFV CRC
     ignore_zero_size: true     # delete zero-byte uploads instead of keeping them

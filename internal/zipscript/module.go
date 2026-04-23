@@ -167,11 +167,9 @@ func ValidateUpload(cfg Config, dirPath, fileName string, existingNames []string
 		}
 		return nil
 	}
-	hasSFV := false
 	inSFV := false
 	for _, name := range existingNames {
 		if strings.HasSuffix(strings.ToLower(strings.TrimSpace(name)), ".sfv") {
-			hasSFV = true
 			if isSFV && cfg.SFV.DenyDoubleSFV {
 				return errors.New("zipscript: .sfv already exists in this release")
 			}
@@ -179,10 +177,6 @@ func ValidateUpload(cfg Config, dirPath, fileName string, existingNames []string
 		if raceEntryKey(name) == raceEntryKey(fileName) {
 			inSFV = true
 		}
-	}
-
-	if cfg.SFV.ForceFirst && !hasSFV && !isSFV && !IsIgnoredType(cfg, fileName) {
-		return errors.New("zipscript: upload the .sfv first")
 	}
 
 	if !inSFV && !IsAllowedTypeForDir(cfg, dirPath, fileName) {
