@@ -70,6 +70,37 @@ func UsesCleanup(cfg Config, dirPath string) bool {
 	return UsesReleaseCheck(cfg, dirPath)
 }
 
+func AnnounceReleaseSubdirs(cfg Config) bool {
+	if cfg.Race.AnnounceSubdirs == nil {
+		return true
+	}
+	return *cfg.Race.AnnounceSubdirs
+}
+
+func IsIgnoredReleaseSubdir(cfg Config, dirPath string) bool {
+	name := strings.TrimSpace(path.Base(path.Clean(dirPath)))
+	if name == "" || name == "." || name == "/" {
+		return false
+	}
+	items := cfg.Sections.IgnoredReleaseSubdirs
+	if len(items) == 0 {
+		items = []string{"Sample", "Proof", "Subs", "Subtitles", "Covers"}
+	}
+	for _, item := range items {
+		if strings.EqualFold(strings.TrimSpace(item), name) {
+			return true
+		}
+	}
+	return false
+}
+
+func ReleaseSubdirLabel(cfg Config, dirPath string) string {
+	if !IsIgnoredReleaseSubdir(cfg, dirPath) {
+		return ""
+	}
+	return strings.TrimSpace(path.Base(path.Clean(dirPath)))
+}
+
 func IncompleteEnabled(cfg Config) bool {
 	return cfg.Enabled && cfg.Incomplete.Enabled
 }
@@ -237,6 +268,9 @@ func CanTriggerRaceEnd(cfg Config, sfvEntries map[string]uint32, fileName string
 }
 
 func CanTriggerRaceEndForDir(cfg Config, dirPath string, sfvEntries map[string]uint32, fileName string) bool {
+	if dirPath != "" && IsIgnoredReleaseSubdir(cfg, dirPath) && !AnnounceReleaseSubdirs(cfg) {
+		return false
+	}
 	if dirPath != "" && !RaceEnabled(cfg, dirPath) {
 		return false
 	}

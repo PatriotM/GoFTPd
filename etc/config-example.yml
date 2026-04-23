@@ -241,6 +241,7 @@ zipscript:
     complete_banner: true      # show [SITE] - ( ... COMPLETE ... ) - [SITE]
     music_complete_genre: true # add genre/year on MP3/FLAC COMPLETE banner
     announce_norace: true      # emit COMPLETE for first payload in non-SFV dirs too
+    announce_subdirs: true     # announce helper release subdirs like Sample, Proof, and Subs; set false to suppress them entirely
 
   sfv:
     force_first: false         # require the .sfv before other payload files
@@ -302,6 +303,7 @@ zipscript:
       - "/LINKS/*"
       - "/PRE/*"
       - "/REQUESTS/*"
+    ignored_release_subdirs: ["Sample", "Proof", "Subs", "Subtitles", "Covers"] # helper dirs inside a release that should not get NEW/RACE/COMPLETE or marker handling
     # release_check controls where the stricter "this should end up as a proper
     # complete release" behavior applies:
     #   - incomplete markers

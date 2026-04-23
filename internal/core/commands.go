@@ -1170,6 +1170,13 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					speedMB = (float64(fileSize) / 1024.0 / 1024.0) / (float64(xferMs) / 1000.0)
 				}
 				data := map[string]string{}
+				if subdir := zipscript.ReleaseSubdirLabel(s.Config.Zipscript, s.CurrentDir); subdir != "" {
+					data["release_subdir"] = subdir
+					data["release_name"] = path.Base(path.Dir(s.CurrentDir))
+					if !zipscript.AnnounceReleaseSubdirs(s.Config.Zipscript) {
+						data["skip_release_announce"] = "true"
+					}
+				}
 				if strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
 					if sfvEntries := bridge.GetSFVData(s.CurrentDir); sfvEntries != nil {
 						data["t_filecount"] = fmt.Sprintf("%d", len(sfvEntries))
@@ -1327,6 +1334,13 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					speedMB = (float64(fileSize) / 1024.0 / 1024.0) / (float64(xferMs) / 1000.0)
 				}
 				data := map[string]string{}
+				if subdir := zipscript.ReleaseSubdirLabel(s.Config.Zipscript, s.CurrentDir); subdir != "" {
+					data["release_subdir"] = subdir
+					data["release_name"] = path.Base(path.Dir(s.CurrentDir))
+					if !zipscript.AnnounceReleaseSubdirs(s.Config.Zipscript) {
+						data["skip_release_announce"] = "true"
+					}
+				}
 				if strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
 					if sfvEntries := bridge.GetSFVData(s.CurrentDir); sfvEntries != nil {
 						data["t_filecount"] = fmt.Sprintf("%d", len(sfvEntries))
@@ -1680,6 +1694,9 @@ func incompleteMarkerEntries(bridge MasterBridge, cfg *Config, pattern, dirPath 
 			continue
 		}
 		releasePath := path.Join(dirPath, e.Name)
+		if zipscript.IsIgnoredReleaseSubdir(cfg.Zipscript, releasePath) {
+			continue
+		}
 		_, _, _, present, total := bridge.GetVFSRaceStats(releasePath)
 		emptyDir := false
 		if total <= 0 {
@@ -2001,6 +2018,9 @@ func ensureDirPath(bridge MasterBridge, dirPath string) error {
 
 func shouldAnnounceNoRace(cfg *Config, dirPath string, existingNames []string, fileName string) bool {
 	if cfg == nil || !cfg.Zipscript.Enabled || !cfg.Zipscript.Race.AnnounceNoRace {
+		return false
+	}
+	if zipscript.IsIgnoredReleaseSubdir(cfg.Zipscript, dirPath) && !zipscript.AnnounceReleaseSubdirs(cfg.Zipscript) {
 		return false
 	}
 	if zipscript.UsesSFV(cfg.Zipscript, dirPath) || zipscript.IsIgnoredType(cfg.Zipscript, fileName) {

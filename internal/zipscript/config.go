@@ -23,6 +23,7 @@ type SectionsConfig struct {
 	SFV               []string `yaml:"sfv"`
 	NoCheck           []string `yaml:"nocheck"`
 	ReleaseCheck      []string `yaml:"release_check"`
+	IgnoredReleaseSubdirs []string `yaml:"ignored_release_subdirs"`
 	LegacyCleanupPath []string `yaml:"cleanup"`
 }
 
@@ -33,6 +34,7 @@ type RaceConfig struct {
 	CompleteBanner     bool `yaml:"complete_banner"`
 	MusicCompleteGenre bool `yaml:"music_complete_genre"`
 	AnnounceNoRace     bool `yaml:"announce_norace"`
+	AnnounceSubdirs    *bool `yaml:"announce_subdirs"`
 }
 
 type SFVConfig struct {

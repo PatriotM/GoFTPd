@@ -53,6 +53,9 @@ func (p *AnnouncePlugin) Initialize(config map[string]interface{}) error {
 func (p *AnnouncePlugin) Close() error { return nil }
 
 func releaseName(evt *event.Event) string {
+	if rel := strings.TrimSpace(evt.Data["release_name"]); rel != "" {
+		return rel
+	}
 	if evt.Path == "" {
 		return evt.Filename
 	}
@@ -70,6 +73,15 @@ func releaseName(evt *event.Event) string {
 	}
 	return base
 }
+
+func releaseStateKey(evt *event.Event) string {
+	rel := releaseName(evt)
+	if subdir := strings.TrimSpace(evt.Data["release_subdir"]); subdir != "" {
+		return rel + "|" + subdir
+	}
+	return rel
+}
+
 func classifyFile(name string) string {
 	l := strings.ToLower(name)
 	switch {
@@ -123,6 +135,13 @@ func (p *AnnouncePlugin) vars(evt *event.Event) map[string]string {
 	}
 	if v["reldir"] == "" {
 		v["reldir"] = v["relname"]
+	}
+	if subdir := strings.TrimSpace(evt.Data["release_subdir"]); subdir != "" {
+		v["release_subdir"] = subdir
+		v["subdir_prefix"] = "[" + subdir + "] "
+	} else {
+		v["release_subdir"] = ""
+		v["subdir_prefix"] = ""
 	}
 	if v["t_file_label"] == "" {
 		v["t_file_label"] = "file(s)"
@@ -180,10 +199,11 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 	if rel == "." || rel == "/" || rel == "" {
 		rel = evt.Filename
 	}
-	st := p.state[rel]
+	stateKey := releaseStateKey(evt)
+	st := p.state[stateKey]
 	if st == nil {
 		st = &releaseState{Users: map[string]bool{}, LastSeen: time.Now()}
-		p.state[rel] = st
+		p.state[stateKey] = st
 	}
 	st.LastSeen = time.Now()
 	vars := p.vars(evt)
@@ -194,6 +214,7 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 	}
 	fileType := classifyFile(strings.ToLower(evt.Path))
 	outs := []plugin.Output{}
+	skipReleaseAnnounce := strings.EqualFold(strings.TrimSpace(evt.Data["skip_release_announce"]), "true")
 
 	switch evt.Type {
 	case event.EventNewDay:
@@ -230,20 +251,26 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 		fallback := fmt.Sprintf("SPEEDTEST: %s %s a %sMB file with %s", nick, action, sizeMB, speed)
 		outs = append(outs, plugin.Output{Type: "SPEEDTEST", Text: p.render("SPEEDTEST", vars, fallback)})
 	case event.EventMKDir:
+		if skipReleaseAnnounce {
+			return nil, nil
+		}
 		if isReleaseDir(evt.Path, section) {
 			if !st.Created {
 				st.Created = true
-				outs = append(outs, plugin.Output{Type: "NEW", Text: p.render("NEWDIR", vars, fmt.Sprintf("NEW : [%s] %s by %s", section, rel, evt.User))})
+				outs = append(outs, plugin.Output{Type: "NEW", Text: p.render("NEWDIR", vars, fmt.Sprintf("NEW : [%s] %s%s by %s", section, vars["subdir_prefix"], rel, evt.User))})
 			}
 		}
 	case event.EventUpload:
+		if skipReleaseAnnounce {
+			return nil, nil
+		}
 		switch fileType {
 		case "nfo", "sample":
 			return nil, nil
 		case "sfv":
 			if !st.HasSFV {
 				st.HasSFV = true
-				outs = append(outs, plugin.Output{Type: "RACE", Text: p.render("SFV_RAR", vars, fmt.Sprintf("RACE: [%s] Got SFV for %s uploaded by %s.", section, rel, evt.User))})
+				outs = append(outs, plugin.Output{Type: "RACE", Text: p.render("SFV_RAR", vars, fmt.Sprintf("RACE: [%s] Got SFV for %s%s uploaded by %s.", section, vars["subdir_prefix"], rel, evt.User))})
 			}
 		case "rar", "audio":
 			if evt.User != "" && !st.Users[evt.User] {
@@ -251,10 +278,10 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 				if !st.FirstRar {
 					st.FirstRar = true
 					key := "UPDATE_RAR"
-					fallback := fmt.Sprintf("RACE: [%s] %s got its first rar file from %s at %s.", section, rel, evt.User, speedMB(evt))
+					fallback := fmt.Sprintf("RACE: [%s] %s%s got its first rar file from %s at %s.", section, vars["subdir_prefix"], rel, evt.User, speedMB(evt))
 					if fileType == "audio" {
 						key = "UPDATE_TRACK"
-						fallback = fmt.Sprintf("RACE: [%s] %s got first track from %s at %s.", section, rel, evt.User, speedMB(evt))
+						fallback = fmt.Sprintf("RACE: [%s] %s%s got first track from %s at %s.", section, vars["subdir_prefix"], rel, evt.User, speedMB(evt))
 					}
 					if strings.TrimSpace(vars["t_mbytes"]) == "" {
 						key = "UPDATE_RAR_UNKNOWN"
@@ -264,13 +291,13 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 					}
 					outs = append(outs, plugin.Output{Type: "RACE", Text: p.render(key, vars, fallback)})
 				} else {
-					outs = append(outs, plugin.Output{Type: "RACE", Text: p.render("RACE_RAR", vars, fmt.Sprintf("RACE: [%s] %s - %s joined the race at %s.", section, rel, evt.User, speedMB(evt)))})
+					outs = append(outs, plugin.Output{Type: "RACE", Text: p.render("RACE_RAR", vars, fmt.Sprintf("RACE: [%s] %s%s - %s joined the race at %s.", section, vars["subdir_prefix"], rel, evt.User, speedMB(evt)))})
 				}
 			}
 			// NEW LEADER: announce when the leading user changes (skip single-user races)
 			if leader := vars["leader_name"]; leader != "" && leader != st.CurrentLeader && len(st.Users) > 1 {
 				if st.CurrentLeader != "" {
-					outs = append(outs, plugin.Output{Type: "RACE", Text: p.render("NEWLEADER", vars, fmt.Sprintf("NEW LEADER: [%s] %s - %s takes the lead - %sMB/%sF/%s%%/%s", section, rel, leader, vars["leader_mb"], vars["leader_files"], vars["leader_pct"], vars["leader_speed"]))})
+					outs = append(outs, plugin.Output{Type: "RACE", Text: p.render("NEWLEADER", vars, fmt.Sprintf("NEW LEADER: [%s] %s%s - %s takes the lead - %sMB/%sF/%s%%/%s", section, vars["subdir_prefix"], rel, leader, vars["leader_mb"], vars["leader_files"], vars["leader_pct"], vars["leader_speed"]))})
 				}
 				st.CurrentLeader = leader
 			}
@@ -292,14 +319,20 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 						if vars["t_avgspeed"] == "" {
 							vars["t_avgspeed"] = "0.00MB/s"
 						}
-						outs = append(outs, plugin.Output{Type: "RACE", Text: p.render("HALFWAY", vars, fmt.Sprintf("HALFWAY: [%s] %s - leader: %s [%sMB/%sF/%s%%/%s] - %d files left.", section, rel, vars["leader_name"], vars["leader_mb"], vars["leader_files"], vars["leader_pct"], vars["leader_speed"], left))})
+						outs = append(outs, plugin.Output{Type: "RACE", Text: p.render("HALFWAY", vars, fmt.Sprintf("HALFWAY: [%s] %s%s - leader: %s [%sMB/%sF/%s%%/%s] - %d files left.", section, vars["subdir_prefix"], rel, vars["leader_name"], vars["leader_mb"], vars["leader_files"], vars["leader_pct"], vars["leader_speed"], left))})
 					}
 				}
 			}
 		}
 	case event.EventRaceEnd:
-		outs = append(outs, plugin.Output{Type: "COMPLETE", Text: p.render("COMPLETE", vars, fmt.Sprintf("COMPLETE: [%s] %s by %s racers - %s/%s/%s/%s", section, rel, vars["u_count"], vars["t_mbytes"], vars["t_files"], vars["t_avgspeed"], vars["t_duration"]))})
+		if skipReleaseAnnounce {
+			return nil, nil
+		}
+		outs = append(outs, plugin.Output{Type: "COMPLETE", Text: p.render("COMPLETE", vars, fmt.Sprintf("COMPLETE: [%s] %s%s by %s racers - %s/%s/%s/%s", section, vars["subdir_prefix"], rel, vars["u_count"], vars["t_mbytes"], vars["t_files"], vars["t_avgspeed"], vars["t_duration"]))})
 	case event.EventRaceStats:
+		if skipReleaseAnnounce {
+			return nil, nil
+		}
 		if line := strings.TrimSpace(p.render("STATS_HOF", vars, "STATS: Users Hall Of Fame")); line != "" {
 			outs = append(outs, plugin.Output{Type: "STATS", Text: line})
 		}
@@ -307,6 +340,9 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 			outs = append(outs, plugin.Output{Type: "STATS", Text: line})
 		}
 	case event.EventRaceUser:
+		if skipReleaseAnnounce {
+			return nil, nil
+		}
 		perVars := map[string]string{}
 		for k, v := range vars {
 			perVars[k] = v
@@ -322,6 +358,9 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 			outs = append(outs, plugin.Output{Type: "STATS", Text: line})
 		}
 	case event.EventRaceFooter:
+		if skipReleaseAnnounce {
+			return nil, nil
+		}
 		if line := p.render("STATS_END", vars, "STATS: -----------====>>>>           END          <<<<====-----------"); strings.TrimSpace(line) != "" {
 			outs = append(outs, plugin.Output{Type: "STATS", Text: line})
 			outs = append(outs, plugin.Output{Type: "STATS", Text: "\u00a0"})
