@@ -93,6 +93,8 @@ func classifyFile(name string) string {
 		return "sample"
 	case isAudioFile(l):
 		return "audio"
+	case isZipFile(l):
+		return "zip"
 	case regexpRAR(l):
 		return "rar"
 	default:
@@ -110,6 +112,9 @@ func regexpRAR(name string) bool {
 		return name[len(name)-2] >= '0' && name[len(name)-2] <= '9' && name[len(name)-1] >= '0' && name[len(name)-1] <= '9'
 	}
 	return false
+}
+func isZipFile(name string) bool {
+	return strings.HasSuffix(name, ".zip")
 }
 func speedMB(evt *event.Event) string { return fmt.Sprintf("%.2fMB/s", evt.Speed) }
 func mb(size int64) string            { return fmt.Sprintf("%.0fMB", float64(size)/1024.0/1024.0) }
@@ -272,7 +277,7 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 				st.HasSFV = true
 				outs = append(outs, plugin.Output{Type: "RACE", Text: p.render("SFV_RAR", vars, fmt.Sprintf("RACE: [%s] Got SFV for %s%s uploaded by %s.", section, vars["subdir_prefix"], rel, evt.User))})
 			}
-		case "rar", "audio":
+		case "rar", "audio", "zip":
 			if evt.User != "" && !st.Users[evt.User] {
 				st.Users[evt.User] = true
 				if !st.FirstRar {
@@ -282,11 +287,16 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 					if fileType == "audio" {
 						key = "UPDATE_TRACK"
 						fallback = fmt.Sprintf("RACE: [%s] %s%s got first track from %s at %s.", section, vars["subdir_prefix"], rel, evt.User, speedMB(evt))
+					} else if fileType == "zip" {
+						key = "UPDATE_ZIP"
+						fallback = fmt.Sprintf("RACE: [%s] %s%s got its first zip file from %s at %s.", section, vars["subdir_prefix"], rel, evt.User, speedMB(evt))
 					}
 					if strings.TrimSpace(vars["t_mbytes"]) == "" {
 						key = "UPDATE_RAR_UNKNOWN"
 						if fileType == "audio" {
 							key = "UPDATE_TRACK"
+						} else if fileType == "zip" {
+							key = "UPDATE_ZIP"
 						}
 					}
 					outs = append(outs, plugin.Output{Type: "RACE", Text: p.render(key, vars, fallback)})

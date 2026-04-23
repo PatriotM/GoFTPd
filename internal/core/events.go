@@ -449,6 +449,23 @@ func emitRaceEnd(s *Session, users []VFSRaceUser, totalBytes int64, total int, x
 
 	// Footer
 	s.emitEvent(EventRaceFooter, s.CurrentDir, rel, totalBytes, avgMB, copyMap(common))
+
+	section, sectionRoot := zipscript.SectionInfoFromPath(s.CurrentDir)
+	zipscript.RunOnCompleteHook(s.Config.Zipscript, zipscript.CompleteHookContext{
+		DirPath:       s.CurrentDir,
+		RelName:       rel,
+		ReleaseName:   common["release_name"],
+		ReleaseSubdir: common["release_subdir"],
+		Section:       section,
+		SectionRoot:   sectionRoot,
+		TotalBytes:    totalBytes,
+		TotalFiles:    total,
+		DurationMs:    raceDurationMs,
+		Duration:      common["t_duration"],
+		AvgSpeedMB:    avgMB,
+		UserCount:     len(users),
+		Data:          copyMap(common),
+	})
 }
 
 func (s *Session) eventPathIsPrivate(eventPath string) bool {

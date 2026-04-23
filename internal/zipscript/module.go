@@ -53,6 +53,20 @@ func UsesSFV(cfg Config, dirPath string) bool {
 	return pathMatchesAny(dirPath, cfg.Sections.SFV)
 }
 
+func UsesZip(cfg Config, dirPath string) bool {
+	if !cfg.Enabled {
+		return false
+	}
+	if pathMatchesAny(dirPath, cfg.Sections.NoCheck) {
+		return false
+	}
+	return pathMatchesAny(dirPath, cfg.Sections.Zip)
+}
+
+func UsesRace(cfg Config, dirPath string) bool {
+	return UsesSFV(cfg, dirPath) || UsesZip(cfg, dirPath)
+}
+
 func UsesReleaseCheck(cfg Config, dirPath string) bool {
 	if !cfg.Enabled {
 		return false
@@ -61,7 +75,7 @@ func UsesReleaseCheck(cfg Config, dirPath string) bool {
 		return false
 	}
 	if len(cfg.Sections.ReleaseCheck) == 0 {
-		return UsesSFV(cfg, dirPath)
+		return UsesRace(cfg, dirPath)
 	}
 	return pathMatchesAny(dirPath, cfg.Sections.ReleaseCheck)
 }
@@ -141,12 +155,18 @@ func MarkEmptyDirsOnRescan(cfg Config) bool {
 }
 
 func ValidateUpload(cfg Config, dirPath, fileName string, existingNames []string) error {
-	if !UsesSFV(cfg, dirPath) {
+	if !UsesRace(cfg, dirPath) {
 		return nil
 	}
 
 	lowerName := strings.ToLower(strings.TrimSpace(fileName))
 	isSFV := strings.HasSuffix(lowerName, ".sfv")
+	if UsesZip(cfg, dirPath) {
+		if !IsAllowedTypeForDir(cfg, dirPath, fileName) {
+			return fmt.Errorf("zipscript: file type %q is not allowed here", normalizedExt(fileName))
+		}
+		return nil
+	}
 	hasSFV := false
 	inSFV := false
 	for _, name := range existingNames {
@@ -260,6 +280,9 @@ func IsRacePayloadFileForDir(cfg Config, dirPath, fileName string) bool {
 	if regexp.MustCompile(`(?i)\.(rar|r\d\d)$`).MatchString(name) {
 		return true
 	}
+	if UsesZip(cfg, dirPath) && regexp.MustCompile(`(?i)\.(zip|z\d\d)$`).MatchString(name) {
+		return true
+	}
 	return isMediaInfoFile(name)
 }
 
@@ -278,6 +301,9 @@ func CanTriggerRaceEndForDir(cfg Config, dirPath string, sfvEntries map[string]u
 		return false
 	}
 	name := raceEntryKey(fileName)
+	if UsesZip(cfg, dirPath) {
+		return regexp.MustCompile(`(?i)\.(zip|z\d\d)$`).MatchString(name)
+	}
 	if strings.HasSuffix(name, ".sfv") {
 		return true
 	}
@@ -327,7 +353,7 @@ func ShouldDeleteBadCRC(cfg Config) bool {
 }
 
 func ShouldDeleteZeroByteForDir(cfg Config, dirPath string) bool {
-	if dirPath != "" && !UsesSFV(cfg, dirPath) {
+	if dirPath != "" && !UsesRace(cfg, dirPath) {
 		return false
 	}
 	return cfg.Enabled && cfg.SFV.IgnoreZeroSize
@@ -341,7 +367,7 @@ func ShouldDeleteBadCRCForDir(cfg Config, dirPath string) bool {
 }
 
 func RaceEnabled(cfg Config, dirPath string) bool {
-	return cfg.Enabled && cfg.Race.Enabled && UsesSFV(cfg, dirPath)
+	return cfg.Enabled && cfg.Race.Enabled && UsesRace(cfg, dirPath)
 }
 
 func AudioCheckEnabled(cfg Config, dirPath, fileName string) bool {
