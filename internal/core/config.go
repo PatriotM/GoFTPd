@@ -112,9 +112,9 @@ type Config struct {
 	FreeSpaceMB  int  `yaml:"free_space_mb"`
 
 	// Display
-	DisplaySize         string `yaml:"display_size_unit"`
-	DisplaySpeed        string `yaml:"display_speed_unit"`
-	ColorMode           int    `yaml:"color_mode"`
+	DisplaySize  string `yaml:"display_size_unit"`
+	DisplaySpeed string `yaml:"display_speed_unit"`
+	ColorMode    int    `yaml:"color_mode"`
 	// Nuke
 	NukeMaxMultiplier int              `yaml:"nuke_max_multiplier"`
 	NukeDirStyle      string           `yaml:"nukedir_style"`
@@ -135,9 +135,10 @@ type Config struct {
 	// both stderr and the given file, with daily rotation. Rotated files
 	// (<LogFile>.YYYY-MM-DD) older than LogKeepDays are deleted. Default
 	// LogKeepDays = 1 (today + yesterday only).
-	LogFile     string `yaml:"log_file"`
-	LogKeepDays int    `yaml:"log_keep_days"`
-	LogConsole  bool   `yaml:"log_console"`
+	LogFile            string `yaml:"log_file"`
+	LogKeepDays        int    `yaml:"log_keep_days"`
+	LogDeleteAfterDays int    `yaml:"log_delete_after_days"`
+	LogConsole         bool   `yaml:"log_console"`
 
 	// TLS/Security Policy
 	RequireTLSControl bool                `yaml:"require_tls_control"` // Force TLS on control channel
@@ -182,6 +183,9 @@ func LoadConfig(filePath string) (*Config, error) {
 		} else {
 			cfg.LogConsole = true
 		}
+	}
+	if cfg.LogDeleteAfterDays <= 0 && cfg.LogKeepDays > 0 {
+		cfg.LogDeleteAfterDays = cfg.LogKeepDays
 	}
 	cfg.Zipscript.ApplyDefaults()
 	cfg.configPath = filePath
@@ -264,6 +268,7 @@ func (c *Config) Rehash() (string, error) {
 	c.Debug = fresh.Debug
 	c.LogFile = fresh.LogFile
 	c.LogKeepDays = fresh.LogKeepDays
+	c.LogDeleteAfterDays = fresh.LogDeleteAfterDays
 	c.LogConsole = fresh.LogConsole
 
 	// Fire post-rehash hook if set (e.g. reapply slave policies to SlaveManager).

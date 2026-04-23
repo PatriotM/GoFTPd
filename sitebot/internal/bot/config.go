@@ -13,16 +13,17 @@ type Config struct {
 	configPath string       `yaml:"-"`
 	rehashMu   sync.RWMutex `yaml:"-"`
 
-	Debug       bool           `yaml:"debug"`
-	LogFile     string         `yaml:"log_file"`
-	LogKeepDays int            `yaml:"log_keep_days"`
-	LogConsole  bool           `yaml:"log_console"`
-	EventFIFO   string         `yaml:"event_fifo"`
-	IRC         IRCConfig      `yaml:"irc"`
-	Encryption  EncConfig      `yaml:"encryption"`
-	Announce    AnnounceConfig `yaml:"announce"`
-	Sections    []SectionRoute `yaml:"sections"`
-	Plugins     PluginsConfig  `yaml:"plugins"`
+	Debug              bool           `yaml:"debug"`
+	LogFile            string         `yaml:"log_file"`
+	LogKeepDays        int            `yaml:"log_keep_days"`
+	LogDeleteAfterDays int            `yaml:"log_delete_after_days"`
+	LogConsole         bool           `yaml:"log_console"`
+	EventFIFO          string         `yaml:"event_fifo"`
+	IRC                IRCConfig      `yaml:"irc"`
+	Encryption         EncConfig      `yaml:"encryption"`
+	Announce           AnnounceConfig `yaml:"announce"`
+	Sections           []SectionRoute `yaml:"sections"`
+	Plugins            PluginsConfig  `yaml:"plugins"`
 }
 
 type IRCConfig struct {
@@ -96,6 +97,9 @@ func LoadConfig(path string) (*Config, error) {
 			cfg.LogConsole = true
 		}
 	}
+	if cfg.LogDeleteAfterDays <= 0 && cfg.LogKeepDays > 0 {
+		cfg.LogDeleteAfterDays = cfg.LogKeepDays
+	}
 	if cfg.Announce.ThemeFile == "" {
 		cfg.Announce.ThemeFile = "./etc/templates/pzsng.theme"
 	}
@@ -123,6 +127,7 @@ func (c *Config) Rehash() (string, error) {
 	c.Debug = fresh.Debug
 	c.LogFile = fresh.LogFile
 	c.LogKeepDays = fresh.LogKeepDays
+	c.LogDeleteAfterDays = fresh.LogDeleteAfterDays
 	c.LogConsole = fresh.LogConsole
 	// EventFIFO path change requires restart (reader goroutine has it open)
 	// IRC connection details: keep old. Only refresh auto-join list + modes.

@@ -21,7 +21,7 @@ func main() {
 	// File logging — only active when log_file is set. Can mirror to console
 	// or keep the full log only in file, with daily rotation.
 	if cfg.LogFile != "" {
-		if err := bot.InstallFileLogger(cfg.LogFile, cfg.LogKeepDays, cfg.LogConsole); err != nil {
+		if err := bot.InstallFileLogger(cfg.LogFile, cfg.LogDeleteAfterDays, cfg.LogConsole); err != nil {
 			log.Printf("[LOG] file logger init failed: %v (continuing with stderr only)", err)
 		}
 	}

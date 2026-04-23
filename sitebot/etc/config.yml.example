@@ -1,5 +1,6 @@
 debug: true
 log_file:      "logs/sitebot.log"
+log_delete_after_days: 1
 log_keep_days: 1
 log_console:   true
 

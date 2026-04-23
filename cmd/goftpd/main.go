@@ -45,7 +45,7 @@ func main() {
 	// Tee's log output to both stderr and the file, rotates daily, keeps the
 	// last log_keep_days archived copies (default 1).
 	if cfg.Debug && cfg.LogFile != "" {
-		if err := core.InstallFileLogger(cfg.LogFile, cfg.LogKeepDays, cfg.LogConsole); err != nil {
+		if err := core.InstallFileLogger(cfg.LogFile, cfg.LogDeleteAfterDays, cfg.LogConsole); err != nil {
 			log.Printf("[LOG] file logger init failed: %v (continuing with stderr only)", err)
 		}
 	}

@@ -14,24 +14,25 @@ import (
 // (local time), the previous day's file is renamed to `<basePath>.YYYY-MM-DD`
 // and any rotated file older than `keepDays` is deleted.
 type rotatingLog struct {
-	mu       sync.Mutex
-	basePath string
-	keepDays int
-	f        *os.File
-	day      string // YYYY-MM-DD of the currently-open file
+	mu              sync.Mutex
+	basePath        string
+	deleteAfterDays int
+	f               *os.File
+	day             string // YYYY-MM-DD of the currently-open file
 }
 
-func newRotatingLog(basePath string, keepDays int) (*rotatingLog, error) {
-	if keepDays < 1 {
-		keepDays = 1
+func newRotatingLog(basePath string, deleteAfterDays int) (*rotatingLog, error) {
+	if deleteAfterDays < 1 {
+		deleteAfterDays = 1
 	}
 	if err := os.MkdirAll(filepath.Dir(basePath), 0755); err != nil {
 		return nil, err
 	}
-	r := &rotatingLog{basePath: basePath, keepDays: keepDays}
+	r := &rotatingLog{basePath: basePath, deleteAfterDays: deleteAfterDays}
 	if err := r.open(); err != nil {
 		return nil, err
 	}
+	r.purgeOld()
 	return r, nil
 }
 
@@ -57,7 +58,7 @@ func (r *rotatingLog) Write(p []byte) (int, error) {
 }
 
 // rotate closes the current file, renames it to basePath.<prev-day>, opens a
-// fresh basePath, and removes rotated files older than keepDays. Called with
+// fresh basePath, and removes rotated files older than deleteAfterDays. Called with
 // the mutex already held.
 func (r *rotatingLog) rotate(newDay string) error {
 	if r.f != nil {
@@ -72,14 +73,18 @@ func (r *rotatingLog) rotate(newDay string) error {
 	}
 	r.day = newDay
 
-	// Purge old rotated files.
+	r.purgeOld()
+	return nil
+}
+
+func (r *rotatingLog) purgeOld() {
 	dir := filepath.Dir(r.basePath)
 	base := filepath.Base(r.basePath) + "."
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil
+		return
 	}
-	cutoff := time.Now().AddDate(0, 0, -r.keepDays)
+	cutoff := time.Now().AddDate(0, 0, -r.deleteAfterDays)
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -96,27 +101,26 @@ func (r *rotatingLog) rotate(newDay string) error {
 			_ = os.Remove(filepath.Join(dir, name))
 		}
 	}
-	return nil
 }
 
 // InstallFileLogger redirects the standard `log` package to a rotating file,
 // and optionally mirrors output to stderr. Called from main.go right after
-// config load. Only active when logFilePath != "". keepDays controls how many
-// rotated files are retained (minimum 1 = today only).
-func InstallFileLogger(logFilePath string, keepDays int, alsoConsole bool) error {
+// config load. Only active when logFilePath != "". deleteAfterDays controls
+// when rotated logs get deleted.
+func InstallFileLogger(logFilePath string, deleteAfterDays int, alsoConsole bool) error {
 	if logFilePath == "" {
 		return nil
 	}
-	r, err := newRotatingLog(logFilePath, keepDays)
+	r, err := newRotatingLog(logFilePath, deleteAfterDays)
 	if err != nil {
 		return err
 	}
 	if alsoConsole {
 		log.SetOutput(io.MultiWriter(os.Stderr, r))
-		log.Printf("[LOG] File logging enabled: %s (keep %d days, console mirrored)", logFilePath, keepDays)
+		log.Printf("[LOG] File logging enabled: %s (delete after %d days, console mirrored)", logFilePath, deleteAfterDays)
 	} else {
 		log.SetOutput(r)
-		log.Printf("[LOG] File logging enabled: %s (keep %d days, console disabled)", logFilePath, keepDays)
+		log.Printf("[LOG] File logging enabled: %s (delete after %d days, console disabled)", logFilePath, deleteAfterDays)
 	}
 	return nil
 }
