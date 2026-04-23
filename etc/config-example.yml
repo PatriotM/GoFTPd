@@ -97,6 +97,67 @@ slave:
 
 
 # =============================================================================
+#  Section directories - master-only
+#  These dirs are kept alive in the master's VFS and created automatically on
+#  matching writable slaves when they connect or after SITE REHASH.
+#
+#  Nested dirs are supported, e.g. "/FOREIGN/TV-NL".
+#  Read-only slaves are never modified.
+# =============================================================================
+sections:
+  - "/0DAY"
+  - "/APPS"
+  - "/ARCHiVE"
+  - "/BLURAY"
+  - "/BLURAY-UHD"
+  - "/DVDR"
+  - "/EBOOKS"
+  - "/FLAC"
+  - "/FOREIGN"
+  - "/FOREIGN/TV-CZ"
+  - "/FOREIGN/TV-DE"
+  - "/FOREIGN/TV-DK"
+  - "/FOREIGN/TV-ES"
+  - "/FOREIGN/TV-FI"
+  - "/FOREIGN/TV-FR"
+  - "/FOREIGN/TV-IT"
+  - "/FOREIGN/TV-NL"
+  - "/FOREIGN/TV-NO"
+  - "/FOREIGN/TV-PL"
+  - "/FOREIGN/TV-SE"
+  - "/FOREIGN/TV-SK"
+  - "/FOREIGN/X264-HD-FOREIGN"
+  - "/FOREIGN/X264-SD-FOREIGN"
+  - "/FOREIGN/X265-FOREIGN"
+  - "/GAMES"
+  - "/iNFO"
+  - "/MBLURAY"
+  - "/MDVDR"
+  - "/MP3"
+  - "/MVID"
+  - "/NSW"
+  - "/PRE"
+  - "/PS5"
+  - "/REQUESTS"
+  - "/SPEEDTEST"
+  - "/TV-1080P"
+  - "/TV-2160P"
+  - "/TV-720P"
+  - "/TV-BLURAY"
+  - "/TV-HDRIP"
+  - "/TV-SD"
+  - "/TV-SPORTS"
+  - "/X264-HD-1080P"
+  - "/X264-HD-720P"
+  - "/X264-SD"
+  - "/X265"
+  - "/XXX-0DAY"
+  - "/XXX-HD"
+  - "/XXX-IMAGESETS"
+  - "/XXX-SD"
+
+
+# =============================================================================
 #  Storage + paths
 # =============================================================================
 storage_path:   ./site          # Master: fallback path. Slave: default root if `roots:` empty.
@@ -134,14 +195,6 @@ show_diz:
 
 
 # =============================================================================
-#  Incomplete indicator — marker symlink shown in the section/dated dir for
-#  incomplete releases. %0 is replaced with the release name. Leave empty to
-#  disable the marker symlink. The progress bar inside the release is separate.
-# =============================================================================
-incomplete_indicator: "[incomplete]-%0"
-
-
-# =============================================================================
 #  NUKE
 # =============================================================================
 nuke_max_multiplier: 50         # Highest multiplier a siteop can nuke with
@@ -152,6 +205,9 @@ nukedir_style:       "[NUKED]-%N"   # Renamed dir pattern (%N = release name)
 #  Plugins — extend the daemon with custom behavior. Each plugin receives
 #  events (MKDIR, UPLOAD, DELETE, NUKE, etc.) and has access to the master
 #  bridge for reading/writing files on slaves.
+#
+#  The built-in zipscript module is configured separately under `zipscript:`.
+#  It handles SFV/race/COMPLETE-banner logic inside the daemon hot path.
 #
 #  Built-in plugins:
 #    dateddirs - creates daily race dirs, !Today_<SECTION> symlinks,
@@ -174,6 +230,169 @@ nukedir_style:       "[NUKED]-%N"   # Renamed dir pattern (%N = release name)
 #  Section matching is case-insensitive substring — "TV" matches TV-1080P,
 #  TV-720P, TV-UHD, etc. Only plugins where enabled=true are loaded.
 # =============================================================================
+zipscript:
+  enabled: true                # master-side zipscript module on/off
+  debug: false                 # reserved for zipscript-specific debug output
+
+  race:
+    enabled: true              # enables race tracking derived labels/stats
+    max_users_in_top: 15       # limit HOF / SITE RACE user rows (0 = unlimited)
+    max_groups_in_top: 0       # limit FTP group rows (0 = unlimited)
+    complete_banner: true      # show [SITE] - ( ... COMPLETE ... ) - [SITE]
+    music_complete_genre: true # add genre/year on MP3/FLAC COMPLETE banner
+    announce_norace: true      # emit COMPLETE for first payload in non-SFV dirs too
+
+  sfv:
+    force_first: false         # require the .sfv before other payload files
+    deny_double_sfv: true      # reject a second .sfv in the same release dir
+    delete_bad_crc: true       # delete uploaded files that fail SFV CRC
+    ignore_zero_size: true     # delete zero-byte uploads instead of keeping them
+    allow_resume: false        # allow REST resume for STOR / RETR when enabled
+
+  sections:
+    sfv:
+      - "/0DAY/*/*"
+      - "/APPS/*"
+      - "/BLURAY/*"
+      - "/BLURAY-UHD/*"
+      - "/DVDR/*"
+      - "/EBOOKS/*/*"
+      - "/FLAC/*/*"
+      - "/FOREIGN/TV-CZ/*"
+      - "/FOREIGN/TV-DE/*"
+      - "/FOREIGN/TV-DK/*"
+      - "/FOREIGN/TV-ES/*"
+      - "/FOREIGN/TV-FI/*"
+      - "/FOREIGN/TV-FR/*"
+      - "/FOREIGN/TV-IT/*"
+      - "/FOREIGN/TV-NL/*"
+      - "/FOREIGN/TV-NO/*"
+      - "/FOREIGN/TV-PL/*"
+      - "/FOREIGN/TV-SE/*"
+      - "/FOREIGN/TV-SK/*"
+      - "/FOREIGN/X264-HD-FOREIGN/*"
+      - "/FOREIGN/X264-SD-FOREIGN/*"
+      - "/FOREIGN/X265-FOREIGN/*"
+      - "/GAMES/*"
+      - "/MBLURAY/*"
+      - "/MDVDR/*"
+      - "/MVID/*"
+      - "/MP3/*/*"
+      - "/NSW/*"
+      - "/PRE/*/*"
+      - "/PS5/*"
+      - "/REQUESTS/*/*"
+      - "/TV-1080P/*"
+      - "/TV-2160P/*"
+      - "/TV-720P/*"
+      - "/TV-BLURAY/*"
+      - "/TV-HDRIP/*"
+      - "/TV-SD/*"
+      - "/TV-SPORTS/*"
+      - "/X264-HD-1080P/*"
+      - "/X264-HD-720P/*"
+      - "/X264-SD/*"
+      - "/X265/*"
+      - "/XXX-0DAY/*/*"
+      - "/XXX-HD/*"
+      - "/XXX-IMAGESETS/*"
+      - "/XXX-SD/*"
+    nocheck:
+      - "/PRIVATE/*"
+      - "/LINKS/*"
+      - "/PRE/*"
+      - "/REQUESTS/*"
+    # release_check controls where the stricter "this should end up as a proper
+    # complete release" behavior applies:
+    #   - incomplete markers
+    #   - missing-NFO markers
+    #   - other release-completeness checks
+    #
+    # If left empty, it falls back to the sfv list above.
+    # Older configs may still use `cleanup:`; that alias is still accepted.
+    release_check:
+      - "/0DAY/*/*"
+      - "/APPS/*"
+      - "/BLURAY/*"
+      - "/BLURAY-UHD/*"
+      - "/DVDR/*"
+      - "/EBOOKS/*/*"
+      - "/FLAC/*/*"
+      - "/FOREIGN/TV-CZ/*"
+      - "/FOREIGN/TV-DE/*"
+      - "/FOREIGN/TV-DK/*"
+      - "/FOREIGN/TV-ES/*"
+      - "/FOREIGN/TV-FI/*"
+      - "/FOREIGN/TV-FR/*"
+      - "/FOREIGN/TV-IT/*"
+      - "/FOREIGN/TV-NL/*"
+      - "/FOREIGN/TV-NO/*"
+      - "/FOREIGN/TV-PL/*"
+      - "/FOREIGN/TV-SE/*"
+      - "/FOREIGN/TV-SK/*"
+      - "/FOREIGN/X264-HD-FOREIGN/*"
+      - "/FOREIGN/X264-SD-FOREIGN/*"
+      - "/FOREIGN/X265-FOREIGN/*"
+      - "/GAMES/*"
+      - "/MBLURAY/*"
+      - "/MDVDR/*"
+      - "/MVID/*"
+      - "/MP3/*/*"
+      - "/NSW/*"
+      - "/PRE/*/*"
+      - "/PS5/*"
+      - "/REQUESTS/*/*"
+      - "/TV-1080P/*"
+      - "/TV-2160P/*"
+      - "/TV-720P/*"
+      - "/TV-BLURAY/*"
+      - "/TV-HDRIP/*"
+      - "/TV-SD/*"
+      - "/TV-SPORTS/*"
+      - "/X264-HD-1080P/*"
+      - "/X264-HD-720P/*"
+      - "/X264-SD/*"
+      - "/X265/*"
+      - "/XXX-0DAY/*/*"
+      - "/XXX-HD/*"
+      - "/XXX-IMAGESETS/*"
+      - "/XXX-SD/*"
+
+  incomplete:
+    enabled: true                    # enable virtual incomplete / missing-NFO markers
+    indicator: "../[incomplete]-%0"  # shown for releases with missing SFV files
+    nfo_indicator: "../[no-nfo]-%0"  # shown when a cleanup release has no .nfo
+    cd_indicator: "../../[incomplete]-(%0)-%1" # shown for incomplete CD1 / DISC2 style child dirs
+    mark_empty_dirs_on_rescan: true  # empty rescanned release dirs also get incomplete markers
+
+  allowed_files:
+    allowed_types: ["jpg", "jpeg", "cue", "m3u", "txt", "vob", "png", "m2ts", "ts", "log", "mkv"] # extra extensions allowed in SFV dirs
+    ignored_types: ["diz", "debug", "message", "imdb", "html", "url", "m3u", "metadata"] # ignored by force-first / type checks
+
+  audio:
+    enabled: true               # enforce audio policy on MP3 / FLAC uploads
+    cbr_check: false            # require CBR and match allowed_constant_bitrates
+    year_check: false           # require year to be in allowed_years
+    banned_genre_check: true    # delete uploads with banned genres
+    allowed_genre_check: false  # if true, only genres in allowed_genres pass
+    allowed_constant_bitrates: [192, 320] # checked when cbr_check is enabled
+    allowed_years: [2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025] # checked when year_check is enabled
+    banned_genres:
+      - "Christian Rap"
+      - "Christian Gangsta Rap"
+      - "Contemporary Christian"
+      - "Christian Rock"
+    allowed_genres: []          # used when allowed_genre_check is true
+    genre_path: "/music.by.genre"   # sort-tree root for genre links
+    artist_path: "/music.by.artist" # sort-tree root for artist links
+    year_path: "/music.by.year"     # sort-tree root for year links
+    group_path: "/music.by.group"   # sort-tree root for release group links
+    sort:
+      genre: false              # create <genre_path>/<Genre>/<Release> symlinks
+      artist: false             # create <artist_path>/<Artist>/<Release> symlinks
+      year: false               # create <year_path>/<Year>/<Release> symlinks
+      group: false              # create <group_path>/<Group>/<Release> symlinks
+
 plugins:
   dateddirs:
     enabled: true
@@ -189,13 +408,13 @@ plugins:
     debug:    false
   imdb:
     enabled:  true
-    sections: ["MOVIE", "X264", "X265", "BLURAY", "DVDR"]
+    sections: ["X264", "X265", "BLURAY", "DVDR"]
     debug:    false
   mediainfo:
     enabled: true
     binary: "mediainfo"
     timeout_seconds: 20
-    sections: ["FLAC", "MP3", "TV", "MOVIE", "X264", "X265", "BLURAY"]
+    sections: ["FLAC", "MP3", "TV", "X264", "X265", "BLURAY"]
     audio_extensions: ["flac", "mp3", "m4a", "wav"]
     video_extensions: ["mkv", "mp4", "avi", "m2ts"]
     sample_only: true
@@ -244,7 +463,6 @@ plugins:
     sections:
       - TV-1080P
       - TV-720P
-      - MOVIE
       - X264
       - X265
       - BLURAY

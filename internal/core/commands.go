@@ -17,6 +17,7 @@ import (
 
 	"goftpd/internal/timeutil"
 	"goftpd/internal/user"
+	"goftpd/internal/zipscript"
 )
 
 // getMlsdPerm returns MLSD permissions string for a file
@@ -278,6 +279,16 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			fmt.Fprintf(s.Conn, "501 Syntax error\r\n")
 			return false
 		}
+		offset, err := strconv.ParseInt(strings.TrimSpace(args[0]), 10, 64)
+		if err != nil || offset < 0 {
+			fmt.Fprintf(s.Conn, "501 Invalid REST offset\r\n")
+			return false
+		}
+		if offset > 0 && s.Config.Zipscript.Enabled && !s.Config.Zipscript.SFV.AllowResume {
+			fmt.Fprintf(s.Conn, "504 Resume disabled by zipscript.\r\n")
+			return false
+		}
+		s.RestOffset = offset
 		fmt.Fprintf(s.Conn, "350 REST position set.\r\n")
 
 	case "PWD":
@@ -302,7 +313,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						break
 					}
 				}
-				if resolved := resolveIncompleteMarkerTarget(bridge, s.Config.IncompleteIndicator, parent, name); resolved != "" {
+				if resolved := resolveIncompleteMarkerTarget(bridge, s.Config, activeIncompleteIndicator(s.Config), parent, name); resolved != "" {
 					s.CurrentDir = resolved
 				}
 			}
@@ -328,6 +339,8 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				}
 
 				users, groups, totalBytes, present, total := bridge.GetVFSRaceStats(s.CurrentDir)
+				users = trimRaceUsers(s.Config, users)
+				groups = trimRaceGroups(s.Config, groups)
 
 				if s.Config.Debug {
 					log.Printf("[RACESTATS] dir=%s users=%d groups=%d totalBytes=%d present=%d total=%d",
@@ -616,7 +629,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			return false
 		}
 		s.DataListen = l
-		s.PassthruSlave = nil 
+		s.PassthruSlave = nil
 		s.PassthruXferIdx = 0
 		ip := strings.ReplaceAll(s.Config.PublicIP, ".", ",")
 		response := fmt.Sprintf("227 Entering Passive Mode (%s,%d,%d)\r\n", ip, port/256, port%256)
@@ -743,8 +756,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					var statusName string
 					if present >= total {
 						totalMB := float64(totalBytes) / (1024 * 1024)
-						statusName = fmt.Sprintf("[%s] - ( %.0fM %dF - COMPLETE ) - [%s]",
-							siteName, totalMB, total, siteName)
+						statusName = zipscript.CompleteStatusName(s.Config.Zipscript, siteName, s.CurrentDir, totalMB, total, bridge)
 					} else {
 						pct := (present * 100) / total
 						bar := "["
@@ -761,10 +773,12 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						statusName = fmt.Sprintf("%s - %3d%% Complete - [%s]", bar, pct, siteName)
 					}
 					nowTs := timeutil.FTPMachine(time.Now())
-					output.WriteString(fmt.Sprintf("Modify=%s;Perm=el;Type=dir; %s\r\n", nowTs, statusName))
+					if strings.TrimSpace(statusName) != "" {
+						output.WriteString(fmt.Sprintf("Modify=%s;Perm=el;Type=dir; %s\r\n", nowTs, statusName))
+					}
 				}
 
-				for _, marker := range incompleteMarkerEntries(bridge, s.Config.IncompleteIndicator, s.CurrentDir, entries) {
+				for _, marker := range incompleteMarkerEntries(bridge, s.Config, activeIncompleteIndicator(s.Config), s.CurrentDir, entries) {
 					ts := timeutil.FTPMachineUnix(marker.ModTime)
 					output.WriteString(fmt.Sprintf("Modify=%s;Perm=el;Type=%s; %s\r\n",
 						ts, mlsdSymlinkType(marker), marker.Name))
@@ -774,7 +788,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					if strings.HasPrefix(e.Name, ".") {
 						continue
 					}
-					if isIncompleteMarkerName(s.Config.IncompleteIndicator, e.Name) {
+					if isIncompleteMarkerName(activeIncompleteIndicator(s.Config), e.Name) {
 						continue
 					}
 					aclPath := path.Join(s.Config.ACLBasePath, s.CurrentDir, e.Name)
@@ -905,8 +919,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 
 					var statusName string
 					if present >= total {
-						statusName = fmt.Sprintf("[%s] - ( %.0fM %dF - COMPLETE ) - [%s]",
-							siteName, totalMB, total, siteName)
+						statusName = zipscript.CompleteStatusName(s.Config.Zipscript, siteName, s.CurrentDir, totalMB, total, bridge)
 					} else {
 						bar := "["
 						barWidth := 20
@@ -921,11 +934,13 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						bar += "]"
 						statusName = fmt.Sprintf("%s - %3d%% Complete - [%s]", bar, pct, siteName)
 					}
-					output.WriteString(fmt.Sprintf("drwxr-xr-x   1 %-8s %-8s %10s %s %s\r\n",
-						"GoFTPd", "GoFTPd", "4096", now, statusName))
+					if strings.TrimSpace(statusName) != "" {
+						output.WriteString(fmt.Sprintf("drwxr-xr-x   1 %-8s %-8s %10s %s %s\r\n",
+							"GoFTPd", "GoFTPd", "4096", now, statusName))
+					}
 				}
 
-				for _, marker := range incompleteMarkerEntries(bridge, s.Config.IncompleteIndicator, s.CurrentDir, entries) {
+				for _, marker := range incompleteMarkerEntries(bridge, s.Config, activeIncompleteIndicator(s.Config), s.CurrentDir, entries) {
 					ts := timeutil.Unix(marker.ModTime).Format("Jan _2 15:04")
 					name := fmt.Sprintf("%s -> %s", marker.Name, marker.LinkTarget)
 					output.WriteString(fmt.Sprintf("%s   1 %-8s %-8s %10s %s %s\r\n",
@@ -939,7 +954,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					if strings.HasSuffix(e.Name, "-missing") || strings.HasSuffix(e.Name, "-MISSING") {
 						continue
 					}
-					if isIncompleteMarkerName(s.Config.IncompleteIndicator, e.Name) {
+					if isIncompleteMarkerName(activeIncompleteIndicator(s.Config), e.Name) {
 						continue
 					}
 					if strings.HasPrefix(e.Name, "[#") || strings.HasPrefix(e.Name, "[:") {
@@ -987,7 +1002,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			listPath := filepath.Join(s.Config.StoragePath, s.CurrentDir)
 			files, err := os.ReadDir(listPath)
 			if err == nil {
-				
+
 				for _, f := range files {
 					if strings.HasPrefix(f.Name(), ".") {
 						continue
@@ -1021,7 +1036,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		if s.Config.Mode == "master" && s.MasterManager != nil {
 			s.showGlobalStats("226", false)
 		}
-		
+
 		fmt.Fprintf(s.Conn, "226 Directory listing complete.\r\n")
 		return false
 
@@ -1043,6 +1058,9 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		}
 
 		fileName := args[0]
+		restOffset := s.RestOffset
+		s.RestOffset = 0
+		var existingNames []string
 		aclPath := path.Join(s.Config.ACLBasePath, s.CurrentDir, fileName)
 		if !s.ACLEngine.CanPerform(s.User, "UPLOAD", aclPath) {
 			fmt.Fprintf(s.Conn, "550 Access Denied: Cannot upload here.\r\n")
@@ -1057,9 +1075,33 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					fileExists = bridge.FileExists(filePath)
 				}
 			}
-			if fileExists {
+			if fileExists && restOffset == 0 {
 				fmt.Fprintf(s.Conn, "553 %s: file already exists (X-DUPE)\r\n", fileName)
 				return false
+			}
+		}
+		if restOffset > 0 {
+			if s.Config.Mode == "master" && s.MasterManager != nil {
+				if bridge, ok := s.MasterManager.(MasterBridge); ok {
+					size := bridge.GetFileSize(path.Join(s.CurrentDir, fileName))
+					if size < 0 {
+						fmt.Fprintf(s.Conn, "550 Resume target not found.\r\n")
+						return false
+					}
+					if restOffset > size {
+						fmt.Fprintf(s.Conn, "550 Resume offset beyond end of file.\r\n")
+						return false
+					}
+				}
+			}
+		}
+		if s.Config.Mode == "master" && s.MasterManager != nil {
+			if bridge, ok := s.MasterManager.(MasterBridge); ok {
+				existingNames = zipscriptExistingNames(bridge, s.CurrentDir)
+				if err := zipscript.ValidateUpload(s.Config.Zipscript, s.CurrentDir, fileName, existingNames); err != nil {
+					fmt.Fprintf(s.Conn, "550 %s\r\n", err)
+					return false
+				}
 			}
 		}
 
@@ -1072,7 +1114,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				log.Printf("[Passthrough] PORT STOR %s → slave connects to %s", filePath, portAddr)
 				fmt.Fprintf(s.Conn, "150 Opening binary mode data connection.\r\n")
 
-				fileSize, checksum, xferMs, err := bridge.SlaveConnectAndReceive(filePath, portAddr, s.User.Name, s.User.PrimaryGroup)
+				fileSize, checksum, xferMs, err := bridge.SlaveConnectAndReceive(filePath, portAddr, s.User.Name, s.User.PrimaryGroup, restOffset)
 				_ = xferMs
 
 				if err != nil {
@@ -1081,17 +1123,17 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					return false
 				}
 
-				if fileSize == 0 {
+				if fileSize == 0 && zipscript.ShouldDeleteZeroByteForDir(s.Config.Zipscript, s.CurrentDir) {
 					bridge.DeleteFile(filePath)
 					log.Printf("[MASTER-ZS] Deleted 0-byte file: %s", filePath)
 					fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
 					return false
 				}
 
-				if checksum > 0 && !strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
+				if checksum > 0 && zipscript.ShouldDeleteBadCRCForDir(s.Config.Zipscript, s.CurrentDir) && !strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
 					sfvEntries := bridge.GetSFVData(s.CurrentDir)
 					if sfvEntries != nil {
-						if expectedCRC, exists := sfvEntries[fileName]; exists {
+						if expectedCRC, exists := cachedExpectedCRC(sfvEntries, fileName); exists {
 							if expectedCRC != checksum {
 								bridge.DeleteFile(filePath)
 								log.Printf("[MASTER-ZS] CRC mismatch for %s: got %08X, expected %08X — deleted",
@@ -1113,6 +1155,11 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						bridge.CacheSFV(s.CurrentDir, fileName, sfvEntries)
 					}
 				}
+				if err := applyAudioZipscriptChecks(s, bridge, filePath, fileName); err != nil {
+					fmt.Fprintf(s.Conn, "226- zipscript audio check failed: %s\r\n", err)
+					fmt.Fprintf(s.Conn, "226 Uploaded file removed by zipscript\r\n")
+					return false
+				}
 
 				isSpeedtest := isSpeedtestPath(filePath)
 				if fileSize > 0 {
@@ -1126,10 +1173,10 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				if strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
 					if sfvEntries := bridge.GetSFVData(s.CurrentDir); sfvEntries != nil {
 						data["t_filecount"] = fmt.Sprintf("%d", len(sfvEntries))
-						data["t_file_label"] = expectedFileLabel(s.CurrentDir)
+						data["t_file_label"] = zipscript.ExpectedFileLabel(s.Config.Zipscript, s.CurrentDir)
 					}
 				}
-				if isRacePayloadFile(fileName) {
+				if zipscript.IsRacePayloadFileForDir(s.Config.Zipscript, s.CurrentDir, fileName) {
 					data["file_mbytes"] = mbString(fileSize)
 					if sfvEntries := bridge.GetSFVData(s.CurrentDir); sfvEntries != nil {
 						users, _, totalBytes, present, total := bridge.GetVFSRaceStats(s.CurrentDir)
@@ -1161,15 +1208,18 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					}
 				}
 				s.emitEvent(EventUpload, filePath, fileName, fileSize, speedMB, data)
+				if shouldAnnounceNoRace(s.Config, s.CurrentDir, existingNames, fileName) {
+					go emitRaceEndAfter(s, nil, fileSize, 1, xferMs, 0)
+				}
 				if sfvEntries := bridge.GetSFVData(s.CurrentDir); sfvEntries != nil {
 					users, _, totalBytes, present, total := bridge.GetVFSRaceStats(s.CurrentDir)
-					if total > 0 && present >= total && canTriggerRaceEnd(sfvEntries, fileName) {
+					if total > 0 && present >= total && zipscript.CanTriggerRaceEndForDir(s.Config.Zipscript, s.CurrentDir, sfvEntries, fileName) {
 						// Race complete: fire COMPLETE/STATS sequence in a
 						// goroutine so the client gets 226 immediately. The
 						// FIFO writes + plugin dispatches were stacking up on
 						// the connection's hot path and delaying the final
 						// transfer ack by the time it took to do all that work.
-						go emitRaceEndAfter(s, users, totalBytes, total, xferMs, mediaInfoGraceDelay(fileName))
+						go emitRaceEndAfter(s, users, totalBytes, total, xferMs, zipscript.MediaInfoGraceDelayForDir(s.Config.Zipscript, s.CurrentDir, fileName))
 					}
 				}
 
@@ -1200,7 +1250,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					fmt.Fprintf(s.Conn, "150 Opening binary mode data connection.\r\n")
 					log.Printf("[Passthrough] STOR %s via slave %s (xferIdx=%d)", filePath, slaveName, s.PassthruXferIdx)
 
-					fileSize, checksum, xferMs, err = bridge.SlaveReceivePassthrough(filePath, s.PassthruXferIdx, slaveName, s.User.Name, s.User.PrimaryGroup)
+					fileSize, checksum, xferMs, err = bridge.SlaveReceivePassthrough(filePath, s.PassthruXferIdx, slaveName, s.User.Name, s.User.PrimaryGroup, restOffset)
 					s.PassthruSlave = nil
 					s.PretCmd = ""
 					s.PretArg = ""
@@ -1219,7 +1269,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					}
 
 					start := time.Now()
-					fileSize, checksum, err = bridge.UploadFile(filePath, dataConn, s.User.Name, s.User.PrimaryGroup)
+					fileSize, checksum, err = bridge.UploadFile(filePath, dataConn, s.User.Name, s.User.PrimaryGroup, restOffset)
 					xferMs = time.Since(start).Milliseconds()
 					dataConn.Close()
 
@@ -1230,17 +1280,17 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					}
 				}
 
-				if fileSize == 0 {
+				if fileSize == 0 && zipscript.ShouldDeleteZeroByteForDir(s.Config.Zipscript, s.CurrentDir) {
 					bridge.DeleteFile(filePath)
 					log.Printf("[MASTER-ZS] Deleted 0-byte file: %s", filePath)
 					fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
 					return false
 				}
 
-				if checksum > 0 && !strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
+				if checksum > 0 && zipscript.ShouldDeleteBadCRCForDir(s.Config.Zipscript, s.CurrentDir) && !strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
 					sfvEntries := bridge.GetSFVData(s.CurrentDir)
 					if sfvEntries != nil {
-						if expectedCRC, exists := sfvEntries[fileName]; exists {
+						if expectedCRC, exists := cachedExpectedCRC(sfvEntries, fileName); exists {
 							if expectedCRC != checksum {
 								bridge.DeleteFile(filePath)
 								log.Printf("[MASTER-ZS] CRC mismatch for %s: got %08X, expected %08X — deleted",
@@ -1262,6 +1312,11 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						bridge.CacheSFV(s.CurrentDir, fileName, sfvEntries)
 					}
 				}
+				if err := applyAudioZipscriptChecks(s, bridge, filePath, fileName); err != nil {
+					fmt.Fprintf(s.Conn, "226- zipscript audio check failed: %s\r\n", err)
+					fmt.Fprintf(s.Conn, "226 Uploaded file removed by zipscript\r\n")
+					return false
+				}
 
 				isSpeedtest := isSpeedtestPath(filePath)
 				if fileSize > 0 {
@@ -1275,10 +1330,10 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				if strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
 					if sfvEntries := bridge.GetSFVData(s.CurrentDir); sfvEntries != nil {
 						data["t_filecount"] = fmt.Sprintf("%d", len(sfvEntries))
-						data["t_file_label"] = expectedFileLabel(s.CurrentDir)
+						data["t_file_label"] = zipscript.ExpectedFileLabel(s.Config.Zipscript, s.CurrentDir)
 					}
 				}
-				if isRacePayloadFile(fileName) {
+				if zipscript.IsRacePayloadFileForDir(s.Config.Zipscript, s.CurrentDir, fileName) {
 					data["file_mbytes"] = mbString(fileSize)
 					if sfvEntries := bridge.GetSFVData(s.CurrentDir); sfvEntries != nil {
 						users, _, totalBytes, present, total := bridge.GetVFSRaceStats(s.CurrentDir)
@@ -1310,11 +1365,14 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					}
 				}
 				s.emitEvent(EventUpload, filePath, fileName, fileSize, speedMB, data)
+				if shouldAnnounceNoRace(s.Config, s.CurrentDir, existingNames, fileName) {
+					go emitRaceEndAfter(s, nil, fileSize, 1, xferMs, 0)
+				}
 				if sfvEntries := bridge.GetSFVData(s.CurrentDir); sfvEntries != nil {
 					users, _, totalBytes, present, total := bridge.GetVFSRaceStats(s.CurrentDir)
-					if total > 0 && present >= total && canTriggerRaceEnd(sfvEntries, fileName) {
+					if total > 0 && present >= total && zipscript.CanTriggerRaceEndForDir(s.Config.Zipscript, s.CurrentDir, sfvEntries, fileName) {
 						// Async — see explanation at the other emitRaceEnd call.
-						go emitRaceEndAfter(s, users, totalBytes, total, xferMs, mediaInfoGraceDelay(fileName))
+						go emitRaceEndAfter(s, users, totalBytes, total, xferMs, zipscript.MediaInfoGraceDelayForDir(s.Config.Zipscript, s.CurrentDir, fileName))
 					}
 				}
 
@@ -1355,6 +1413,8 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			fmt.Fprintf(s.Conn, "550 Access Denied.\r\n")
 			return false
 		}
+		restOffset := s.RestOffset
+		s.RestOffset = 0
 
 		if s.Config.Mode == "master" && s.MasterManager != nil {
 			if bridge, ok := s.MasterManager.(MasterBridge); ok {
@@ -1364,8 +1424,16 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					fmt.Fprintf(s.Conn, "550 File not found on any slave.\r\n")
 					return false
 				}
+				if restOffset > fileSize {
+					fmt.Fprintf(s.Conn, "550 Resume offset beyond end of file.\r\n")
+					return false
+				}
 				isSpeedtest := isSpeedtestPath(filePath)
-				if !isSpeedtest && !s.User.CanDownload("", fileSize) {
+				remainingSize := fileSize
+				if restOffset > 0 && restOffset < fileSize {
+					remainingSize = fileSize - restOffset
+				}
+				if !isSpeedtest && !s.User.CanDownload("", remainingSize) {
 					fmt.Fprintf(s.Conn, "550 Not enough credits.\r\n")
 					return false
 				}
@@ -1376,7 +1444,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					log.Printf("[Passthrough] RETR %s via slave %s (xferIdx=%d)", filePath, slaveName, s.PassthruXferIdx)
 
 					start := time.Now()
-					err := bridge.SlaveSendPassthrough(filePath, s.PassthruXferIdx, slaveName)
+					err := bridge.SlaveSendPassthrough(filePath, s.PassthruXferIdx, slaveName, restOffset)
 					xferMs := time.Since(start).Milliseconds()
 					s.PassthruSlave = nil
 					s.PretCmd = ""
@@ -1387,10 +1455,10 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						fmt.Fprintf(s.Conn, "550 Download failed: %v\r\n", err)
 					} else {
 						fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
-						if fileSize > 0 {
-							s.User.UpdateStatsWithCredits(fileSize, false, !isSpeedtest)
+						if remainingSize > 0 {
+							s.User.UpdateStatsWithCredits(remainingSize, false, !isSpeedtest)
 						}
-						s.emitEvent(EventDownload, filePath, args[0], fileSize, transferSpeedMB(fileSize, xferMs), nil)
+						s.emitEvent(EventDownload, filePath, args[0], remainingSize, transferSpeedMB(remainingSize, xferMs), nil)
 					}
 				} else {
 					raw, err := s.getRawDataConn()
@@ -1405,7 +1473,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						return false
 					}
 					start := time.Now()
-					err = bridge.DownloadFile(filePath, dataConn)
+					err = bridge.DownloadFile(filePath, dataConn, restOffset)
 					xferMs := time.Since(start).Milliseconds()
 					dataConn.Close()
 					s.PretCmd = ""
@@ -1415,10 +1483,10 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						fmt.Fprintf(s.Conn, "550 Download failed: %v\r\n", err)
 					} else {
 						fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
-						if fileSize > 0 {
-							s.User.UpdateStatsWithCredits(fileSize, false, !isSpeedtest)
+						if remainingSize > 0 {
+							s.User.UpdateStatsWithCredits(remainingSize, false, !isSpeedtest)
 						}
-						s.emitEvent(EventDownload, filePath, args[0], fileSize, transferSpeedMB(fileSize, xferMs), nil)
+						s.emitEvent(EventDownload, filePath, args[0], remainingSize, transferSpeedMB(remainingSize, xferMs), nil)
 					}
 				}
 			} else {
@@ -1456,7 +1524,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		if s.Config.Mode == "master" && s.MasterManager != nil {
 			if bridge, ok := s.MasterManager.(MasterBridge); ok {
 				entries := bridge.ListDir(target)
-				for _, marker := range incompleteMarkerEntries(bridge, s.Config.IncompleteIndicator, target, entries) {
+				for _, marker := range incompleteMarkerEntries(bridge, s.Config, activeIncompleteIndicator(s.Config), target, entries) {
 					ts := timeutil.Unix(marker.ModTime).Format("Jan _2 15:04")
 					fmt.Fprintf(s.Conn, " %s   1 %-8s %-8s %10s %s %s -> %s\r\n",
 						ftpListMode(marker), marker.Owner, marker.Group, "0", ts, marker.Name, marker.LinkTarget)
@@ -1577,6 +1645,14 @@ func incompleteMarkerName(pattern, relname string) string {
 	return pattern
 }
 
+func incompleteMarkerName2(pattern, relname, child string) string {
+	pattern = incompleteMarkerName(pattern, relname)
+	if strings.Contains(pattern, "%1") {
+		pattern = strings.ReplaceAll(pattern, "%1", strings.TrimSpace(child))
+	}
+	return pattern
+}
+
 func isIncompleteMarkerName(pattern, name string) bool {
 	pattern = strings.TrimSpace(pattern)
 	if pattern == "" {
@@ -1589,9 +1665,9 @@ func isIncompleteMarkerName(pattern, name string) bool {
 	return name == pattern
 }
 
-func incompleteMarkerEntries(bridge MasterBridge, pattern, dirPath string, entries []MasterFileEntry) []MasterFileEntry {
+func incompleteMarkerEntries(bridge MasterBridge, cfg *Config, pattern, dirPath string, entries []MasterFileEntry) []MasterFileEntry {
 	pattern = strings.TrimSpace(pattern)
-	if pattern == "" {
+	if pattern == "" || cfg == nil || !zipscript.UsesReleaseCheck(cfg.Zipscript, dirPath) {
 		return nil
 	}
 	existing := make(map[string]bool, len(entries))
@@ -1605,32 +1681,97 @@ func incompleteMarkerEntries(bridge MasterBridge, pattern, dirPath string, entri
 		}
 		releasePath := path.Join(dirPath, e.Name)
 		_, _, _, present, total := bridge.GetVFSRaceStats(releasePath)
-		if total <= 0 || present >= total {
-			continue
+		emptyDir := false
+		if total <= 0 {
+			if zipscript.MarkEmptyDirsOnRescan(cfg.Zipscript) {
+				visible := 0
+				for _, child := range bridge.ListDir(releasePath) {
+					if !strings.HasPrefix(child.Name, ".") {
+						visible++
+					}
+				}
+				emptyDir = visible == 0
+			}
+			if !emptyDir {
+				continue
+			}
 		}
-		marker := incompleteMarkerName(pattern, e.Name)
-		if marker == "" || existing[marker] {
-			continue
+		if total > 0 && present < total {
+			marker := incompleteMarkerName(pattern, e.Name)
+			if marker != "" && !existing[marker] {
+				out = append(out, MasterFileEntry{
+					Name:       marker,
+					IsSymlink:  true,
+					LinkTarget: releasePath,
+					ModTime:    e.ModTime,
+					Owner:      "GoFTPd",
+					Group:      "GoFTPd",
+				})
+				existing[marker] = true
+			}
 		}
-		out = append(out, MasterFileEntry{
-			Name:       marker,
-			IsSymlink:  true,
-			LinkTarget: releasePath,
-			ModTime:    e.ModTime,
-			Owner:      "GoFTPd",
-			Group:      "GoFTPd",
-		})
+		nfoPattern := zipscript.NFOIndicator(cfg.Zipscript)
+		if nfoPattern != "" && !hasNFOEntry(bridge.ListDir(releasePath)) {
+			marker := incompleteMarkerName(nfoPattern, e.Name)
+			if marker != "" && !existing[marker] {
+				out = append(out, MasterFileEntry{
+					Name:       marker,
+					IsSymlink:  true,
+					LinkTarget: releasePath,
+					ModTime:    e.ModTime,
+					Owner:      "GoFTPd",
+					Group:      "GoFTPd",
+				})
+				existing[marker] = true
+			}
+		}
+		cdPattern := zipscript.CDIndicator(cfg.Zipscript)
+		if cdPattern != "" && isDiscDirName(e.Name) {
+			_, _, _, childPresent, childTotal := bridge.GetVFSRaceStats(releasePath)
+			if childTotal > 0 && childPresent < childTotal {
+				marker := incompleteMarkerName2(cdPattern, path.Base(dirPath), e.Name)
+				if marker != "" && !existing[marker] {
+					out = append(out, MasterFileEntry{
+						Name:       marker,
+						IsSymlink:  true,
+						LinkTarget: releasePath,
+						ModTime:    e.ModTime,
+						Owner:      "GoFTPd",
+						Group:      "GoFTPd",
+					})
+					existing[marker] = true
+				}
+			}
+		}
 	}
 	return out
 }
 
-func resolveIncompleteMarkerTarget(bridge MasterBridge, pattern, parent, name string) string {
-	for _, marker := range incompleteMarkerEntries(bridge, pattern, parent, bridge.ListDir(parent)) {
+func resolveIncompleteMarkerTarget(bridge MasterBridge, cfg *Config, pattern, parent, name string) string {
+	for _, marker := range incompleteMarkerEntries(bridge, cfg, pattern, parent, bridge.ListDir(parent)) {
 		if marker.Name == name && marker.LinkTarget != "" {
 			return path.Clean(marker.LinkTarget)
 		}
 	}
 	return ""
+}
+
+func hasNFOEntry(entries []MasterFileEntry) bool {
+	for _, entry := range entries {
+		if entry.IsDir {
+			continue
+		}
+		if strings.HasSuffix(strings.ToLower(entry.Name), ".nfo") {
+			return true
+		}
+	}
+	return false
+}
+
+func isDiscDirName(name string) bool {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	ok, _ := regexp.MatchString(`^(cd|disc|disk|dvd)\d+$`, lower)
+	return ok
 }
 
 func progressBar(present, total, width int) string {
@@ -1702,45 +1843,6 @@ func estimateRaceTimeLeft(dirPath string, totalBytes int64, present, total int, 
 	return fmt.Sprintf("%ds", seconds)
 }
 
-func isRacePayloadFile(fileName string) bool {
-	name := strings.ToLower(strings.TrimSpace(fileName))
-	if regexp.MustCompile(`(?i)\.(rar|r\d\d)$`).MatchString(name) {
-		return true
-	}
-	return isMediaInfoFile(name)
-}
-
-func isMediaInfoFile(fileName string) bool {
-	name := strings.ToLower(strings.TrimSpace(fileName))
-	for _, suffix := range []string{".mp3", ".flac", ".m4a", ".wav", ".mkv", ".mp4", ".avi", ".m2ts"} {
-		if strings.HasSuffix(name, suffix) {
-			return true
-		}
-	}
-	return false
-}
-
-func canTriggerRaceEnd(sfvEntries map[string]uint32, fileName string) bool {
-	name := raceEntryKey(fileName)
-	if strings.HasSuffix(name, ".sfv") {
-		return true
-	}
-	_, ok := sfvEntries[name]
-	return ok
-}
-
-func raceEntryKey(fileName string) string {
-	name := strings.TrimSpace(path.Base(strings.ReplaceAll(fileName, "\\", "/")))
-	return strings.ToLower(name)
-}
-
-func mediaInfoGraceDelay(fileName string) time.Duration {
-	if isMediaInfoFile(fileName) {
-		return 2500 * time.Millisecond
-	}
-	return 0
-}
-
 func emitRaceEndAfter(s *Session, users []VFSRaceUser, totalBytes int64, total int, xferMs int64, delay time.Duration) {
 	if delay > 0 {
 		time.Sleep(delay)
@@ -1748,15 +1850,144 @@ func emitRaceEndAfter(s *Session, users []VFSRaceUser, totalBytes int64, total i
 	emitRaceEnd(s, users, totalBytes, total, xferMs)
 }
 
-func expectedFileLabel(dirPath string) string {
-	section := strings.ToUpper(strings.Trim(path.Clean(dirPath), "/"))
-	if idx := strings.Index(section, "/"); idx >= 0 {
-		section = section[:idx]
+func zipscriptExistingNames(bridge MasterBridge, dirPath string) []string {
+	entries := bridge.ListDir(dirPath)
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, entry.Name)
 	}
-	switch section {
-	case "MP3", "FLAC":
-		return "track(s)"
-	default:
-		return "file(s)"
+	return out
+}
+
+func activeIncompleteIndicator(cfg *Config) string {
+	if cfg == nil {
+		return ""
 	}
+	return zipscript.IncompleteIndicator(cfg.Zipscript, "")
+}
+
+func trimRaceUsers(cfg *Config, users []VFSRaceUser) []VFSRaceUser {
+	if cfg == nil || cfg.Zipscript.Race.MaxUsersInTop <= 0 || len(users) <= cfg.Zipscript.Race.MaxUsersInTop {
+		return users
+	}
+	return users[:cfg.Zipscript.Race.MaxUsersInTop]
+}
+
+func trimRaceGroups(cfg *Config, groups []VFSRaceGroup) []VFSRaceGroup {
+	if cfg == nil || cfg.Zipscript.Race.MaxGroupsInTop <= 0 || len(groups) <= cfg.Zipscript.Race.MaxGroupsInTop {
+		return groups
+	}
+	return groups[:cfg.Zipscript.Race.MaxGroupsInTop]
+}
+
+func raceCRCKey(name string) string {
+	name = strings.TrimSpace(path.Base(strings.ReplaceAll(name, "\\", "/")))
+	return strings.ToLower(name)
+}
+
+func cachedExpectedCRC(sfvEntries map[string]uint32, fileName string) (uint32, bool) {
+	if sfvEntries == nil {
+		return 0, false
+	}
+	crc, ok := sfvEntries[raceCRCKey(fileName)]
+	return crc, ok
+}
+
+func zipscriptMediaInfoSettings(cfg *Config) (string, int) {
+	if cfg != nil && cfg.Plugins != nil {
+		if pluginCfg, ok := cfg.Plugins["mediainfo"]; ok {
+			binary := "mediainfo"
+			timeoutSeconds := 10
+			if raw, ok := pluginCfg["binary"].(string); ok && strings.TrimSpace(raw) != "" {
+				binary = strings.TrimSpace(raw)
+			}
+			switch v := pluginCfg["timeout_seconds"].(type) {
+			case int:
+				timeoutSeconds = v
+			case int64:
+				timeoutSeconds = int(v)
+			case float64:
+				timeoutSeconds = int(v)
+			}
+			if timeoutSeconds <= 0 {
+				timeoutSeconds = 10
+			}
+			return binary, timeoutSeconds
+		}
+	}
+	return "mediainfo", 10
+}
+
+func applyAudioZipscriptChecks(s *Session, bridge MasterBridge, filePath, fileName string) error {
+	if !zipscript.AudioCheckEnabled(s.Config.Zipscript, s.CurrentDir, fileName) {
+		return nil
+	}
+	binary, timeoutSeconds := zipscriptMediaInfoSettings(s.Config)
+	fields, err := bridge.ProbeMediaInfo(filePath, binary, timeoutSeconds)
+	if err != nil {
+		if s.Config.Debug {
+			log.Printf("[MASTER-ZS] mediainfo probe skipped for %s: %v", filePath, err)
+		}
+		return nil
+	}
+	bridge.CacheMediaInfo(s.CurrentDir, fields)
+	if reasons := zipscript.ValidateAudioRelease(s.Config.Zipscript, fields); len(reasons) > 0 {
+		_ = bridge.DeleteFile(filePath)
+		return fmt.Errorf(strings.Join(reasons, "; "))
+	}
+	if err := ensureAudioSortLinks(bridge, zipscript.AudioSortLinks(s.Config.Zipscript, s.CurrentDir, fields)); err != nil && s.Config.Debug {
+		log.Printf("[MASTER-ZS] audio sort link failed for %s: %v", s.CurrentDir, err)
+	}
+	return nil
+}
+
+func ensureAudioSortLinks(bridge MasterBridge, links []zipscript.AudioSortLink) error {
+	for _, link := range links {
+		if err := ensureDirPath(bridge, link.DirPath); err != nil {
+			return err
+		}
+		if err := bridge.Symlink(link.LinkPath, link.Target); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ensureDirPath(bridge MasterBridge, dirPath string) error {
+	dirPath = path.Clean("/" + strings.TrimSpace(dirPath))
+	if dirPath == "/" || dirPath == "." {
+		return nil
+	}
+	parts := strings.Split(strings.TrimPrefix(dirPath, "/"), "/")
+	current := ""
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		current = path.Join(current, "/"+part)
+		if !bridge.FileExists(current) {
+			bridge.MakeDir(current, "GoFTPd", "GoFTPd")
+		}
+	}
+	return nil
+}
+
+func shouldAnnounceNoRace(cfg *Config, dirPath string, existingNames []string, fileName string) bool {
+	if cfg == nil || !cfg.Zipscript.Enabled || !cfg.Zipscript.Race.AnnounceNoRace {
+		return false
+	}
+	if zipscript.UsesSFV(cfg.Zipscript, dirPath) || zipscript.IsIgnoredType(cfg.Zipscript, fileName) {
+		return false
+	}
+	if strings.HasPrefix(strings.TrimSpace(fileName), ".") {
+		return false
+	}
+	for _, name := range existingNames {
+		name = strings.TrimSpace(name)
+		if name == "" || strings.HasPrefix(name, ".") || zipscript.IsIgnoredType(cfg.Zipscript, name) {
+			continue
+		}
+		return false
+	}
+	return true
 }

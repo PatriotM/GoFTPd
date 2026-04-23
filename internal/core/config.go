@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"goftpd/internal/timeutil"
+	"goftpd/internal/zipscript"
 	"gopkg.in/yaml.v3"
 )
 
@@ -35,6 +36,11 @@ type Config struct {
 	Master map[string]interface{} `yaml:"master"`
 	Slave  map[string]interface{} `yaml:"slave"`
 	Slaves []SlavePolicyConfig    `yaml:"slaves"` // per-slave routing/affinity rules (master mode)
+
+	// Sections are virtual section directories the master should keep alive in
+	// VFS and create on matching writable slaves. Nested dirs such as
+	// "/FOREIGN/TV-NL" are supported.
+	Sections []string `yaml:"sections"`
 
 	// InviteChannels maps channel names to required user flags. Channels
 	// not listed here are considered public and returned to every user
@@ -109,11 +115,10 @@ type Config struct {
 	DisplaySize         string `yaml:"display_size_unit"`
 	DisplaySpeed        string `yaml:"display_speed_unit"`
 	ColorMode           int    `yaml:"color_mode"`
-	IncompleteIndicator string `yaml:"incomplete_indicator"`
-
 	// Nuke
-	NukeMaxMultiplier int    `yaml:"nuke_max_multiplier"`
-	NukeDirStyle      string `yaml:"nukedir_style"`
+	NukeMaxMultiplier int              `yaml:"nuke_max_multiplier"`
+	NukeDirStyle      string           `yaml:"nukedir_style"`
+	Zipscript         zipscript.Config `yaml:"zipscript"`
 
 	// Plugins
 	Plugins         map[string]map[string]interface{} `yaml:"plugins"`
@@ -167,6 +172,7 @@ func LoadConfig(filePath string) (*Config, error) {
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, err
 	}
+	cfg.Zipscript.ApplyDefaults()
 	cfg.configPath = filePath
 	return cfg, nil
 }
@@ -215,6 +221,8 @@ func (c *Config) Rehash() (string, error) {
 	// Release management
 	c.NukeMaxMultiplier = fresh.NukeMaxMultiplier
 	c.NukeDirStyle = fresh.NukeDirStyle
+	c.Zipscript = fresh.Zipscript
+	c.Zipscript.ApplyDefaults()
 
 	// Invite + sitebot pointer
 	c.InviteChannels = fresh.InviteChannels
@@ -228,6 +236,7 @@ func (c *Config) Rehash() (string, error) {
 
 	// Slaves policy
 	c.Slaves = fresh.Slaves
+	c.Sections = fresh.Sections
 
 	// Security / TLS policy (policy toggles, not socket-level TLS itself)
 	c.RequireTLSControl = fresh.RequireTLSControl
@@ -240,8 +249,6 @@ func (c *Config) Rehash() (string, error) {
 	c.MaxUsers = fresh.MaxUsers
 	c.MaxUsersPerIP = fresh.MaxUsersPerIP
 	c.TotalUsers = fresh.TotalUsers
-	c.IncompleteIndicator = fresh.IncompleteIndicator
-
 	// Debug toggle
 	c.Debug = fresh.Debug
 
