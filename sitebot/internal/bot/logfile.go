@@ -14,24 +14,25 @@ import (
 // `<basePath>.YYYY-MM-DD` and any rotated file older than `keepDays` is
 // deleted.
 type rotatingLog struct {
-	mu       sync.Mutex
-	basePath string
-	keepDays int
-	f        *os.File
-	day      string
+	mu              sync.Mutex
+	basePath        string
+	deleteAfterDays int
+	f               *os.File
+	day             string
 }
 
-func newRotatingLog(basePath string, keepDays int) (*rotatingLog, error) {
-	if keepDays < 1 {
-		keepDays = 1
+func newRotatingLog(basePath string, deleteAfterDays int) (*rotatingLog, error) {
+	if deleteAfterDays < 1 {
+		deleteAfterDays = 1
 	}
 	if err := os.MkdirAll(filepath.Dir(basePath), 0755); err != nil {
 		return nil, err
 	}
-	r := &rotatingLog{basePath: basePath, keepDays: keepDays}
+	r := &rotatingLog{basePath: basePath, deleteAfterDays: deleteAfterDays}
 	if err := r.open(); err != nil {
 		return nil, err
 	}
+	r.purgeOld()
 	return r, nil
 }
 
@@ -66,13 +67,18 @@ func (r *rotatingLog) rotate(newDay string) error {
 	}
 	r.day = newDay
 
+	r.purgeOld()
+	return nil
+}
+
+func (r *rotatingLog) purgeOld() {
 	dir := filepath.Dir(r.basePath)
 	base := filepath.Base(r.basePath) + "."
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil
+		return
 	}
-	cutoff := time.Now().AddDate(0, 0, -r.keepDays)
+	cutoff := time.Now().AddDate(0, 0, -r.deleteAfterDays)
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -89,21 +95,25 @@ func (r *rotatingLog) rotate(newDay string) error {
 			_ = os.Remove(filepath.Join(dir, name))
 		}
 	}
-	return nil
 }
 
-// InstallFileLogger redirects the standard `log` package to tee output to
-// both stderr and a rotating file. Pass logFilePath="" to disable.
-// keepDays controls how many rotated files are retained (minimum 1).
-func InstallFileLogger(logFilePath string, keepDays int) error {
+// InstallFileLogger redirects the standard `log` package to a rotating file,
+// and optionally also mirrors to stderr. Pass logFilePath="" to disable.
+// deleteAfterDays controls when rotated files are deleted (minimum 1).
+func InstallFileLogger(logFilePath string, deleteAfterDays int, alsoConsole bool) error {
 	if logFilePath == "" {
 		return nil
 	}
-	r, err := newRotatingLog(logFilePath, keepDays)
+	r, err := newRotatingLog(logFilePath, deleteAfterDays)
 	if err != nil {
 		return err
 	}
-	log.SetOutput(io.MultiWriter(os.Stderr, r))
-	log.Printf("[LOG] File logging enabled: %s (keep %d days)", logFilePath, keepDays)
+	if alsoConsole {
+		log.SetOutput(io.MultiWriter(os.Stderr, r))
+		log.Printf("[LOG] File logging enabled: %s (delete after %d days, console mirrored)", logFilePath, deleteAfterDays)
+	} else {
+		log.SetOutput(r)
+		log.Printf("[LOG] File logging enabled: %s (delete after %d days, console disabled)", logFilePath, deleteAfterDays)
+	}
 	return nil
 }

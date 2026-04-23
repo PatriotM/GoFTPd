@@ -525,12 +525,15 @@ xdupe_db_path: "./logs/xdupe.db"
 
 # =============================================================================
 #  Debug — verbose logging for all subsystems.
-#  When debug is true AND log_file is set, output is tee'd to both stderr
-#  and the file. The file rotates daily — the active file is always
-#  <log_file>, previous days are archived as <log_file>.YYYY-MM-DD.
-#  log_keep_days controls how many archived copies to retain (default 1 =
-#  today + yesterday). Set log_file: "" to disable file logging.
+#  When debug is true AND log_file is set, output goes to the rotating log
+#  file. Set log_console: true to mirror that same output to the console.
+#  The active file is always <log_file>; previous days are archived as
+#  <log_file>.YYYY-MM-DD. log_delete_after_days removes rotated log files
+#  older than that many days. log_keep_days is kept as an older alias.
+#  Set log_file: "" to disable file logging.
 # =============================================================================
 debug:          true
 log_file:       "logs/goftpd.log"
+log_delete_after_days: 1
 log_keep_days:  1
+log_console:    true

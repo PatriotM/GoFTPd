@@ -45,7 +45,7 @@ func main() {
 	// Tee's log output to both stderr and the file, rotates daily, keeps the
 	// last log_keep_days archived copies (default 1).
 	if cfg.Debug && cfg.LogFile != "" {
-		if err := core.InstallFileLogger(cfg.LogFile, cfg.LogKeepDays); err != nil {
+		if err := core.InstallFileLogger(cfg.LogFile, cfg.LogDeleteAfterDays, cfg.LogConsole); err != nil {
 			log.Printf("[LOG] file logger init failed: %v (continuing with stderr only)", err)
 		}
 	}
@@ -256,9 +256,10 @@ func main() {
 		if err := cfg.PluginManager.RegisterPlugin(p); err != nil {
 			log.Fatalf("Failed to register %s plugin: %v", pluginName, err)
 		}
-		if cfg.Debug {
-			log.Printf("[PLUGINS] Registered %s plugin", pluginName)
-		}
+		log.Printf("[PLUGINS] Plugin loaded: %s", pluginName)
+	}
+	if len(cfg.Plugins) > 0 {
+		log.Printf("[PLUGINS] Plugin load complete")
 	}
 
 	// 7b. Initialize all plugins with config
