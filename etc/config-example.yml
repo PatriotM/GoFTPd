@@ -240,15 +240,71 @@ nukedir_style:       "[NUKED]-%N"   # Renamed dir pattern (%N = release name)
 # =============================================================================
 zipscript:
   enabled: true                # master-side zipscript module on/off
+  debug: false                 # parsed now; reserved for zipscript-specific debug output
 
   race:
     enabled: true              # enables race tracking derived labels/stats
+    max_users_in_top: 15       # parsed; not enforced yet
+    max_groups_in_top: 0       # parsed; not enforced yet
     complete_banner: true      # show [SITE] - ( ... COMPLETE ... ) - [SITE]
     music_complete_genre: true # add genre/year on MP3/FLAC COMPLETE banner
+    announce_norace: true      # parsed; not enforced yet
 
   sfv:
+    force_first: false         # parsed; not enforced yet
+    deny_double_sfv: true      # parsed; not enforced yet
     delete_bad_crc: true       # delete uploaded files that fail SFV CRC
     ignore_zero_size: true     # delete zero-byte uploads instead of keeping them
+    allow_resume: false        # parsed; not enforced yet
+
+  sections:
+    sfv:
+      - "/APPS/*"
+      - "/BLURAY/*"
+      - "/FLAC/*"
+      - "/MP3/*"
+      - "/TV-1080P/*"
+      - "/FOREIGN/TV-NL/*"
+    nocheck:
+      - "/PRIVATE/*"
+      - "/LINKS/*"
+      - "/PRE/*"
+      - "/REQUESTS/*"
+    cleanup:
+      - "/APPS/*"
+      - "/BLURAY/*"
+      - "/TV-1080P/*"
+
+  incomplete:
+    enabled: true                    # parsed; not enforced yet
+    indicator: "../[incomplete]-%0"  # parsed; not enforced yet
+    nfo_indicator: "../[no-nfo]-%0"  # parsed; not enforced yet
+    cd_indicator: "../../[incomplete]-(%0)-%1" # parsed; not enforced yet
+    mark_empty_dirs_on_rescan: true  # parsed; not enforced yet
+
+  allowed_files:
+    allowed_types: ["jpg", "jpeg", "cue", "m3u", "txt", "vob", "png", "m2ts", "ts", "log", "mkv"] # parsed; not enforced yet
+    ignored_types: ["diz", "debug", "message", "imdb", "html", "url", "m3u", "metadata"] # parsed; not enforced yet
+
+  audio:
+    enabled: true               # parsed; not enforced yet
+    cbr_check: false            # parsed; not enforced yet
+    year_check: false           # parsed; not enforced yet
+    banned_genre_check: true    # parsed; not enforced yet
+    allowed_genre_check: false  # parsed; not enforced yet
+    allowed_constant_bitrates: [192, 320] # parsed; not enforced yet
+    allowed_years: [2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025] # parsed; not enforced yet
+    banned_genres:
+      - "Christian Rap"
+      - "Christian Gangsta Rap"
+      - "Contemporary Christian"
+      - "Christian Rock"
+    allowed_genres: []          # parsed; not enforced yet
+    sort:
+      genre: false              # parsed; old ZipScript-C used this for genre sort trees
+      artist: false             # parsed; not enforced yet
+      year: false               # parsed; not enforced yet
+      group: false              # parsed; not enforced yet
 
 plugins:
   dateddirs:

@@ -4,9 +4,12 @@ type Config struct {
 	Enabled bool `yaml:"enabled"`
 	Debug   bool `yaml:"debug"`
 
-	Sections SectionsConfig `yaml:"sections"`
-	Race     RaceConfig     `yaml:"race"`
-	SFV      SFVConfig      `yaml:"sfv"`
+	Sections     SectionsConfig     `yaml:"sections"`
+	Race         RaceConfig         `yaml:"race"`
+	SFV          SFVConfig          `yaml:"sfv"`
+	Incomplete   IncompleteConfig   `yaml:"incomplete"`
+	AllowedFiles AllowedFilesConfig `yaml:"allowed_files"`
+	Audio        AudioConfig        `yaml:"audio"`
 
 	// Legacy flat keys kept for compatibility with the first pass.
 	LegacyRaceStats          bool `yaml:"race_stats"`
@@ -37,6 +40,39 @@ type SFVConfig struct {
 	DeleteBadCRC   bool `yaml:"delete_bad_crc"`
 	IgnoreZeroSize bool `yaml:"ignore_zero_size"`
 	AllowResume    bool `yaml:"allow_resume"`
+}
+
+type IncompleteConfig struct {
+	Enabled               bool   `yaml:"enabled"`
+	Indicator             string `yaml:"indicator"`
+	NFOIndicator          string `yaml:"nfo_indicator"`
+	CDIndicator           string `yaml:"cd_indicator"`
+	MarkEmptyDirsOnRescan bool   `yaml:"mark_empty_dirs_on_rescan"`
+}
+
+type AllowedFilesConfig struct {
+	AllowedTypes []string `yaml:"allowed_types"`
+	IgnoredTypes []string `yaml:"ignored_types"`
+}
+
+type AudioConfig struct {
+	Enabled                 bool            `yaml:"enabled"`
+	CBRCheck                bool            `yaml:"cbr_check"`
+	YearCheck               bool            `yaml:"year_check"`
+	BannedGenreCheck        bool            `yaml:"banned_genre_check"`
+	AllowedGenreCheck       bool            `yaml:"allowed_genre_check"`
+	AllowedConstantBitrates []int           `yaml:"allowed_constant_bitrates"`
+	AllowedYears            []int           `yaml:"allowed_years"`
+	BannedGenres            []string        `yaml:"banned_genres"`
+	AllowedGenres           []string        `yaml:"allowed_genres"`
+	Sort                    AudioSortConfig `yaml:"sort"`
+}
+
+type AudioSortConfig struct {
+	Genre  bool `yaml:"genre"`
+	Artist bool `yaml:"artist"`
+	Year   bool `yaml:"year"`
+	Group  bool `yaml:"group"`
 }
 
 func (c *Config) ApplyDefaults() {
