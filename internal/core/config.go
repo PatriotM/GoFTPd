@@ -137,6 +137,7 @@ type Config struct {
 	// LogKeepDays = 1 (today + yesterday only).
 	LogFile     string `yaml:"log_file"`
 	LogKeepDays int    `yaml:"log_keep_days"`
+	LogConsole  bool   `yaml:"log_console"`
 
 	// TLS/Security Policy
 	RequireTLSControl bool                `yaml:"require_tls_control"` // Force TLS on control channel
@@ -171,6 +172,16 @@ func LoadConfig(filePath string) (*Config, error) {
 	cfg := &Config{}
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, err
+	}
+	if !cfg.LogConsole {
+		raw := map[string]interface{}{}
+		if err := yaml.Unmarshal(data, &raw); err == nil {
+			if _, ok := raw["log_console"]; !ok {
+				cfg.LogConsole = true
+			}
+		} else {
+			cfg.LogConsole = true
+		}
 	}
 	cfg.Zipscript.ApplyDefaults()
 	cfg.configPath = filePath
@@ -251,6 +262,9 @@ func (c *Config) Rehash() (string, error) {
 	c.TotalUsers = fresh.TotalUsers
 	// Debug toggle
 	c.Debug = fresh.Debug
+	c.LogFile = fresh.LogFile
+	c.LogKeepDays = fresh.LogKeepDays
+	c.LogConsole = fresh.LogConsole
 
 	// Fire post-rehash hook if set (e.g. reapply slave policies to SlaveManager).
 	if c.RehashHook != nil {

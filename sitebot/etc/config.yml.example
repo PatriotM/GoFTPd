@@ -1,6 +1,7 @@
 debug: true
 log_file:      "logs/sitebot.log"
 log_keep_days: 1
+log_console:   true
 
 event_fifo: "/GoFTPd/etc/goftpd.sitebot.fifo"
 

@@ -61,6 +61,14 @@ func (b *Bot) Start() error {
 	return nil
 }
 
+func (b *Bot) registerPlugin(name string, h plugin.Handler) error {
+	if err := b.Plugins.Register(h); err != nil {
+		return err
+	}
+	log.Printf("[Bot] Plugin loaded: %s", name)
+	return nil
+}
+
 func (b *Bot) initializePlugins() error {
 	if enabled, ok := b.Config.Plugins.Enabled["Announce"]; !ok || enabled {
 		announce := announceplugin.New()
@@ -71,7 +79,7 @@ func (b *Bot) initializePlugins() error {
 		if err := announce.Initialize(cfg); err != nil {
 			return err
 		}
-		if err := b.Plugins.Register(announce); err != nil {
+		if err := b.registerPlugin("Announce", announce); err != nil {
 			return err
 		}
 	}
@@ -99,7 +107,7 @@ func (b *Bot) initializePlugins() error {
 				}
 			}
 		})
-		if err := b.Plugins.Register(tv); err != nil {
+		if err := b.registerPlugin("TVMaze", tv); err != nil {
 			return err
 		}
 	}
@@ -125,7 +133,7 @@ func (b *Bot) initializePlugins() error {
 				}
 			}
 		})
-		if err := b.Plugins.Register(im); err != nil {
+		if err := b.registerPlugin("IMDB", im); err != nil {
 			return err
 		}
 	}
@@ -138,7 +146,7 @@ func (b *Bot) initializePlugins() error {
 		if err := news.Initialize(cfg); err != nil {
 			return err
 		}
-		if err := b.Plugins.Register(news); err != nil {
+		if err := b.registerPlugin("News", news); err != nil {
 			return err
 		}
 	}
@@ -151,7 +159,7 @@ func (b *Bot) initializePlugins() error {
 		if err := free.Initialize(cfg); err != nil {
 			return err
 		}
-		if err := b.Plugins.Register(free); err != nil {
+		if err := b.registerPlugin("Free", free); err != nil {
 			return err
 		}
 	}
@@ -164,7 +172,7 @@ func (b *Bot) initializePlugins() error {
 		if err := affils.Initialize(cfg); err != nil {
 			return err
 		}
-		if err := b.Plugins.Register(affils); err != nil {
+		if err := b.registerPlugin("Affils", affils); err != nil {
 			return err
 		}
 	}
@@ -177,7 +185,7 @@ func (b *Bot) initializePlugins() error {
 		if err := requests.Initialize(cfg); err != nil {
 			return err
 		}
-		if err := b.Plugins.Register(requests); err != nil {
+		if err := b.registerPlugin("Request", requests); err != nil {
 			return err
 		}
 	}
@@ -190,7 +198,7 @@ func (b *Bot) initializePlugins() error {
 		if err := bnc.Initialize(cfg); err != nil {
 			return err
 		}
-		if err := b.Plugins.Register(bnc); err != nil {
+		if err := b.registerPlugin("BNC", bnc); err != nil {
 			return err
 		}
 	}
@@ -203,7 +211,7 @@ func (b *Bot) initializePlugins() error {
 		if err := bw.Initialize(cfg); err != nil {
 			return err
 		}
-		if err := b.Plugins.Register(bw); err != nil {
+		if err := b.registerPlugin("BW", bw); err != nil {
 			return err
 		}
 	}
@@ -216,11 +224,11 @@ func (b *Bot) initializePlugins() error {
 		if err := adminCommander.Initialize(cfg); err != nil {
 			return err
 		}
-		if err := b.Plugins.Register(adminCommander); err != nil {
+		if err := b.registerPlugin("AdminCommander", adminCommander); err != nil {
 			return err
 		}
 	}
-	log.Printf("[Bot] Loaded %d plugins: %v", len(b.Plugins.List()), b.Plugins.List())
+	log.Printf("[Bot] Plugin load complete: %d total", len(b.Plugins.List()))
 	return nil
 }
 

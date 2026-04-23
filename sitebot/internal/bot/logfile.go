@@ -92,10 +92,10 @@ func (r *rotatingLog) rotate(newDay string) error {
 	return nil
 }
 
-// InstallFileLogger redirects the standard `log` package to tee output to
-// both stderr and a rotating file. Pass logFilePath="" to disable.
+// InstallFileLogger redirects the standard `log` package to a rotating file,
+// and optionally also mirrors to stderr. Pass logFilePath="" to disable.
 // keepDays controls how many rotated files are retained (minimum 1).
-func InstallFileLogger(logFilePath string, keepDays int) error {
+func InstallFileLogger(logFilePath string, keepDays int, alsoConsole bool) error {
 	if logFilePath == "" {
 		return nil
 	}
@@ -103,7 +103,12 @@ func InstallFileLogger(logFilePath string, keepDays int) error {
 	if err != nil {
 		return err
 	}
-	log.SetOutput(io.MultiWriter(os.Stderr, r))
-	log.Printf("[LOG] File logging enabled: %s (keep %d days)", logFilePath, keepDays)
+	if alsoConsole {
+		log.SetOutput(io.MultiWriter(os.Stderr, r))
+		log.Printf("[LOG] File logging enabled: %s (keep %d days, console mirrored)", logFilePath, keepDays)
+	} else {
+		log.SetOutput(r)
+		log.Printf("[LOG] File logging enabled: %s (keep %d days, console disabled)", logFilePath, keepDays)
+	}
 	return nil
 }
