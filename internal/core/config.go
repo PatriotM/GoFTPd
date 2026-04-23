@@ -36,6 +36,11 @@ type Config struct {
 	Slave  map[string]interface{} `yaml:"slave"`
 	Slaves []SlavePolicyConfig    `yaml:"slaves"` // per-slave routing/affinity rules (master mode)
 
+	// Sections are virtual section directories the master should keep alive in
+	// VFS and create on matching writable slaves. Nested dirs such as
+	// "/FOREIGN/TV-NL" are supported.
+	Sections []string `yaml:"sections"`
+
 	// InviteChannels maps channel names to required user flags. Channels
 	// not listed here are considered public and returned to every user
 	// regardless of flags. A user needs at least ONE of the listed flags.
@@ -228,6 +233,7 @@ func (c *Config) Rehash() (string, error) {
 
 	// Slaves policy
 	c.Slaves = fresh.Slaves
+	c.Sections = fresh.Sections
 
 	// Security / TLS policy (policy toggles, not socket-level TLS itself)
 	c.RequireTLSControl = fresh.RequireTLSControl

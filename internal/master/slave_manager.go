@@ -34,6 +34,10 @@ type SlaveManager struct {
 	policies   map[string]SlaveRoutePolicy
 	policiesMu sync.RWMutex
 
+	// Section/root directories that should exist on matching writable slaves.
+	bootstrapDirs   []string
+	bootstrapDirsMu sync.RWMutex
+
 	// Virtual File System: master-side file index
 	vfs *VirtualFileSystem
 
@@ -111,6 +115,28 @@ func (sm *SlaveManager) SetSlavePolicies(policies map[string]SlaveRoutePolicy) {
 
 func (sm *SlaveManager) SetProtectedDirs(paths []string) {
 	sm.vfs.SetProtectedDirs(paths)
+}
+
+func (sm *SlaveManager) SetBootstrapDirs(paths []string) {
+	sm.bootstrapDirsMu.Lock()
+	defer sm.bootstrapDirsMu.Unlock()
+
+	seen := make(map[string]bool, len(paths))
+	sm.bootstrapDirs = sm.bootstrapDirs[:0]
+	for _, p := range paths {
+		p = normalizeBootstrapDir(p)
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		sm.bootstrapDirs = append(sm.bootstrapDirs, p)
+	}
+}
+
+func (sm *SlaveManager) EnsureBootstrapDirs() {
+	for _, rs := range sm.GetAllSlaves() {
+		sm.ensureBootstrapDirsOnSlave(rs)
+	}
 }
 
 func (sm *SlaveManager) getPolicy(name string) (SlaveRoutePolicy, bool) {
@@ -254,6 +280,8 @@ func (sm *SlaveManager) initializeSlaveAfterConnect(rs *RemoteSlave) {
 	sm.publishDiskStatus(rs)
 	log.Printf("[SlaveManager] Slave %s is now AVAILABLE (remerge running in background)", rs.name)
 
+	sm.ensureBootstrapDirsOnSlave(rs)
+
 	// Mark current files unseen before remerge so stale entries can be purged.
 	sm.vfs.MarkAllUnseen(rs.name)
 
@@ -375,6 +403,68 @@ func (sm *SlaveManager) StartRemergeAll() (int, []string) {
 		started++
 	}
 	return started, errs
+}
+
+func (sm *SlaveManager) ensureBootstrapDirsOnSlave(rs *RemoteSlave) {
+	if rs == nil || !rs.IsOnline() || sm.IsSlaveReadOnly(rs.Name()) {
+		return
+	}
+	dirs := sm.getBootstrapDirsForSlave(rs.Name())
+	for _, dirPath := range dirs {
+		sm.vfs.AddFile(dirPath, VFSFile{
+			Path:         dirPath,
+			IsDir:        true,
+			LastModified: time.Now().Unix(),
+			Owner:        "GoFTPd",
+			Group:        "GoFTPd",
+			Seen:         true,
+		})
+		index, err := IssueMakeDir(rs, dirPath)
+		if err != nil {
+			log.Printf("[SlaveManager] Bootstrap mkdir %s on %s failed: %v", dirPath, rs.Name(), err)
+			continue
+		}
+		if _, err := rs.FetchResponse(index, 30*time.Second); err != nil {
+			log.Printf("[SlaveManager] Bootstrap mkdir %s on %s failed: %v", dirPath, rs.Name(), err)
+		}
+	}
+}
+
+func (sm *SlaveManager) getBootstrapDirsForSlave(slaveName string) []string {
+	sm.bootstrapDirsMu.RLock()
+	dirs := append([]string(nil), sm.bootstrapDirs...)
+	sm.bootstrapDirsMu.RUnlock()
+
+	if len(dirs) == 0 {
+		return nil
+	}
+	policy, hasPolicy := sm.getPolicy(slaveName)
+	if !hasPolicy || (len(policy.Sections) == 0 && len(policy.Paths) == 0) {
+		return dirs
+	}
+
+	out := make([]string, 0, len(dirs))
+	for _, dirPath := range dirs {
+		if slavePolicyAccepts(policy, sectionFromUploadPath(dirPath), dirPath) {
+			out = append(out, dirPath)
+		}
+	}
+	return out
+}
+
+func normalizeBootstrapDir(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" || strings.ContainsAny(p, "*?[]") {
+		return ""
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	p = path.Clean(p)
+	if p == "." || p == "/" {
+		return ""
+	}
+	return p
 }
 
 func (sm *SlaveManager) GetAvailableSlaves() []*RemoteSlave {

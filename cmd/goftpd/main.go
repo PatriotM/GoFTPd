@@ -115,27 +115,25 @@ func main() {
 				},
 			})
 		})
+		policies := make(map[string]master.SlaveRoutePolicy, len(cfg.Slaves))
+		for _, sp := range cfg.Slaves {
+			if sp.Name == "" {
+				continue
+			}
+			policies[sp.Name] = master.SlaveRoutePolicy{
+				Sections: sp.Sections,
+				Paths:    sp.Paths,
+				Weight:   sp.Weight,
+				ReadOnly: sp.ReadOnly,
+			}
+		}
+		sm.SetSlavePolicies(policies)
+		sm.SetBootstrapDirs(configuredSectionDirs(cfg))
 		sm.SetProtectedDirs(protectedVFSDirs(cfg))
 		if err := sm.Start(); err != nil {
 			log.Fatalf("SlaveManager failed: %v", err)
 		}
-
-		// Apply per-slave routing policies (section affinity + load-balancing weights)
-		if len(cfg.Slaves) > 0 {
-			policies := make(map[string]master.SlaveRoutePolicy, len(cfg.Slaves))
-			for _, sp := range cfg.Slaves {
-				if sp.Name == "" {
-					continue
-				}
-				policies[sp.Name] = master.SlaveRoutePolicy{
-					Sections: sp.Sections,
-					Paths:    sp.Paths,
-					Weight:   sp.Weight,
-					ReadOnly: sp.ReadOnly,
-				}
-			}
-			sm.SetSlavePolicies(policies)
-			sm.SetProtectedDirs(protectedVFSDirs(cfg))
+		if len(policies) > 0 {
 			sm.PublishAllDiskStatuses()
 			log.Printf("[MASTER] Applied routing policies for %d slave(s)", len(policies))
 		}
@@ -166,7 +164,9 @@ func main() {
 				}
 			}
 			sm.SetSlavePolicies(policies)
+			sm.SetBootstrapDirs(configuredSectionDirs(c))
 			sm.SetProtectedDirs(protectedVFSDirs(c))
+			sm.EnsureBootstrapDirs()
 			sm.PublishAllDiskStatuses()
 			log.Printf("[REHASH] reapplied %d slave policies", len(policies))
 		}
@@ -435,6 +435,10 @@ func stringSliceFromPluginConfig(raw interface{}) []string {
 }
 
 func protectedVFSDirs(cfg *core.Config) []string {
+	return configuredSectionDirs(cfg)
+}
+
+func configuredSectionDirs(cfg *core.Config) []string {
 	if cfg == nil {
 		return nil
 	}
@@ -466,6 +470,9 @@ func protectedVFSDirs(cfg *core.Config) []string {
 				add(parts[0])
 			}
 		}
+	}
+	for _, section := range cfg.Sections {
+		add(section)
 	}
 	if datedCfg := cfg.Plugins["dateddirs"]; datedCfg != nil {
 		for _, section := range stringSliceFromPluginConfig(datedCfg["sections"]) {

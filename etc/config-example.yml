@@ -97,6 +97,67 @@ slave:
 
 
 # =============================================================================
+#  Section directories - master-only
+#  These dirs are kept alive in the master's VFS and created automatically on
+#  matching writable slaves when they connect or after SITE REHASH.
+#
+#  Nested dirs are supported, e.g. "/FOREIGN/TV-NL".
+#  Read-only slaves are never modified.
+# =============================================================================
+sections:
+  - "/0DAY"
+  - "/APPS"
+  - "/ARCHiVE"
+  - "/BLURAY"
+  - "/BLURAY-UHD"
+  - "/DVDR"
+  - "/EBOOKS"
+  - "/FLAC"
+  - "/FOREIGN"
+  - "/FOREIGN/TV-CZ"
+  - "/FOREIGN/TV-DE"
+  - "/FOREIGN/TV-DK"
+  - "/FOREIGN/TV-ES"
+  - "/FOREIGN/TV-FI"
+  - "/FOREIGN/TV-FR"
+  - "/FOREIGN/TV-IT"
+  - "/FOREIGN/TV-NL"
+  - "/FOREIGN/TV-NO"
+  - "/FOREIGN/TV-PL"
+  - "/FOREIGN/TV-SE"
+  - "/FOREIGN/TV-SK"
+  - "/FOREIGN/X264-HD-FOREIGN"
+  - "/FOREIGN/X264-SD-FOREIGN"
+  - "/FOREIGN/X265-FOREIGN"
+  - "/GAMES"
+  - "/iNFO"
+  - "/MBLURAY"
+  - "/MDVDR"
+  - "/MP3"
+  - "/MVID"
+  - "/NSW"
+  - "/PRE"
+  - "/PS5"
+  - "/REQUESTS"
+  - "/SPEEDTEST"
+  - "/TV-1080P"
+  - "/TV-2160P"
+  - "/TV-720P"
+  - "/TV-BLURAY"
+  - "/TV-HDRIP"
+  - "/TV-SD"
+  - "/TV-SPORTS"
+  - "/X264-HD-1080P"
+  - "/X264-HD-720P"
+  - "/X264-SD"
+  - "/X265"
+  - "/XXX-0DAY"
+  - "/XXX-HD"
+  - "/XXX-IMAGESETS"
+  - "/XXX-SD"
+
+
+# =============================================================================
 #  Storage + paths
 # =============================================================================
 storage_path:   ./site          # Master: fallback path. Slave: default root if `roots:` empty.

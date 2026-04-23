@@ -31,8 +31,8 @@ type AnnouncePlugin struct {
 	state map[string]*releaseState
 }
 
-func New() *AnnouncePlugin               { return &AnnouncePlugin{state: map[string]*releaseState{}} }
-func (p *AnnouncePlugin) Name() string   { return "Announce" }
+func New() *AnnouncePlugin             { return &AnnouncePlugin{state: map[string]*releaseState{}} }
+func (p *AnnouncePlugin) Name() string { return "Announce" }
 func (p *AnnouncePlugin) Initialize(config map[string]interface{}) error {
 	if debug, ok := config["debug"].(bool); ok {
 		p.debug = debug
@@ -105,14 +105,14 @@ func mb(size int64) string            { return fmt.Sprintf("%.0fMB", float64(siz
 func (p *AnnouncePlugin) vars(evt *event.Event) map[string]string {
 	rel := releaseName(evt)
 	v := map[string]string{
-		"section":  evt.Section,
-		"relname":  rel,
-		"reldir":   rel,
-		"u_name":   evt.User,
-		"g_name":   evt.Group,
-		"filename": evt.Filename,
-		"path":     evt.Path,
-		"u_speed":  speedMB(evt),
+		"section":     evt.Section,
+		"relname":     rel,
+		"reldir":      rel,
+		"u_name":      evt.User,
+		"g_name":      evt.Group,
+		"filename":    evt.Filename,
+		"path":        evt.Path,
+		"u_speed":     speedMB(evt),
 		"file_mbytes": mb(evt.Size),
 	}
 	for k, val := range evt.Data {
@@ -323,7 +323,8 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 		}
 	case event.EventRaceFooter:
 		if line := p.render("STATS_END", vars, "STATS: -----------====>>>>           END          <<<<====-----------"); strings.TrimSpace(line) != "" {
-			outs = append(outs, plugin.Output{Type: "STATS", Text: line + "\n "})
+			outs = append(outs, plugin.Output{Type: "STATS", Text: line})
+			outs = append(outs, plugin.Output{Type: "STATS", Text: "\u00a0"})
 		}
 	case event.EventNuke:
 		outs = append(outs, plugin.Output{Type: "NUKE", Text: p.render("NUKE", vars, fmt.Sprintf("NUKE: [%s] %s by %s", section, rel, evt.User))})
