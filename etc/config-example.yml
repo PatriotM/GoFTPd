@@ -240,11 +240,15 @@ nukedir_style:       "[NUKED]-%N"   # Renamed dir pattern (%N = release name)
 # =============================================================================
 zipscript:
   enabled: true                # master-side zipscript module on/off
-  race_stats: true             # enables race tracking derived labels/stats
-  complete_banner: true        # show [SITE] - ( ... COMPLETE ... ) - [SITE]
-  music_complete_genre: true   # add genre/year on MP3/FLAC COMPLETE banner
-  delete_bad_crc: true         # delete uploaded files that fail SFV CRC
-  ignore_zero_size: true       # delete zero-byte uploads instead of keeping them
+
+  race:
+    enabled: true              # enables race tracking derived labels/stats
+    complete_banner: true      # show [SITE] - ( ... COMPLETE ... ) - [SITE]
+    music_complete_genre: true # add genre/year on MP3/FLAC COMPLETE banner
+
+  sfv:
+    delete_bad_crc: true       # delete uploaded files that fail SFV CRC
+    ignore_zero_size: true     # delete zero-byte uploads instead of keeping them
 
 plugins:
   dateddirs:

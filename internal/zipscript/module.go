@@ -17,7 +17,7 @@ func Enabled(cfg Config) bool {
 }
 
 func ExpectedFileLabel(cfg Config, dirPath string) string {
-	if !cfg.Enabled || !cfg.RaceStats {
+	if !cfg.Enabled || !cfg.Race.Enabled {
 		return "file(s)"
 	}
 	section := strings.ToUpper(strings.Trim(path.Clean(dirPath), "/"))
@@ -33,7 +33,7 @@ func ExpectedFileLabel(cfg Config, dirPath string) string {
 }
 
 func IsRacePayloadFile(cfg Config, fileName string) bool {
-	if !cfg.Enabled || !cfg.RaceStats {
+	if !cfg.Enabled || !cfg.Race.Enabled {
 		return false
 	}
 	name := strings.ToLower(strings.TrimSpace(fileName))
@@ -44,7 +44,7 @@ func IsRacePayloadFile(cfg Config, fileName string) bool {
 }
 
 func CanTriggerRaceEnd(cfg Config, sfvEntries map[string]uint32, fileName string) bool {
-	if !cfg.Enabled || !cfg.RaceStats {
+	if !cfg.Enabled || !cfg.Race.Enabled {
 		return false
 	}
 	name := raceEntryKey(fileName)
@@ -56,7 +56,7 @@ func CanTriggerRaceEnd(cfg Config, sfvEntries map[string]uint32, fileName string
 }
 
 func MediaInfoGraceDelay(cfg Config, fileName string) time.Duration {
-	if !cfg.Enabled || !cfg.RaceStats {
+	if !cfg.Enabled || !cfg.Race.Enabled {
 		return 0
 	}
 	if isMediaInfoFile(fileName) {
@@ -66,11 +66,11 @@ func MediaInfoGraceDelay(cfg Config, fileName string) time.Duration {
 }
 
 func CompleteStatusName(cfg Config, siteName, dirPath string, totalMB float64, totalFiles int, media MediaInfoProvider) string {
-	if !cfg.Enabled || !cfg.CompleteBanner {
+	if !cfg.Enabled || !cfg.Race.CompleteBanner {
 		return ""
 	}
 	extra := ""
-	if cfg.MusicCompleteGenre {
+	if cfg.Race.MusicCompleteGenre {
 		extra = musicCompleteExtra(dirPath, media)
 	}
 	if extra != "" {
@@ -82,11 +82,11 @@ func CompleteStatusName(cfg Config, siteName, dirPath string, totalMB float64, t
 }
 
 func ShouldDeleteZeroByte(cfg Config) bool {
-	return cfg.Enabled && cfg.IgnoreZeroSize
+	return cfg.Enabled && cfg.SFV.IgnoreZeroSize
 }
 
 func ShouldDeleteBadCRC(cfg Config) bool {
-	return cfg.Enabled && cfg.DeleteBadCRC
+	return cfg.Enabled && cfg.SFV.DeleteBadCRC
 }
 
 func isMediaInfoFile(fileName string) bool {
