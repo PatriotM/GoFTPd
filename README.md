@@ -41,11 +41,19 @@ PASV/CPSV/PORT, SSCN, and PROT P.
 ./generate_certs.sh
 cp etc/config-example.yml etc/config.yml
 ./goftpd
+
+cd sitebot
+./build.sh
+cp etc/config.yml.example etc/config.yml
+./sitebot -config etc/config.yml
 ```
 
 Edit `etc/config.yml` before running it for real. The same config file is used
 for master and slave mode; `mode: master` or `mode: slave` decides which blocks
 are active.
+
+Edit `sitebot/etc/config.yml` before starting the sitebot. The daemon and
+sitebot must use the same `event_fifo` path.
 
 The example user is `goftpd` / `goftpd`. Change that before exposing the
 daemon.
