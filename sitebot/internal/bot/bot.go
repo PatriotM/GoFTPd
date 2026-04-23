@@ -441,6 +441,27 @@ func pathMatches(pattern, p string) bool {
 	}
 	return strings.HasPrefix(strings.ToLower(p), strings.ToLower(strings.TrimRight(pattern, "*")))
 }
+
+func (b *Bot) resolveSection(pathValue, fallback string) string {
+	best := strings.TrimSpace(fallback)
+	bestScore := -1
+	for _, sec := range b.Config.Sections {
+		for _, pat := range sec.Paths {
+			if !pathMatches(pat, pathValue) {
+				continue
+			}
+			score := len(strings.TrimRight(strings.TrimSpace(pat), "*"))
+			if score > bestScore {
+				best = sec.Name
+				bestScore = score
+			}
+		}
+	}
+	if strings.TrimSpace(best) == "" {
+		return fallback
+	}
+	return best
+}
 func (b *Bot) routeChannels(evt *event.Event, outType string) []string {
 	if chs := b.Config.Announce.TypeRoutes[outType]; len(chs) > 0 {
 		return nonEmptyChannels(chs)
