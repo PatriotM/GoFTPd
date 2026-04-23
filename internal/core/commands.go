@@ -748,35 +748,13 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				// Race-stats virtual entry — mirrors the [HV] - ( ... COMPLETE ) - [HV]
 				// row that LIST shows. Rendered as Type=dir so it appears at the top
 				// of client browsers the same way LIST's drwxr-xr-x row did.
-				_, _, totalBytes, present, total := bridge.GetVFSRaceStats(s.CurrentDir)
-				if total > 0 {
-					siteName := s.Config.SiteNameShort
-					if siteName == "" {
-						siteName = "GoFTPd"
-					}
-					var statusName string
-					if present >= total {
-						totalMB := float64(totalBytes) / (1024 * 1024)
-						statusName = zipscript.CompleteStatusName(s.Config.Zipscript, siteName, s.CurrentDir, totalMB, total, bridge)
-					} else {
-						pct := (present * 100) / total
-						bar := "["
-						barWidth := 20
-						filled := (present * barWidth) / total
-						for i := 0; i < barWidth; i++ {
-							if i < filled {
-								bar += "#"
-							} else {
-								bar += ":"
-							}
-						}
-						bar += "]"
-						statusName = fmt.Sprintf("%s - %3d%% Complete - [%s]", bar, pct, siteName)
-					}
+				siteName := s.Config.SiteNameShort
+				if siteName == "" {
+					siteName = "GoFTPd"
+				}
+				if statusName := dirRaceStatusName(bridge, s.Config, s.CurrentDir, siteName); strings.TrimSpace(statusName) != "" {
 					nowTs := timeutil.FTPMachine(time.Now())
-					if strings.TrimSpace(statusName) != "" {
-						output.WriteString(fmt.Sprintf("Modify=%s;Perm=el;Type=dir; %s\r\n", nowTs, statusName))
-					}
+					output.WriteString(fmt.Sprintf("Modify=%s;Perm=el;Type=dir; %s\r\n", nowTs, statusName))
 				}
 
 				for _, marker := range incompleteMarkerEntries(bridge, s.Config, activeIncompleteIndicator(s.Config), s.CurrentDir, entries) {
@@ -902,7 +880,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					siteName = "GoFTPd"
 				}
 
-				_, _, totalBytes, present, total := bridge.GetVFSRaceStats(s.CurrentDir)
+				totalBytes, present, total := dirRaceProgress(bridge, s.Config, s.CurrentDir)
 
 				if s.Config.Debug {
 					log.Printf("[LIST/RACESTATS] dir=%s totalBytes=%d present=%d total=%d",
@@ -914,31 +892,9 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					existingFiles[e.Name] = true
 				}
 
-				if total > 0 {
-					pct := (present * 100) / total
-					totalMB := float64(totalBytes) / (1024 * 1024)
-
-					var statusName string
-					if present >= total {
-						statusName = zipscript.CompleteStatusName(s.Config.Zipscript, siteName, s.CurrentDir, totalMB, total, bridge)
-					} else {
-						bar := "["
-						barWidth := 20
-						filled := (present * barWidth) / total
-						for i := 0; i < barWidth; i++ {
-							if i < filled {
-								bar += "#"
-							} else {
-								bar += ":"
-							}
-						}
-						bar += "]"
-						statusName = fmt.Sprintf("%s - %3d%% Complete - [%s]", bar, pct, siteName)
-					}
-					if strings.TrimSpace(statusName) != "" {
-						output.WriteString(fmt.Sprintf("drwxr-xr-x   1 %-8s %-8s %10s %s %s\r\n",
-							"GoFTPd", "GoFTPd", "4096", now, statusName))
-					}
+				if statusName := dirRaceStatusName(bridge, s.Config, s.CurrentDir, siteName); strings.TrimSpace(statusName) != "" {
+					output.WriteString(fmt.Sprintf("drwxr-xr-x   1 %-8s %-8s %10s %s %s\r\n",
+						"GoFTPd", "GoFTPd", "4096", now, statusName))
 				}
 
 				for _, marker := range incompleteMarkerEntries(bridge, s.Config, activeIncompleteIndicator(s.Config), s.CurrentDir, entries) {
@@ -1833,6 +1789,38 @@ func estimateRaceTimeLeft(dirPath string, totalBytes int64, present, total int, 
 		seconds = 1
 	}
 	return fmt.Sprintf("%ds", seconds)
+}
+
+func dirRaceProgress(bridge MasterBridge, cfg *Config, dirPath string) (totalBytes int64, present int, total int) {
+	if bridge == nil || cfg == nil {
+		return 0, 0, 0
+	}
+	if zipscript.UsesZip(cfg.Zipscript, dirPath) {
+		entries := bridge.ListDir(dirPath)
+		expected := zipExpectedPartsFromDIZ(bridge, dirPath)
+		_, totalBytes, present = zipDirRaceStats(entries, expected)
+		if expected > 0 {
+			total = expected
+		} else {
+			total = present
+		}
+		return totalBytes, present, total
+	}
+	_, _, totalBytes, present, total = bridge.GetVFSRaceStats(dirPath)
+	return totalBytes, present, total
+}
+
+func dirRaceStatusName(bridge MasterBridge, cfg *Config, dirPath, siteName string) string {
+	totalBytes, present, total := dirRaceProgress(bridge, cfg, dirPath)
+	if total <= 0 {
+		return ""
+	}
+	totalMB := float64(totalBytes) / (1024 * 1024)
+	if present >= total {
+		return zipscript.CompleteStatusName(cfg.Zipscript, siteName, dirPath, totalMB, total, bridge)
+	}
+	pct := (present * 100) / total
+	return fmt.Sprintf("%s - %3d%% Complete - [%s]", progressBar(present, total, 20), pct, siteName)
 }
 
 func emitRaceEndAfter(s *Session, users []VFSRaceUser, totalBytes int64, total int, xferMs int64, delay time.Duration) {
