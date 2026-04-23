@@ -79,77 +79,77 @@ sections:
   - name: "TV-CZ"
     channels: *chan_foreign
     paths:
-      - "/TV-CZ/*"
+      - "/FOREIGN/TV-CZ/*"
 
   - name: "TV-DE"
     channels: *chan_foreign
     paths:
-      - "/TV-DE/*"
+      - "/FOREIGN/TV-DE/*"
 
   - name: "TV-DK"
     channels: *chan_foreign
     paths:
-      - "/TV-DK/*"
+      - "/FOREIGN/TV-DK/*"
 
   - name: "TV-ES"
     channels: *chan_foreign
     paths:
-      - "/TV-ES/*"
+      - "/FOREIGN/TV-ES/*"
 
   - name: "TV-FI"
     channels: *chan_foreign
     paths:
-      - "/TV-FI/*"
+      - "/FOREIGN/TV-FI/*"
 
   - name: "TV-FR"
     channels: *chan_foreign
     paths:
-      - "/TV-FR/*"
+      - "/FOREIGN/TV-FR/*"
 
   - name: "TV-IT"
     channels: *chan_foreign
     paths:
-      - "/TV-IT/*"
+      - "/FOREIGN/TV-IT/*"
 
   - name: "TV-NL"
     channels: *chan_foreign
     paths:
-      - "/TV-NL/*"
+      - "/FOREIGN/TV-NL/*"
 
   - name: "TV-NO"
     channels: *chan_foreign
     paths:
-      - "/TV-NO/*"
+      - "/FOREIGN/TV-NO/*"
 
   - name: "TV-PL"
     channels: *chan_foreign
     paths:
-      - "/TV-PL/*"
+      - "/FOREIGN/TV-PL/*"
 
   - name: "TV-SE"
     channels: *chan_foreign
     paths:
-      - "/TV-SE/*"
+      - "/FOREIGN/TV-SE/*"
 
   - name: "TV-SK"
     channels: *chan_foreign
     paths:
-      - "/TV-SK/*"
+      - "/FOREIGN/TV-SK/*"
 
   - name: "X264-HD-FOREIGN"
     channels: *chan_foreign
     paths:
-      - "/X264-HD-FOREIGN/*"
+      - "/FOREIGN/X264-HD-FOREIGN/*"
 
   - name: "X264-SD-FOREIGN"
     channels: *chan_foreign
     paths:
-      - "/X264-SD-FOREIGN/*"
+      - "/FOREIGN/X264-SD-FOREIGN/*"
 
   - name: "X265-FOREIGN"
     channels: *chan_foreign
     paths:
-      - "/X265-FOREIGN/*"
+      - "/FOREIGN/X265-FOREIGN/*"
 
 #########################
 # #goftpd-archive
@@ -158,7 +158,7 @@ sections:
   - name: "ARCHIVE"
     channels: *chan_archive
     paths:
-      - "/ARCHIVE/*"
+      - "/ARCHiVE/*"
 
 #########################
 # #goftpd
@@ -207,7 +207,7 @@ sections:
   - name: "PRE"
     channels: *chan_main
     paths:
-      - "/PRE/*"
+      - "/PRE/*/*"
 
   - name: "PS5"
     channels: *chan_main
@@ -217,7 +217,7 @@ sections:
   - name: "REQUESTS"
     channels: *chan_main
     paths:
-      - "/REQUESTS/*"
+      - "/REQUESTS/*/*"
 
   - name: "SPEEDTEST"
     channels: *chan_main
