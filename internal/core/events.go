@@ -12,6 +12,7 @@ import (
 	"time"
 
 	pluginpkg "goftpd/internal/plugin"
+	"goftpd/internal/zipscript"
 )
 
 // EventType describes a daemon event published for external consumers such as the sitebot.
