@@ -192,6 +192,7 @@ func main() {
 		log.Printf("[PLUGINS] Initializing plugin system...")
 	}
 	cfg.PluginManager = core.NewPluginManager(cfg.Debug)
+	cfg.PluginManager.SetConfig(cfg)
 
 	// Give plugins access to the master bridge + debug flag via Services.
 	// In slave mode masterBridge is nil — plugins that need it will skip
