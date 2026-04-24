@@ -67,13 +67,16 @@ If you only want to generate fresh TLS certificates, use:
 
 It asks for master/slave mode, ports, PASV/proxy style, certificate name,
 channel names, a Blowfish key per channel, sitebot IRC settings, sitebot FTP
-plugin settings, and per-plugin enable flags only when the real config files
-do not exist yet. It also saves the answers in
+plugin settings, an optional `!rules` file path, and per-plugin enable flags
+only when the real config files do not exist yet. It also saves the answers in
 `etc/setup-interactive.env` so a reinstall or move can reuse them as defaults.
 In slave mode it asks only the slave-specific daemon questions and skips the
 sitebot flow unless you explicitly choose to configure a sitebot there too.
 If the saved defaults file exists, the installer asks whether to load it and
 use those values as the prompt defaults for the new run.
+If your main daemon or sitebot config already exists, rerunning `./setup.sh install`
+still creates any newly added plugin `config.yml` files from their `.dist`
+templates and asks whether to enable just those new plugins.
 
 To back up generated interactive configs and start over cleanly, use:
 
@@ -214,6 +217,7 @@ Built-in daemon plugins:
 | `imdb` | Writes `.imdb` metadata for configured movie sections |
 | `mediainfo` | Emits audio/video metadata events after uploads |
 | `pre` | Provides SITE PRE and affil management commands |
+| `releaseguard` | Blocks bad release dir names before MKD creates them and provides `SITE BANNED` |
 | `request` | Provides SITE REQUEST/REQUESTS/REQFILL/REQDEL/REQWIPE |
 | `speedtest` | Creates speedtest files and emits SPEEDTEST events |
 
@@ -277,7 +281,7 @@ Implemented daemon SITE commands include:
 | Release/admin | `NUKE`, `UNNUKE`, `UNDUPE`, `WIPE`, `KICK`, `REHASH`, `REMERGE`, `CHMOD` |
 | Search/rescan | `SEARCH`, `RACE`, `RESCAN`, `XDUPE` |
 | IRC/sitebot | `INVITE` |
-| Plugins | `PRE`, `ADDAFFIL`, `DELAFFIL`, `AFFILS`, `REQUEST`, `REQUESTS`, `REQFILL`, `REQFILLED`, `REQDEL`, `REQWIPE` |
+| Plugins | `PRE`, `ADDAFFIL`, `DELAFFIL`, `AFFILS`, `REQUEST`, `REQUESTS`, `REQFILL`, `REQFILLED`, `REQDEL`, `REQWIPE`, `BANNED` |
 
 Command access is controlled through `sitecmd` ACL rules in
 `etc/permissions.yml`.
@@ -310,6 +314,11 @@ Built-in sitebot plugins:
 | `Free` | `!free`, `!df` |
 | `Affils` | `!affils` |
 | `Request` | `!request`, `!requests`, `!reqfill`, `!reqdel`, staff `!reqwipe` |
+| `Banned` | `!banned`, `!banned <filter>`, `!banned allow [filter]` |
+| `Top` | `!top`, `!top 5`, `!top 10`, `!top 25`, optional timed TOP announce |
+| `Rules` | `!rules` (reads `rules_file` when configured, otherwise uses `SITE RULES`) |
+| `Topic` | staff-only `!topic #channel topic text` with FiSH topic encryption when a key exists |
+| `Control` | staff-only `!refresh` and `!restart` for live config/plugin reload and bot re-exec |
 | `AdminCommander` | staff-only IRC gateway for configured SITE commands |
 
 The example sitebot config uses YAML anchors for channel sets, so a channel can
@@ -413,3 +422,4 @@ MIT
 ## Credits
 
 Inspired by [drftpd](https://github.com/drftpd-ng/drftpd), [glftpd](https://glftpd.io), and [pzs-ng](https://github.com/pzs-ng/pzs-ng).
+

@@ -238,6 +238,89 @@ copy_dist_configs_if_missing() {
     done < <(find "${base_dir}" -type f -name 'config.yml.dist' | sort)
 }
 
+daemon_plugin_config_path() {
+    local plugin_name="$1"
+    printf 'plugins/%s/config.yml' "${plugin_name}"
+}
+
+sitebot_plugin_config_path() {
+    local plugin_name="$1"
+    case "${plugin_name}" in
+        AdminCommander) printf 'sitebot/plugins/admincommander/config.yml' ;;
+        Announce) printf 'sitebot/plugins/announce/config.yml' ;;
+        Affils) printf 'sitebot/plugins/affils/config.yml' ;;
+        BNC) printf 'sitebot/plugins/bnc/config.yml' ;;
+        BW) printf 'sitebot/plugins/bw/config.yml' ;;
+        Banned) printf 'sitebot/plugins/banned/config.yml' ;;
+        Control) printf 'sitebot/plugins/control/config.yml' ;;
+        Free) printf 'sitebot/plugins/free/config.yml' ;;
+        IMDB) printf 'sitebot/plugins/imdb/config.yml' ;;
+        News) printf 'sitebot/plugins/news/config.yml' ;;
+        Request) printf 'sitebot/plugins/request/config.yml' ;;
+        Rules) printf 'sitebot/plugins/rules/config.yml' ;;
+        TVMaze) printf 'sitebot/plugins/tvmaze/config.yml' ;;
+        Top) printf 'sitebot/plugins/top/config.yml' ;;
+        Topic) printf 'sitebot/plugins/topic/config.yml' ;;
+        *) return 1 ;;
+    esac
+}
+
+copy_plugin_config_if_missing() {
+    local target_file="$1"
+    local dist_file="${target_file}.dist"
+    if [ ! -f "${target_file}" ] && [ -f "${dist_file}" ]; then
+        copy_if_missing "${dist_file}" "${target_file}"
+        return 0
+    fi
+    return 1
+}
+
+join_by() {
+    local sep="$1"
+    shift || true
+    local first="true"
+    local item
+    for item in "$@"; do
+        if [ "${first}" = "true" ]; then
+            printf '%s' "${item}"
+            first="false"
+        else
+            printf '%s%s' "${sep}" "${item}"
+        fi
+    done
+}
+
+print_plugin_summary() {
+    local title="$1"
+    shift
+    local detected_csv="$1"
+    shift
+    local created_csv="$1"
+    shift
+    local enabled_csv="$1"
+    shift
+    local disabled_csv="$1"
+
+    say ""
+    say_color "${C_YELLOW}${C_BOLD}" "${title}"
+    say "  Detected: ${detected_csv}"
+    if [ -n "${created_csv}" ]; then
+        say "  New configs created: ${created_csv}"
+    else
+        say "  New configs created: none"
+    fi
+    if [ -n "${enabled_csv}" ]; then
+        say "  Enabled this run: ${enabled_csv}"
+    else
+        say "  Enabled this run: none"
+    fi
+    if [ -n "${disabled_csv}" ]; then
+        say "  Disabled this run: ${disabled_csv}"
+    else
+        say "  Disabled this run: none"
+    fi
+}
+
 replace_matching_line() {
     local file="$1"
     local pattern="$2"
@@ -441,6 +524,7 @@ type_routes:
   UNNUKE: ["${nuke_channel}"]
   NEWDAY: ["${main_channel}"]
   SPEEDTEST: ["${main_channel}"]
+  TOP: ["${main_channel}"]
 EOF
     fi
 
@@ -458,8 +542,28 @@ EOF
         set_yaml_array_line "sitebot/plugins/bnc/config.yml" '^channels:' "channels: [\"${main_channel}\"]"
     fi
 
+    if [ -f "sitebot/plugins/control/config.yml" ]; then
+        set_yaml_array_line "sitebot/plugins/control/config.yml" '^staff_channels:' "staff_channels: [\"${staff_channel}\"]"
+    fi
+
+    if [ -f "sitebot/plugins/topic/config.yml" ]; then
+        set_yaml_array_line "sitebot/plugins/topic/config.yml" '^staff_channels:' "staff_channels: [\"${staff_channel}\"]"
+    fi
+
+    if [ -f "sitebot/plugins/banned/config.yml" ]; then
+        set_yaml_array_line "sitebot/plugins/banned/config.yml" '^channels:' "channels: [\"${main_channel}\"]"
+    fi
+
+    if [ -f "sitebot/plugins/top/config.yml" ]; then
+        set_yaml_array_line "sitebot/plugins/top/config.yml" '^channels:' "channels: [\"${main_channel}\"]"
+    fi
+
     if [ -f "sitebot/plugins/bw/config.yml" ]; then
         set_yaml_array_line "sitebot/plugins/bw/config.yml" '^channels:' "channels: [\"${main_channel}\"]"
+    fi
+
+    if [ -f "sitebot/plugins/rules/config.yml" ]; then
+        set_yaml_array_line "sitebot/plugins/rules/config.yml" '^channels:' "channels: [\"${main_channel}\"]"
     fi
 
     if [ -f "sitebot/plugins/admincommander/config.yml" ]; then
@@ -493,6 +597,24 @@ configure_sitebot_plugin_connections() {
         set_yaml_array_line "sitebot/plugins/bw/config.yml" '^password:' "password: \"${ftp_password}\""
         set_yaml_array_line "sitebot/plugins/bw/config.yml" '^tls:' "tls: ${ftp_tls}"
         set_yaml_array_line "sitebot/plugins/bw/config.yml" '^insecure_skip_verify:' "insecure_skip_verify: ${ftp_insecure}"
+    fi
+
+    if [ -f "sitebot/plugins/banned/config.yml" ]; then
+        set_yaml_array_line "sitebot/plugins/banned/config.yml" '^host:' "host: \"${ftp_host}\""
+        set_yaml_array_line "sitebot/plugins/banned/config.yml" '^port:' "port: ${ftp_port}"
+        set_yaml_array_line "sitebot/plugins/banned/config.yml" '^user:' "user: \"${ftp_user}\""
+        set_yaml_array_line "sitebot/plugins/banned/config.yml" '^password:' "password: \"${ftp_password}\""
+        set_yaml_array_line "sitebot/plugins/banned/config.yml" '^tls:' "tls: ${ftp_tls}"
+        set_yaml_array_line "sitebot/plugins/banned/config.yml" '^insecure_skip_verify:' "insecure_skip_verify: ${ftp_insecure}"
+    fi
+
+    if [ -f "sitebot/plugins/rules/config.yml" ]; then
+        set_yaml_array_line "sitebot/plugins/rules/config.yml" '^host:' "host: \"${ftp_host}\""
+        set_yaml_array_line "sitebot/plugins/rules/config.yml" '^port:' "port: ${ftp_port}"
+        set_yaml_array_line "sitebot/plugins/rules/config.yml" '^user:' "user: \"${ftp_user}\""
+        set_yaml_array_line "sitebot/plugins/rules/config.yml" '^password:' "password: \"${ftp_password}\""
+        set_yaml_array_line "sitebot/plugins/rules/config.yml" '^tls:' "tls: ${ftp_tls}"
+        set_yaml_array_line "sitebot/plugins/rules/config.yml" '^insecure_skip_verify:' "insecure_skip_verify: ${ftp_insecure}"
     fi
 
     if [ -f "sitebot/plugins/admincommander/config.yml" ]; then
@@ -530,38 +652,45 @@ configure_sitebot_plugin_connections() {
 
 configure_daemon() {
     local daemon_config="etc/config.yml"
+    local daemon_config_exists="false"
     if [ -f "${daemon_config}" ]; then
-        say "Daemon config already exists at ${daemon_config}; skipping daemon setup questions."
-        return
+        daemon_config_exists="true"
     fi
 
     say ""
     say "Configuring daemon..."
     copy_if_missing "etc/config-example.yml" "${daemon_config}"
-    copy_dist_configs_if_missing "plugins"
 
     local daemon_mode long_name short_name cert_name enabled_bool
     local listen_port public_ip passthrough_mode master_listen_host master_control_port
     local slave_name slave_master_host slave_master_port slave_roots slave_bind_ip fifo_path
-    daemon_mode="$(prompt_mode "${SETUP_DAEMON_MODE:-master}")"
-    long_name="$(prompt_default 'Daemon site name' "${SETUP_SITE_NAME:-GoFTPd}")"
-    short_name="$(prompt_default 'Daemon short site tag' "${SETUP_SITE_SHORT:-${long_name}}")"
-    cert_name="$(prompt_default 'TLS certificate display name' "${SETUP_CERT_NAME:-${long_name}}")"
+    daemon_mode="${SETUP_DAEMON_MODE:-master}"
+    if [ "${daemon_config_exists}" = "false" ]; then
+        daemon_mode="$(prompt_mode "${SETUP_DAEMON_MODE:-master}")"
+        long_name="$(prompt_default 'Daemon site name' "${SETUP_SITE_NAME:-GoFTPd}")"
+        short_name="$(prompt_default 'Daemon short site tag' "${SETUP_SITE_SHORT:-${long_name}}")"
+        cert_name="$(prompt_default 'TLS certificate display name' "${SETUP_CERT_NAME:-${long_name}}")"
 
-    SETUP_DAEMON_MODE="${daemon_mode}"
-    SETUP_SITE_NAME="${long_name}"
-    SETUP_SITE_SHORT="${short_name}"
-    SETUP_CERT_NAME="${cert_name}"
-    fifo_path="${SETUP_FIFO_PATH:-${FIFO_PATH_DEFAULT}}"
-    SETUP_FIFO_PATH="${fifo_path}"
+        SETUP_DAEMON_MODE="${daemon_mode}"
+        SETUP_SITE_NAME="${long_name}"
+        SETUP_SITE_SHORT="${short_name}"
+        SETUP_CERT_NAME="${cert_name}"
+        fifo_path="${SETUP_FIFO_PATH:-${FIFO_PATH_DEFAULT}}"
+        SETUP_FIFO_PATH="${fifo_path}"
 
-    replace_matching_line "${daemon_config}" '^mode:' "mode:         ${daemon_mode}"
-    replace_matching_line "${daemon_config}" '^sitename_long:' "sitename_long:  \"${long_name}\""
-    replace_matching_line "${daemon_config}" '^sitename_short:' "sitename_short: \"${short_name}\""
-    replace_matching_line "${daemon_config}" '^event_fifo:' "event_fifo:     \"${fifo_path}\""
-    replace_matching_line "${daemon_config}" '^sitebot_config:' "sitebot_config: \"${SETUP_SITEBOT_CONFIG_PATH:-${SITEBOT_CONFIG_DEFAULT}}\""
+        replace_matching_line "${daemon_config}" '^mode:' "mode:         ${daemon_mode}"
+        replace_matching_line "${daemon_config}" '^sitename_long:' "sitename_long:  \"${long_name}\""
+        replace_matching_line "${daemon_config}" '^sitename_short:' "sitename_short: \"${short_name}\""
+        replace_matching_line "${daemon_config}" '^event_fifo:' "event_fifo:     \"${fifo_path}\""
+        replace_matching_line "${daemon_config}" '^sitebot_config:' "sitebot_config: \"${SETUP_SITEBOT_CONFIG_PATH:-${SITEBOT_CONFIG_DEFAULT}}\""
+    else
+        daemon_mode="$(awk '/^mode:/{print $2; exit}' "${daemon_config}")"
+        daemon_mode="${daemon_mode:-${SETUP_DAEMON_MODE:-master}}"
+        SETUP_DAEMON_MODE="${daemon_mode}"
+        say "Daemon config already exists at ${daemon_config}; keeping current daemon settings."
+    fi
 
-    if [ "${daemon_mode}" = "master" ]; then
+    if [ "${daemon_mode}" = "master" ] && [ "${daemon_config_exists}" = "false" ]; then
         listen_port="$(prompt_default 'FTP listen port' "${SETUP_LISTEN_PORT:-21212}")"
         public_ip="$(prompt_default 'Public PASV IP address' "${SETUP_PUBLIC_IP:-1.2.3.4}")"
         master_listen_host="$(prompt_default 'Master control listen host' "${SETUP_MASTER_LISTEN_HOST:-0.0.0.0}")"
@@ -589,7 +718,7 @@ configure_daemon() {
         replace_matching_line "${daemon_config}" '^passthrough:' "passthrough:  ${enabled_bool}"
         replace_matching_line "${daemon_config}" '^  listen_host:' "  listen_host:       \"${master_listen_host}\""
         replace_matching_line "${daemon_config}" '^  control_port:' "  control_port:      ${master_control_port}"
-    else
+    elif [ "${daemon_mode}" = "slave" ] && [ "${daemon_config_exists}" = "false" ]; then
         slave_name="$(prompt_default 'Slave name' "${SETUP_SLAVE_NAME:-SLAVE1}")"
         slave_master_host="$(prompt_default 'Slave master host/IP' "${SETUP_SLAVE_MASTER_HOST:-127.0.0.1}")"
         slave_master_port="$(prompt_default 'Slave master control port' "${SETUP_SLAVE_MASTER_PORT:-1099}")"
@@ -610,14 +739,27 @@ configure_daemon() {
     fi
 
     local daemon_plugins=()
+    local daemon_created=()
+    local daemon_enabled=()
+    local daemon_disabled=()
     if [ "${daemon_mode}" = "master" ]; then
-        daemon_plugins=(dateddirs tvmaze imdb mediainfo speedtest request pre)
+        daemon_plugins=(dateddirs tvmaze imdb mediainfo speedtest request releaseguard pre)
     fi
 
     local plugin_name
     for plugin_name in "${daemon_plugins[@]}"; do
+        local plugin_config
+        local plugin_created="false"
         local var_name="SETUP_DAEMON_PLUGIN_$(printf '%s' "${plugin_name}" | tr '[:lower:]-' '[:upper:]_')"
         local default_answer
+        plugin_config="$(daemon_plugin_config_path "${plugin_name}")"
+        if copy_plugin_config_if_missing "${plugin_config}"; then
+            plugin_created="true"
+            daemon_created+=("${plugin_name}")
+        fi
+        if [ "${daemon_config_exists}" = "true" ] && [ "${plugin_created}" != "true" ]; then
+            continue
+        fi
         default_answer="$(bool_to_prompt_default "${!var_name:-true}")"
         if prompt_yes_no "Enable daemon plugin ${plugin_name}?" "${default_answer}"; then
             enabled_bool="true"
@@ -626,22 +768,35 @@ configure_daemon() {
         fi
         printf -v "${var_name}" '%s' "${enabled_bool}"
         set_daemon_plugin_enabled "${daemon_config}" "${plugin_name}" "${enabled_bool}"
+        if [ "${enabled_bool}" = "true" ]; then
+            daemon_enabled+=("${plugin_name}")
+        else
+            daemon_disabled+=("${plugin_name}")
+        fi
     done
 
-    if [ ! -f "etc/certs/server.crt" ] || [ ! -f "etc/certs/server.key" ]; then
+    if [ "${daemon_config_exists}" = "false" ] && { [ ! -f "etc/certs/server.crt" ] || [ ! -f "etc/certs/server.key" ]; }; then
         if prompt_yes_no "Generate TLS certificates now?" "$(bool_to_prompt_default "${SETUP_GENERATE_CERTS:-true}")"; then
             SETUP_GENERATE_CERTS="true"
             generate_tls_certs "${cert_name}"
         else
             SETUP_GENERATE_CERTS="false"
         fi
-    else
+    elif [ "${daemon_config_exists}" = "false" ]; then
         say "TLS certificates already exist in etc/certs; skipping generation."
     fi
+
+    print_plugin_summary \
+        "Daemon plugin summary" \
+        "$(join_by ', ' "${daemon_plugins[@]}")" \
+        "$(join_by ', ' "${daemon_created[@]}")" \
+        "$(join_by ', ' "${daemon_enabled[@]}")" \
+        "$(join_by ', ' "${daemon_disabled[@]}")"
 }
 
 configure_sitebot() {
     local sitebot_config="sitebot/etc/config.yml"
+    local sitebot_config_exists="false"
     if [ "${SETUP_DAEMON_MODE:-master}" = "slave" ]; then
         if ! prompt_yes_no "Configure sitebot on this slave too?" "$(bool_to_prompt_default "${SETUP_CONFIGURE_SITEBOT_ON_SLAVE:-false}")"; then
             SETUP_CONFIGURE_SITEBOT_ON_SLAVE="false"
@@ -651,59 +806,90 @@ configure_sitebot() {
         SETUP_CONFIGURE_SITEBOT_ON_SLAVE="true"
     fi
     if [ -f "${sitebot_config}" ]; then
-        say "Sitebot config already exists at ${sitebot_config}; skipping sitebot setup questions."
-        return
+        sitebot_config_exists="true"
     fi
 
     say ""
     say "Configuring sitebot..."
     copy_if_missing "sitebot/etc/config.yml.example" "${sitebot_config}"
-    copy_dist_configs_if_missing "sitebot/plugins"
 
     local irc_host irc_port irc_nick irc_user irc_realname irc_password irc_ssl
-    local ftp_host ftp_port ftp_user ftp_password ftp_tls ftp_insecure bnc_target_host bnc_target_port
+    local ftp_host ftp_port ftp_user ftp_password ftp_tls ftp_insecure bnc_target_host bnc_target_port rules_file
     local main_channel spam_channel staff_channel foreign_channel archive_channel nuke_channel enabled_bool
     local main_key spam_key staff_key foreign_key archive_key nuke_key
     local fifo_path
-    irc_host="$(prompt_default 'IRC host' "${SETUP_IRC_HOST:-irc.example.net}")"
-    irc_port="$(prompt_default 'IRC port' "${SETUP_IRC_PORT:-6697}")"
-    irc_nick="$(prompt_default 'IRC nick' "${SETUP_IRC_NICK:-GoSitebot}")"
-    irc_user="$(prompt_default 'IRC user' "${SETUP_IRC_USER:-sitebot}")"
-    irc_realname="$(prompt_default 'IRC realname' "${SETUP_IRC_REALNAME:-GoSitebot v1.0}")"
-    irc_password="$(prompt_default 'IRC server password' "${SETUP_IRC_PASSWORD:-changeme}")"
-    if prompt_yes_no "Use SSL for IRC?" "$(bool_to_prompt_default "${SETUP_IRC_SSL:-true}")"; then
-        irc_ssl="true"
+    if [ "${sitebot_config_exists}" = "false" ]; then
+        irc_host="$(prompt_default 'IRC host' "${SETUP_IRC_HOST:-irc.example.net}")"
+        irc_port="$(prompt_default 'IRC port' "${SETUP_IRC_PORT:-6697}")"
+        irc_nick="$(prompt_default 'IRC nick' "${SETUP_IRC_NICK:-GoSitebot}")"
+        irc_user="$(prompt_default 'IRC user' "${SETUP_IRC_USER:-sitebot}")"
+        irc_realname="$(prompt_default 'IRC realname' "${SETUP_IRC_REALNAME:-GoSitebot v1.0}")"
+        irc_password="$(prompt_default 'IRC server password' "${SETUP_IRC_PASSWORD:-changeme}")"
+        if prompt_yes_no "Use SSL for IRC?" "$(bool_to_prompt_default "${SETUP_IRC_SSL:-true}")"; then
+            irc_ssl="true"
+        else
+            irc_ssl="false"
+        fi
+        ftp_host="$(prompt_default 'Sitebot FTP host for plugins' "${SETUP_PLUGIN_FTP_HOST:-127.0.0.1}")"
+        ftp_port="$(prompt_default 'Sitebot FTP port for plugins' "${SETUP_PLUGIN_FTP_PORT:-21212}")"
+        ftp_user="$(prompt_default 'Sitebot FTP user for plugins' "${SETUP_PLUGIN_FTP_USER:-goftpd}")"
+        ftp_password="$(prompt_default 'Sitebot FTP password for plugins' "${SETUP_PLUGIN_FTP_PASSWORD:-goftpd}")"
+        if prompt_yes_no "Use TLS for sitebot FTP plugins?" "$(bool_to_prompt_default "${SETUP_PLUGIN_FTP_TLS:-true}")"; then
+            ftp_tls="true"
+        else
+            ftp_tls="false"
+        fi
+        if prompt_yes_no "Skip TLS verify for sitebot FTP plugins?" "$(bool_to_prompt_default "${SETUP_PLUGIN_FTP_INSECURE:-true}")"; then
+            ftp_insecure="true"
+        else
+            ftp_insecure="false"
+        fi
+        bnc_target_host="$(prompt_default 'BNC target host' "${SETUP_BNC_TARGET_HOST:-${ftp_host}}")"
+        bnc_target_port="$(prompt_default 'BNC target port' "${SETUP_BNC_TARGET_PORT:-${ftp_port}}")"
+        rules_file="$(prompt_default 'Rules file for !rules (empty = use SITE RULES)' "${SETUP_RULES_FILE:-}")"
+        main_channel="$(prompt_default 'Main IRC channel' "${SETUP_MAIN_CHANNEL:-#goftpd}")"
+        spam_channel="$(prompt_default 'Spam IRC channel' "${SETUP_SPAM_CHANNEL:-#goftpd-spam}")"
+        staff_channel="$(prompt_default 'Staff IRC channel' "${SETUP_STAFF_CHANNEL:-#goftpd-staff}")"
+        foreign_channel="$(prompt_default 'Foreign IRC channel' "${SETUP_FOREIGN_CHANNEL:-#goftpd-foreign}")"
+        archive_channel="$(prompt_default 'Archive IRC channel' "${SETUP_ARCHIVE_CHANNEL:-#goftpd-archive}")"
+        nuke_channel="$(prompt_default 'Nuke IRC channel' "${SETUP_NUKE_CHANNEL:-#goftpd-nuke}")"
+        main_key="$(prompt_default 'Blowfish key for main channel' "${SETUP_BLOWFISH_KEY_MAIN:-YourBlowfishKeyHere123456}")"
+        spam_key="$(prompt_default 'Blowfish key for spam channel' "${SETUP_BLOWFISH_KEY_SPAM:-${main_key}}")"
+        staff_key="$(prompt_default 'Blowfish key for staff channel' "${SETUP_BLOWFISH_KEY_STAFF:-${main_key}}")"
+        foreign_key="$(prompt_default 'Blowfish key for foreign channel' "${SETUP_BLOWFISH_KEY_FOREIGN:-${main_key}}")"
+        archive_key="$(prompt_default 'Blowfish key for archive channel' "${SETUP_BLOWFISH_KEY_ARCHIVE:-${main_key}}")"
+        nuke_key="$(prompt_default 'Blowfish key for nuke channel' "${SETUP_BLOWFISH_KEY_NUKE:-${main_key}}")"
     else
-        irc_ssl="false"
+        say "Sitebot config already exists at ${sitebot_config}; keeping current sitebot settings."
+        irc_host="${SETUP_IRC_HOST:-irc.example.net}"
+        irc_port="${SETUP_IRC_PORT:-6697}"
+        irc_nick="${SETUP_IRC_NICK:-GoSitebot}"
+        irc_user="${SETUP_IRC_USER:-sitebot}"
+        irc_realname="${SETUP_IRC_REALNAME:-GoSitebot v1.0}"
+        irc_password="${SETUP_IRC_PASSWORD:-changeme}"
+        irc_ssl="${SETUP_IRC_SSL:-true}"
+        ftp_host="${SETUP_PLUGIN_FTP_HOST:-127.0.0.1}"
+        ftp_port="${SETUP_PLUGIN_FTP_PORT:-21212}"
+        ftp_user="${SETUP_PLUGIN_FTP_USER:-goftpd}"
+        ftp_password="${SETUP_PLUGIN_FTP_PASSWORD:-goftpd}"
+        ftp_tls="${SETUP_PLUGIN_FTP_TLS:-true}"
+        ftp_insecure="${SETUP_PLUGIN_FTP_INSECURE:-true}"
+        bnc_target_host="${SETUP_BNC_TARGET_HOST:-${ftp_host}}"
+        bnc_target_port="${SETUP_BNC_TARGET_PORT:-${ftp_port}}"
+        rules_file="${SETUP_RULES_FILE:-}"
+        main_channel="${SETUP_MAIN_CHANNEL:-#goftpd}"
+        spam_channel="${SETUP_SPAM_CHANNEL:-#goftpd-spam}"
+        staff_channel="${SETUP_STAFF_CHANNEL:-#goftpd-staff}"
+        foreign_channel="${SETUP_FOREIGN_CHANNEL:-#goftpd-foreign}"
+        archive_channel="${SETUP_ARCHIVE_CHANNEL:-#goftpd-archive}"
+        nuke_channel="${SETUP_NUKE_CHANNEL:-#goftpd-nuke}"
+        main_key="${SETUP_BLOWFISH_KEY_MAIN:-YourBlowfishKeyHere123456}"
+        spam_key="${SETUP_BLOWFISH_KEY_SPAM:-${main_key}}"
+        staff_key="${SETUP_BLOWFISH_KEY_STAFF:-${main_key}}"
+        foreign_key="${SETUP_BLOWFISH_KEY_FOREIGN:-${main_key}}"
+        archive_key="${SETUP_BLOWFISH_KEY_ARCHIVE:-${main_key}}"
+        nuke_key="${SETUP_BLOWFISH_KEY_NUKE:-${main_key}}"
     fi
-    ftp_host="$(prompt_default 'Sitebot FTP host for plugins' "${SETUP_PLUGIN_FTP_HOST:-127.0.0.1}")"
-    ftp_port="$(prompt_default 'Sitebot FTP port for plugins' "${SETUP_PLUGIN_FTP_PORT:-21212}")"
-    ftp_user="$(prompt_default 'Sitebot FTP user for plugins' "${SETUP_PLUGIN_FTP_USER:-goftpd}")"
-    ftp_password="$(prompt_default 'Sitebot FTP password for plugins' "${SETUP_PLUGIN_FTP_PASSWORD:-goftpd}")"
-    if prompt_yes_no "Use TLS for sitebot FTP plugins?" "$(bool_to_prompt_default "${SETUP_PLUGIN_FTP_TLS:-true}")"; then
-        ftp_tls="true"
-    else
-        ftp_tls="false"
-    fi
-    if prompt_yes_no "Skip TLS verify for sitebot FTP plugins?" "$(bool_to_prompt_default "${SETUP_PLUGIN_FTP_INSECURE:-true}")"; then
-        ftp_insecure="true"
-    else
-        ftp_insecure="false"
-    fi
-    bnc_target_host="$(prompt_default 'BNC target host' "${SETUP_BNC_TARGET_HOST:-${ftp_host}}")"
-    bnc_target_port="$(prompt_default 'BNC target port' "${SETUP_BNC_TARGET_PORT:-${ftp_port}}")"
-    main_channel="$(prompt_default 'Main IRC channel' "${SETUP_MAIN_CHANNEL:-#goftpd}")"
-    spam_channel="$(prompt_default 'Spam IRC channel' "${SETUP_SPAM_CHANNEL:-#goftpd-spam}")"
-    staff_channel="$(prompt_default 'Staff IRC channel' "${SETUP_STAFF_CHANNEL:-#goftpd-staff}")"
-    foreign_channel="$(prompt_default 'Foreign IRC channel' "${SETUP_FOREIGN_CHANNEL:-#goftpd-foreign}")"
-    archive_channel="$(prompt_default 'Archive IRC channel' "${SETUP_ARCHIVE_CHANNEL:-#goftpd-archive}")"
-    nuke_channel="$(prompt_default 'Nuke IRC channel' "${SETUP_NUKE_CHANNEL:-#goftpd-nuke}")"
-    main_key="$(prompt_default 'Blowfish key for main channel' "${SETUP_BLOWFISH_KEY_MAIN:-YourBlowfishKeyHere123456}")"
-    spam_key="$(prompt_default 'Blowfish key for spam channel' "${SETUP_BLOWFISH_KEY_SPAM:-${main_key}}")"
-    staff_key="$(prompt_default 'Blowfish key for staff channel' "${SETUP_BLOWFISH_KEY_STAFF:-${main_key}}")"
-    foreign_key="$(prompt_default 'Blowfish key for foreign channel' "${SETUP_BLOWFISH_KEY_FOREIGN:-${main_key}}")"
-    archive_key="$(prompt_default 'Blowfish key for archive channel' "${SETUP_BLOWFISH_KEY_ARCHIVE:-${main_key}}")"
-    nuke_key="$(prompt_default 'Blowfish key for nuke channel' "${SETUP_BLOWFISH_KEY_NUKE:-${main_key}}")"
 
     SETUP_IRC_HOST="${irc_host}"
     SETUP_IRC_PORT="${irc_port}"
@@ -720,6 +906,7 @@ configure_sitebot() {
     SETUP_PLUGIN_FTP_INSECURE="${ftp_insecure}"
     SETUP_BNC_TARGET_HOST="${bnc_target_host}"
     SETUP_BNC_TARGET_PORT="${bnc_target_port}"
+    SETUP_RULES_FILE="${rules_file}"
     SETUP_MAIN_CHANNEL="${main_channel}"
     SETUP_SPAM_CHANNEL="${spam_channel}"
     SETUP_STAFF_CHANNEL="${staff_channel}"
@@ -736,32 +923,74 @@ configure_sitebot() {
     SETUP_FIFO_PATH="${fifo_path}"
     SETUP_SITEBOT_CONFIG_PATH="${ROOT_DIR}/sitebot/etc/config.yml"
 
-    set_sitebot_scalar "${sitebot_config}" "host" "\"${irc_host}\""
-    set_sitebot_scalar "${sitebot_config}" "port" "${irc_port}"
-    set_sitebot_scalar "${sitebot_config}" "nick" "\"${irc_nick}\""
-    set_sitebot_scalar "${sitebot_config}" "user" "\"${irc_user}\""
-    set_sitebot_scalar "${sitebot_config}" "realname" "\"${irc_realname}\""
-    set_sitebot_scalar "${sitebot_config}" "password" "\"${irc_password}\""
-    set_sitebot_scalar "${sitebot_config}" "ssl" "${irc_ssl}"
-    replace_matching_line "${sitebot_config}" '^event_fifo:' "event_fifo: \"${fifo_path}\""
+    if [ "${sitebot_config_exists}" = "false" ]; then
+        set_sitebot_scalar "${sitebot_config}" "host" "\"${irc_host}\""
+        set_sitebot_scalar "${sitebot_config}" "port" "${irc_port}"
+        set_sitebot_scalar "${sitebot_config}" "nick" "\"${irc_nick}\""
+        set_sitebot_scalar "${sitebot_config}" "user" "\"${irc_user}\""
+        set_sitebot_scalar "${sitebot_config}" "realname" "\"${irc_realname}\""
+        set_sitebot_scalar "${sitebot_config}" "password" "\"${irc_password}\""
+        set_sitebot_scalar "${sitebot_config}" "ssl" "${irc_ssl}"
+        replace_matching_line "${sitebot_config}" '^event_fifo:' "event_fifo: \"${fifo_path}\""
 
-    set_sitebot_channel_anchor "${sitebot_config}" "main" "chan_main" "${main_channel}"
-    set_sitebot_channel_anchor "${sitebot_config}" "spam" "chan_spam" "${spam_channel}"
-    set_sitebot_channel_anchor "${sitebot_config}" "staff" "chan_staff" "${staff_channel}"
-    set_sitebot_channel_anchor "${sitebot_config}" "foreign" "chan_foreign" "${foreign_channel}"
-    set_sitebot_channel_anchor "${sitebot_config}" "archive" "chan_archive" "${archive_channel}"
-    set_sitebot_channel_anchor "${sitebot_config}" "nuke" "chan_nuke" "${nuke_channel}"
-    rewrite_sitebot_irc_channels "${sitebot_config}" "${main_channel}" "${spam_channel}" "${staff_channel}"
-    rewrite_sitebot_invite_channel "${sitebot_config}" "${staff_channel}"
-    rewrite_sitebot_encryption_keys "${sitebot_config}" "${main_channel}" "${spam_channel}" "${staff_channel}" "${foreign_channel}" "${archive_channel}" "${nuke_channel}" "${main_key}" "${spam_key}" "${staff_key}" "${foreign_key}" "${archive_key}" "${nuke_key}"
-    configure_sitebot_plugin_channels "${main_channel}" "${staff_channel}" "${nuke_channel}"
-    configure_sitebot_plugin_connections "${ftp_host}" "${ftp_port}" "${ftp_user}" "${ftp_password}" "${ftp_tls}" "${ftp_insecure}" "${bnc_target_host}" "${bnc_target_port}"
+        set_sitebot_channel_anchor "${sitebot_config}" "main" "chan_main" "${main_channel}"
+        set_sitebot_channel_anchor "${sitebot_config}" "spam" "chan_spam" "${spam_channel}"
+        set_sitebot_channel_anchor "${sitebot_config}" "staff" "chan_staff" "${staff_channel}"
+        set_sitebot_channel_anchor "${sitebot_config}" "foreign" "chan_foreign" "${foreign_channel}"
+        set_sitebot_channel_anchor "${sitebot_config}" "archive" "chan_archive" "${archive_channel}"
+        set_sitebot_channel_anchor "${sitebot_config}" "nuke" "chan_nuke" "${nuke_channel}"
+        rewrite_sitebot_irc_channels "${sitebot_config}" "${main_channel}" "${spam_channel}" "${staff_channel}"
+        rewrite_sitebot_invite_channel "${sitebot_config}" "${staff_channel}"
+        rewrite_sitebot_encryption_keys "${sitebot_config}" "${main_channel}" "${spam_channel}" "${staff_channel}" "${foreign_channel}" "${archive_channel}" "${nuke_channel}" "${main_key}" "${spam_key}" "${staff_key}" "${foreign_key}" "${archive_key}" "${nuke_key}"
+    fi
 
-    local sitebot_plugins=(Announce TVMaze IMDB News Free Affils Request BNC BW AdminCommander)
+    local sitebot_plugins=(Announce TVMaze IMDB News Free Affils Request BNC Control Banned Top BW Rules Topic AdminCommander)
     local plugin_name
+    local sitebot_enable_queue=()
+    local sitebot_created=()
+    local sitebot_enabled=()
+    local sitebot_disabled=()
+    for plugin_name in "${sitebot_plugins[@]}"; do
+        local plugin_config
+        plugin_config="$(sitebot_plugin_config_path "${plugin_name}")" || continue
+        if copy_plugin_config_if_missing "${plugin_config}"; then
+            sitebot_enable_queue+=("${plugin_name}")
+            sitebot_created+=("${plugin_name}")
+        fi
+    done
+
+    if [ "${sitebot_config_exists}" = "false" ] || [ "${#sitebot_enable_queue[@]}" -gt 0 ]; then
+        configure_sitebot_plugin_channels "${main_channel}" "${staff_channel}" "${nuke_channel}"
+        configure_sitebot_plugin_connections "${ftp_host}" "${ftp_port}" "${ftp_user}" "${ftp_password}" "${ftp_tls}" "${ftp_insecure}" "${bnc_target_host}" "${bnc_target_port}"
+        if [ -f "sitebot/plugins/rules/config.yml" ]; then
+            set_yaml_array_line "sitebot/plugins/rules/config.yml" '^rules_file:' "rules_file: \"${rules_file}\""
+        fi
+    fi
+
+    if [ "${sitebot_config_exists}" = "true" ]; then
+        if [ "${#sitebot_enable_queue[@]}" -eq 0 ]; then
+            say "No new sitebot plugin configs were missing."
+        else
+            say "New sitebot plugin configs were created; asking enable questions for those plugins."
+        fi
+    fi
+
     for plugin_name in "${sitebot_plugins[@]}"; do
         local var_name="SETUP_SITEBOT_PLUGIN_$(printf '%s' "${plugin_name}" | tr '[:lower:]-' '[:upper:]_')"
         local default_answer
+        if [ "${sitebot_config_exists}" = "true" ]; then
+            local should_ask="false"
+            local queued_name
+            for queued_name in "${sitebot_enable_queue[@]}"; do
+                if [ "${queued_name}" = "${plugin_name}" ]; then
+                    should_ask="true"
+                    break
+                fi
+            done
+            if [ "${should_ask}" != "true" ]; then
+                continue
+            fi
+        fi
         default_answer="$(bool_to_prompt_default "${!var_name:-true}")"
         if prompt_yes_no "Enable sitebot plugin ${plugin_name}?" "${default_answer}"; then
             enabled_bool="true"
@@ -770,7 +999,19 @@ configure_sitebot() {
         fi
         printf -v "${var_name}" '%s' "${enabled_bool}"
         set_sitebot_plugin_enabled "${sitebot_config}" "${plugin_name}" "${enabled_bool}"
+        if [ "${enabled_bool}" = "true" ]; then
+            sitebot_enabled+=("${plugin_name}")
+        else
+            sitebot_disabled+=("${plugin_name}")
+        fi
     done
+
+    print_plugin_summary \
+        "Sitebot plugin summary" \
+        "$(join_by ', ' "${sitebot_plugins[@]}")" \
+        "$(join_by ', ' "${sitebot_created[@]}")" \
+        "$(join_by ', ' "${sitebot_enabled[@]}")" \
+        "$(join_by ', ' "${sitebot_disabled[@]}")"
 }
 
 ensure_fifo() {
@@ -843,6 +1084,7 @@ save_state_file() {
     write_state_var SETUP_PLUGIN_FTP_INSECURE "${SETUP_PLUGIN_FTP_INSECURE:-true}"
     write_state_var SETUP_BNC_TARGET_HOST "${SETUP_BNC_TARGET_HOST:-127.0.0.1}"
     write_state_var SETUP_BNC_TARGET_PORT "${SETUP_BNC_TARGET_PORT:-21212}"
+    write_state_var SETUP_RULES_FILE "${SETUP_RULES_FILE:-}"
     write_state_var SETUP_MAIN_CHANNEL "${SETUP_MAIN_CHANNEL:-#goftpd}"
     write_state_var SETUP_SPAM_CHANNEL "${SETUP_SPAM_CHANNEL:-#goftpd-spam}"
     write_state_var SETUP_STAFF_CHANNEL "${SETUP_STAFF_CHANNEL:-#goftpd-staff}"
@@ -861,6 +1103,7 @@ save_state_file() {
     write_state_var SETUP_DAEMON_PLUGIN_MEDIAINFO "${SETUP_DAEMON_PLUGIN_MEDIAINFO:-true}"
     write_state_var SETUP_DAEMON_PLUGIN_SPEEDTEST "${SETUP_DAEMON_PLUGIN_SPEEDTEST:-true}"
     write_state_var SETUP_DAEMON_PLUGIN_REQUEST "${SETUP_DAEMON_PLUGIN_REQUEST:-true}"
+    write_state_var SETUP_DAEMON_PLUGIN_RELEASEGUARD "${SETUP_DAEMON_PLUGIN_RELEASEGUARD:-false}"
     write_state_var SETUP_DAEMON_PLUGIN_PRE "${SETUP_DAEMON_PLUGIN_PRE:-true}"
     write_state_var SETUP_CONFIGURE_SITEBOT_ON_SLAVE "${SETUP_CONFIGURE_SITEBOT_ON_SLAVE:-false}"
     write_state_var SETUP_SITEBOT_PLUGIN_ANNOUNCE "${SETUP_SITEBOT_PLUGIN_ANNOUNCE:-true}"
@@ -871,7 +1114,12 @@ save_state_file() {
     write_state_var SETUP_SITEBOT_PLUGIN_AFFILS "${SETUP_SITEBOT_PLUGIN_AFFILS:-true}"
     write_state_var SETUP_SITEBOT_PLUGIN_REQUEST "${SETUP_SITEBOT_PLUGIN_REQUEST:-true}"
     write_state_var SETUP_SITEBOT_PLUGIN_BNC "${SETUP_SITEBOT_PLUGIN_BNC:-true}"
+    write_state_var SETUP_SITEBOT_PLUGIN_CONTROL "${SETUP_SITEBOT_PLUGIN_CONTROL:-true}"
+    write_state_var SETUP_SITEBOT_PLUGIN_BANNED "${SETUP_SITEBOT_PLUGIN_BANNED:-true}"
+    write_state_var SETUP_SITEBOT_PLUGIN_TOP "${SETUP_SITEBOT_PLUGIN_TOP:-true}"
     write_state_var SETUP_SITEBOT_PLUGIN_BW "${SETUP_SITEBOT_PLUGIN_BW:-true}"
+    write_state_var SETUP_SITEBOT_PLUGIN_RULES "${SETUP_SITEBOT_PLUGIN_RULES:-true}"
+    write_state_var SETUP_SITEBOT_PLUGIN_TOPIC "${SETUP_SITEBOT_PLUGIN_TOPIC:-true}"
     write_state_var SETUP_SITEBOT_PLUGIN_ADMINCOMMANDER "${SETUP_SITEBOT_PLUGIN_ADMINCOMMANDER:-true}"
     say "Saved setup defaults to ${STATE_FILE}"
 }

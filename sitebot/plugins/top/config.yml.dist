@@ -1,0 +1,17 @@
+# Daily uploader leaderboard from goftpd userfiles.
+# IRC commands:
+#   !top
+#   !top 5
+#   !top 10
+#   !top 25
+users_dir: "../etc/users"
+channels: ["#goftpd"]
+# reply_target supports "channel", "notice", "pm", or a fixed "#channel".
+reply_target: "channel"
+default_count: 10
+max_count: 25
+# Optional periodic announce. Routed through sitebot's normal type routing as
+# output type TOP, then announce.default_channel, then irc.channels.
+auto_enabled: false
+auto_interval_hours: 8
+auto_only_nonzero: true
