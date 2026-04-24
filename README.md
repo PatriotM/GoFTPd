@@ -316,7 +316,7 @@ Built-in sitebot plugins:
 | `Affils` | `!affils` |
 | `Request` | `!request`, `!requests`, `!reqfill`, `!reqdel`, staff `!reqwipe` |
 | `Banned` | `!banned`, `!banned <filter>`, `!banned allow [filter]` |
-| `SelfIP` | `!ip`, `!ips`, `!addip`, `!delip`, `!chgip` via PM-safe self-service IP management |
+| `SelfIP` | `/msg BotNick !ip`, `!ips`, `!addip`, `!delip`, `!chgip` for PM-only self-service IP management |
 | `Top` | `!top`, `!top 5`, `!top 10`, `!top 25`, optional timed TOP announce |
 | `Rules` | `!rules` (reads `rules_file` when configured, otherwise uses `SITE RULES`) |
 | `Topic` | staff-only `!topic #channel topic text` with FiSH topic encryption when a key exists |
