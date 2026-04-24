@@ -275,6 +275,12 @@ copy_plugin_config_if_missing() {
     return 1
 }
 
+plugin_config_dist_missing() {
+    local target_file="$1"
+    local dist_file="${target_file}.dist"
+    [ ! -f "${target_file}" ] && [ ! -f "${dist_file}" ]
+}
+
 daemon_plugin_enabled_in_config() {
     local file="$1"
     local plugin_name="$2"
@@ -314,6 +320,7 @@ ensure_enabled_plugin_configs() {
     local sitebot_config="${ROOT_DIR}/sitebot/etc/config.yml"
     local plugin_name plugin_config enabled_value
     local repaired_any="false"
+    local missing_any="false"
 
     local daemon_plugins=(dateddirs tvmaze imdb mediainfo speedtest request releaseguard pre)
     if [ -f "${daemon_config}" ]; then
@@ -326,6 +333,12 @@ ensure_enabled_plugin_configs() {
             if copy_plugin_config_if_missing "${plugin_config}"; then
                 say "Created missing daemon plugin config for ${plugin_name}: ${plugin_config}"
                 repaired_any="true"
+            elif plugin_config_dist_missing "${plugin_config}"; then
+                say_color "${C_YELLOW}${C_BOLD}" "Daemon plugin ${plugin_name} is enabled but ${plugin_config} is missing."
+                say "  No ${plugin_config}.dist was found either."
+                say "  This usually means the plugin files were not updated on disk yet."
+                say "  Update/install the plugin files, then rerun ./setup.sh install."
+                missing_any="true"
             fi
         done
     fi
@@ -341,6 +354,12 @@ ensure_enabled_plugin_configs() {
             if copy_plugin_config_if_missing "${plugin_config}"; then
                 say "Created missing sitebot plugin config for ${plugin_name}: ${plugin_config}"
                 repaired_any="true"
+            elif plugin_config_dist_missing "${plugin_config}"; then
+                say_color "${C_YELLOW}${C_BOLD}" "Sitebot plugin ${plugin_name} is enabled but ${plugin_config} is missing."
+                say "  No ${plugin_config}.dist was found either."
+                say "  This usually means the plugin files were not updated on disk yet."
+                say "  Update/install the plugin files, then rerun ./setup.sh install."
+                missing_any="true"
             fi
         done
     fi
@@ -348,6 +367,10 @@ ensure_enabled_plugin_configs() {
     if [ "${repaired_any}" = "true" ]; then
         say ""
         say "Repaired missing enabled plugin configs from .dist defaults."
+    fi
+    if [ "${missing_any}" = "true" ]; then
+        say ""
+        say_color "${C_YELLOW}${C_BOLD}" "Some enabled plugins could not be prepared automatically."
     fi
 }
 
