@@ -324,7 +324,9 @@ Built-in sitebot plugins:
 | `AdminCommander` | staff-only IRC gateway for configured SITE commands |
 
 The example sitebot config uses YAML anchors for channel sets, so a channel can
-be changed once at the top and reused across sections and plugin config.
+be changed once at the top and reused across sections and plugin config. By
+default, race and section announces stay in `#goftpd`, while user `!` commands
+are meant for `#goftpd-chat`.
 
 Sitebot command plugins can use the same split config layout:
 

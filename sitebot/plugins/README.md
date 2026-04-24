@@ -125,7 +125,7 @@ type Output struct {
 
 Two ways your plugin's output gets to a channel:
 
-**1. Explicit Target** - used by command-driven plugins (news, free). When `Output.Target` is set, the bot sends straight there. Example: `!news` typed in `#goftpd` -> the news plugin returns `Output{Target: "#goftpd", Text: "..."}` -> reply lands in `#goftpd`.
+**1. Explicit Target** - used by command-driven plugins (news, free). When `Output.Target` is set, the bot sends straight there. Example: `!news` typed in `#goftpd-chat` -> the news plugin returns `Output{Target: "#goftpd-chat", Text: "..."}` -> reply lands in `#goftpd-chat`.
 
 **2. Empty Target -> routeChannels** - used by event-driven plugins (announce, tvmaze, imdb). The bot looks up channels via:
   - `announce.type_routes[Output.Type]` first (per-type override, e.g. NUKE -> `#goftpd-nuke`)

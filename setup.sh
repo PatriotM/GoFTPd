@@ -511,13 +511,15 @@ set_sitebot_channel_anchor() {
 rewrite_sitebot_irc_channels() {
     local file="$1"
     local main_channel="$2"
-    local spam_channel="$3"
-    local staff_channel="$4"
-    awk -v main_channel="${main_channel}" -v spam_channel="${spam_channel}" -v staff_channel="${staff_channel}" '
+    local chat_channel="$3"
+    local spam_channel="$4"
+    local staff_channel="$5"
+    awk -v main_channel="${main_channel}" -v chat_channel="${chat_channel}" -v spam_channel="${spam_channel}" -v staff_channel="${staff_channel}" '
         BEGIN { replacing = 0 }
         /^  channels:$/ {
             print
             print "    - \"" main_channel "\""
+            print "    - \"" chat_channel "\""
             print "    - \"" spam_channel "\""
             print "    - \"" staff_channel "\""
             replacing = 1
@@ -553,24 +555,28 @@ rewrite_sitebot_invite_channel() {
 rewrite_sitebot_encryption_keys() {
     local file="$1"
     local main_channel="$2"
-    local spam_channel="$3"
-    local staff_channel="$4"
-    local foreign_channel="$5"
-    local archive_channel="$6"
-    local nuke_channel="$7"
-    local main_key="$8"
-    local spam_key="$9"
-    local staff_key="${10}"
-    local foreign_key="${11}"
-    local archive_key="${12}"
-    local nuke_key="${13}"
+    local chat_channel="$3"
+    local spam_channel="$4"
+    local staff_channel="$5"
+    local foreign_channel="$6"
+    local archive_channel="$7"
+    local nuke_channel="$8"
+    local main_key="$9"
+    local chat_key="${10}"
+    local spam_key="${11}"
+    local staff_key="${12}"
+    local foreign_key="${13}"
+    local archive_key="${14}"
+    local nuke_key="${15}"
     awk -v main_channel="${main_channel}" \
+        -v chat_channel="${chat_channel}" \
         -v spam_channel="${spam_channel}" \
         -v staff_channel="${staff_channel}" \
         -v foreign_channel="${foreign_channel}" \
         -v archive_channel="${archive_channel}" \
         -v nuke_channel="${nuke_channel}" \
         -v main_key="${main_key}" \
+        -v chat_key="${chat_key}" \
         -v spam_key="${spam_key}" \
         -v staff_key="${staff_key}" \
         -v foreign_key="${foreign_key}" \
@@ -580,6 +586,7 @@ rewrite_sitebot_encryption_keys() {
         /^  keys:$/ {
             print
             print "    \"" main_channel "\": \"cbc:" main_key "\""
+            print "    \"" chat_channel "\": \"cbc:" chat_key "\""
             print "    \"" spam_channel "\": \"cbc:" spam_key "\""
             print "    \"" staff_channel "\": \"cbc:" staff_key "\""
             print "    \"" foreign_channel "\": \"cbc:" foreign_key "\""
@@ -611,8 +618,9 @@ set_sitebot_scalar() {
 
 configure_sitebot_plugin_channels() {
     local main_channel="$1"
-    local staff_channel="$2"
-    local nuke_channel="$3"
+    local chat_channel="$2"
+    local staff_channel="$3"
+    local nuke_channel="$4"
 
     if [ -f "sitebot/plugins/announce/config.yml" ]; then
         cat > "sitebot/plugins/announce/config.yml" <<EOF
@@ -623,22 +631,22 @@ type_routes:
   UNNUKE: ["${nuke_channel}"]
   NEWDAY: ["${main_channel}"]
   SPEEDTEST: ["${main_channel}"]
-  TOP: ["${main_channel}"]
+  TOP: ["${chat_channel}"]
 EOF
     fi
 
     if [ -f "sitebot/plugins/news/config.yml" ]; then
-        set_yaml_array_line "sitebot/plugins/news/config.yml" '^channels:' "channels: [\"${main_channel}\"]"
+        set_yaml_array_line "sitebot/plugins/news/config.yml" '^channels:' "channels: [\"${chat_channel}\"]"
         set_yaml_array_line "sitebot/plugins/news/config.yml" '^staff_channels:' "staff_channels: [\"${staff_channel}\"]"
     fi
 
     if [ -f "sitebot/plugins/request/config.yml" ]; then
-        set_yaml_array_line "sitebot/plugins/request/config.yml" '^channels:' "channels: [\"${main_channel}\"]"
+        set_yaml_array_line "sitebot/plugins/request/config.yml" '^channels:' "channels: [\"${chat_channel}\"]"
         set_yaml_array_line "sitebot/plugins/request/config.yml" '^staff_channels:' "staff_channels: [\"${staff_channel}\"]"
     fi
 
     if [ -f "sitebot/plugins/bnc/config.yml" ]; then
-        set_yaml_array_line "sitebot/plugins/bnc/config.yml" '^channels:' "channels: [\"${main_channel}\"]"
+        set_yaml_array_line "sitebot/plugins/bnc/config.yml" '^channels:' "channels: [\"${chat_channel}\"]"
     fi
 
     if [ -f "sitebot/plugins/control/config.yml" ]; then
@@ -650,19 +658,27 @@ EOF
     fi
 
     if [ -f "sitebot/plugins/banned/config.yml" ]; then
-        set_yaml_array_line "sitebot/plugins/banned/config.yml" '^channels:' "channels: [\"${main_channel}\"]"
+        set_yaml_array_line "sitebot/plugins/banned/config.yml" '^channels:' "channels: [\"${chat_channel}\"]"
     fi
 
     if [ -f "sitebot/plugins/top/config.yml" ]; then
-        set_yaml_array_line "sitebot/plugins/top/config.yml" '^channels:' "channels: [\"${main_channel}\"]"
+        set_yaml_array_line "sitebot/plugins/top/config.yml" '^channels:' "channels: [\"${chat_channel}\"]"
     fi
 
     if [ -f "sitebot/plugins/bw/config.yml" ]; then
-        set_yaml_array_line "sitebot/plugins/bw/config.yml" '^channels:' "channels: [\"${main_channel}\"]"
+        set_yaml_array_line "sitebot/plugins/bw/config.yml" '^channels:' "channels: [\"${chat_channel}\"]"
     fi
 
     if [ -f "sitebot/plugins/rules/config.yml" ]; then
-        set_yaml_array_line "sitebot/plugins/rules/config.yml" '^channels:' "channels: [\"${main_channel}\"]"
+        set_yaml_array_line "sitebot/plugins/rules/config.yml" '^channels:' "channels: [\"${chat_channel}\"]"
+    fi
+
+    if [ -f "sitebot/plugins/selfip/config.yml" ]; then
+        set_yaml_array_line "sitebot/plugins/selfip/config.yml" '^channels:' "channels: [\"${chat_channel}\"]"
+    fi
+
+    if [ -f "sitebot/plugins/free/config.yml" ]; then
+        set_yaml_array_line "sitebot/plugins/free/config.yml" '^reply_target:' "reply_target: \"${chat_channel}\""
     fi
 
     if [ -f "sitebot/plugins/admincommander/config.yml" ]; then
@@ -917,8 +933,8 @@ configure_sitebot() {
 
     local irc_host irc_port irc_nick irc_user irc_realname irc_password irc_ssl sitebot_version
     local ftp_host ftp_port ftp_user ftp_password ftp_tls ftp_insecure bnc_target_host bnc_target_port rules_file
-    local main_channel spam_channel staff_channel foreign_channel archive_channel nuke_channel enabled_bool
-    local main_key spam_key staff_key foreign_key archive_key nuke_key
+    local main_channel chat_channel spam_channel staff_channel foreign_channel archive_channel nuke_channel enabled_bool
+    local main_key chat_key spam_key staff_key foreign_key archive_key nuke_key
     local fifo_path
     if [ "${sitebot_config_exists}" = "false" ]; then
         irc_host="$(prompt_default 'IRC host' "${SETUP_IRC_HOST:-irc.example.net}")"
@@ -950,13 +966,15 @@ configure_sitebot() {
         bnc_target_host="$(prompt_default 'BNC target host' "${SETUP_BNC_TARGET_HOST:-${ftp_host}}")"
         bnc_target_port="$(prompt_default 'BNC target port' "${SETUP_BNC_TARGET_PORT:-${ftp_port}}")"
         rules_file="$(prompt_default 'Rules file for !rules (empty = use SITE RULES)' "${SETUP_RULES_FILE:-}")"
-        main_channel="$(prompt_default 'Main IRC channel' "${SETUP_MAIN_CHANNEL:-#goftpd}")"
+        main_channel="$(prompt_default 'Main race IRC channel' "${SETUP_MAIN_CHANNEL:-#goftpd}")"
+        chat_channel="$(prompt_default 'Chat/command IRC channel' "${SETUP_CHAT_CHANNEL:-#goftpd-chat}")"
         spam_channel="$(prompt_default 'Spam IRC channel' "${SETUP_SPAM_CHANNEL:-#goftpd-spam}")"
         staff_channel="$(prompt_default 'Staff IRC channel' "${SETUP_STAFF_CHANNEL:-#goftpd-staff}")"
         foreign_channel="$(prompt_default 'Foreign IRC channel' "${SETUP_FOREIGN_CHANNEL:-#goftpd-foreign}")"
         archive_channel="$(prompt_default 'Archive IRC channel' "${SETUP_ARCHIVE_CHANNEL:-#goftpd-archive}")"
         nuke_channel="$(prompt_default 'Nuke IRC channel' "${SETUP_NUKE_CHANNEL:-#goftpd-nuke}")"
         main_key="$(prompt_default 'Blowfish key for main channel' "${SETUP_BLOWFISH_KEY_MAIN:-YourBlowfishKeyHere123456}")"
+        chat_key="$(prompt_default 'Blowfish key for chat channel' "${SETUP_BLOWFISH_KEY_CHAT:-${main_key}}")"
         spam_key="$(prompt_default 'Blowfish key for spam channel' "${SETUP_BLOWFISH_KEY_SPAM:-${main_key}}")"
         staff_key="$(prompt_default 'Blowfish key for staff channel' "${SETUP_BLOWFISH_KEY_STAFF:-${main_key}}")"
         foreign_key="$(prompt_default 'Blowfish key for foreign channel' "${SETUP_BLOWFISH_KEY_FOREIGN:-${main_key}}")"
@@ -982,12 +1000,14 @@ configure_sitebot() {
         bnc_target_port="${SETUP_BNC_TARGET_PORT:-${ftp_port}}"
         rules_file="${SETUP_RULES_FILE:-}"
         main_channel="${SETUP_MAIN_CHANNEL:-#goftpd}"
+        chat_channel="${SETUP_CHAT_CHANNEL:-#goftpd-chat}"
         spam_channel="${SETUP_SPAM_CHANNEL:-#goftpd-spam}"
         staff_channel="${SETUP_STAFF_CHANNEL:-#goftpd-staff}"
         foreign_channel="${SETUP_FOREIGN_CHANNEL:-#goftpd-foreign}"
         archive_channel="${SETUP_ARCHIVE_CHANNEL:-#goftpd-archive}"
         nuke_channel="${SETUP_NUKE_CHANNEL:-#goftpd-nuke}"
         main_key="${SETUP_BLOWFISH_KEY_MAIN:-YourBlowfishKeyHere123456}"
+        chat_key="${SETUP_BLOWFISH_KEY_CHAT:-${main_key}}"
         spam_key="${SETUP_BLOWFISH_KEY_SPAM:-${main_key}}"
         staff_key="${SETUP_BLOWFISH_KEY_STAFF:-${main_key}}"
         foreign_key="${SETUP_BLOWFISH_KEY_FOREIGN:-${main_key}}"
@@ -1013,12 +1033,14 @@ configure_sitebot() {
     SETUP_BNC_TARGET_PORT="${bnc_target_port}"
     SETUP_RULES_FILE="${rules_file}"
     SETUP_MAIN_CHANNEL="${main_channel}"
+    SETUP_CHAT_CHANNEL="${chat_channel}"
     SETUP_SPAM_CHANNEL="${spam_channel}"
     SETUP_STAFF_CHANNEL="${staff_channel}"
     SETUP_FOREIGN_CHANNEL="${foreign_channel}"
     SETUP_ARCHIVE_CHANNEL="${archive_channel}"
     SETUP_NUKE_CHANNEL="${nuke_channel}"
     SETUP_BLOWFISH_KEY_MAIN="${main_key}"
+    SETUP_BLOWFISH_KEY_CHAT="${chat_key}"
     SETUP_BLOWFISH_KEY_SPAM="${spam_key}"
     SETUP_BLOWFISH_KEY_STAFF="${staff_key}"
     SETUP_BLOWFISH_KEY_FOREIGN="${foreign_key}"
@@ -1040,14 +1062,15 @@ configure_sitebot() {
         replace_matching_line "${sitebot_config}" '^event_fifo:' "event_fifo: \"${fifo_path}\""
 
         set_sitebot_channel_anchor "${sitebot_config}" "main" "chan_main" "${main_channel}"
+        set_sitebot_channel_anchor "${sitebot_config}" "chat" "chan_chat" "${chat_channel}"
         set_sitebot_channel_anchor "${sitebot_config}" "spam" "chan_spam" "${spam_channel}"
         set_sitebot_channel_anchor "${sitebot_config}" "staff" "chan_staff" "${staff_channel}"
         set_sitebot_channel_anchor "${sitebot_config}" "foreign" "chan_foreign" "${foreign_channel}"
         set_sitebot_channel_anchor "${sitebot_config}" "archive" "chan_archive" "${archive_channel}"
         set_sitebot_channel_anchor "${sitebot_config}" "nuke" "chan_nuke" "${nuke_channel}"
-        rewrite_sitebot_irc_channels "${sitebot_config}" "${main_channel}" "${spam_channel}" "${staff_channel}"
+        rewrite_sitebot_irc_channels "${sitebot_config}" "${main_channel}" "${chat_channel}" "${spam_channel}" "${staff_channel}"
         rewrite_sitebot_invite_channel "${sitebot_config}" "${staff_channel}"
-        rewrite_sitebot_encryption_keys "${sitebot_config}" "${main_channel}" "${spam_channel}" "${staff_channel}" "${foreign_channel}" "${archive_channel}" "${nuke_channel}" "${main_key}" "${spam_key}" "${staff_key}" "${foreign_key}" "${archive_key}" "${nuke_key}"
+        rewrite_sitebot_encryption_keys "${sitebot_config}" "${main_channel}" "${chat_channel}" "${spam_channel}" "${staff_channel}" "${foreign_channel}" "${archive_channel}" "${nuke_channel}" "${main_key}" "${chat_key}" "${spam_key}" "${staff_key}" "${foreign_key}" "${archive_key}" "${nuke_key}"
     fi
 
     local sitebot_plugins=(Announce TVMaze IMDB News Free Affils Request BNC Control Banned Top BW Rules Topic AdminCommander)
@@ -1066,7 +1089,7 @@ configure_sitebot() {
     done
 
     if [ "${sitebot_config_exists}" = "false" ] || [ "${#sitebot_enable_queue[@]}" -gt 0 ]; then
-        configure_sitebot_plugin_channels "${main_channel}" "${staff_channel}" "${nuke_channel}"
+        configure_sitebot_plugin_channels "${main_channel}" "${chat_channel}" "${staff_channel}" "${nuke_channel}"
         configure_sitebot_plugin_connections "${ftp_host}" "${ftp_port}" "${ftp_user}" "${ftp_password}" "${ftp_tls}" "${ftp_insecure}" "${bnc_target_host}" "${bnc_target_port}"
         if [ -f "sitebot/plugins/rules/config.yml" ]; then
             set_yaml_array_line "sitebot/plugins/rules/config.yml" '^rules_file:' "rules_file: \"${rules_file}\""
@@ -1194,12 +1217,14 @@ save_state_file() {
     write_state_var SETUP_BNC_TARGET_PORT "${SETUP_BNC_TARGET_PORT:-21212}"
     write_state_var SETUP_RULES_FILE "${SETUP_RULES_FILE:-}"
     write_state_var SETUP_MAIN_CHANNEL "${SETUP_MAIN_CHANNEL:-#goftpd}"
+    write_state_var SETUP_CHAT_CHANNEL "${SETUP_CHAT_CHANNEL:-#goftpd-chat}"
     write_state_var SETUP_SPAM_CHANNEL "${SETUP_SPAM_CHANNEL:-#goftpd-spam}"
     write_state_var SETUP_STAFF_CHANNEL "${SETUP_STAFF_CHANNEL:-#goftpd-staff}"
     write_state_var SETUP_FOREIGN_CHANNEL "${SETUP_FOREIGN_CHANNEL:-#goftpd-foreign}"
     write_state_var SETUP_ARCHIVE_CHANNEL "${SETUP_ARCHIVE_CHANNEL:-#goftpd-archive}"
     write_state_var SETUP_NUKE_CHANNEL "${SETUP_NUKE_CHANNEL:-#goftpd-nuke}"
     write_state_var SETUP_BLOWFISH_KEY_MAIN "${SETUP_BLOWFISH_KEY_MAIN:-YourBlowfishKeyHere123456}"
+    write_state_var SETUP_BLOWFISH_KEY_CHAT "${SETUP_BLOWFISH_KEY_CHAT:-${SETUP_BLOWFISH_KEY_MAIN:-YourBlowfishKeyHere123456}}"
     write_state_var SETUP_BLOWFISH_KEY_SPAM "${SETUP_BLOWFISH_KEY_SPAM:-${SETUP_BLOWFISH_KEY_MAIN:-YourBlowfishKeyHere123456}}"
     write_state_var SETUP_BLOWFISH_KEY_STAFF "${SETUP_BLOWFISH_KEY_STAFF:-${SETUP_BLOWFISH_KEY_MAIN:-YourBlowfishKeyHere123456}}"
     write_state_var SETUP_BLOWFISH_KEY_FOREIGN "${SETUP_BLOWFISH_KEY_FOREIGN:-${SETUP_BLOWFISH_KEY_MAIN:-YourBlowfishKeyHere123456}}"
