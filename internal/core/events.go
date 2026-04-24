@@ -520,7 +520,23 @@ func formatRaceDuration(ms int64) string {
 	if ms%1000 != 0 {
 		return fmt.Sprintf("%.4fs", float64(ms)/1000.0)
 	}
-	return fmt.Sprintf("%ds", ms/1000)
+	totalSeconds := ms / 1000
+	if totalSeconds < 60 {
+		return fmt.Sprintf("%ds", totalSeconds)
+	}
+	hours := totalSeconds / 3600
+	minutes := (totalSeconds % 3600) / 60
+	seconds := totalSeconds % 60
+	if hours > 0 {
+		if seconds == 0 {
+			return fmt.Sprintf("%dh%dm", hours, minutes)
+		}
+		return fmt.Sprintf("%dh%dm%ds", hours, minutes, seconds)
+	}
+	if seconds == 0 {
+		return fmt.Sprintf("%dm", minutes)
+	}
+	return fmt.Sprintf("%dm%ds", minutes, seconds)
 }
 
 func userSlowSpeed(u VFSRaceUser) float64 {
