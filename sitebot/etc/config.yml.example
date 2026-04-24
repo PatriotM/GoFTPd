@@ -1,4 +1,4 @@
-debug: true
+debug: false
 log_file:      "logs/sitebot.log"
 log_delete_after_days: 1
 log_keep_days: 1
@@ -350,7 +350,7 @@ plugins:
     Topic: true
     AdminCommander: true
   config:
-    debug: true
+    debug: false
     # Plugin defaults live in sitebot/plugins/<name>/config.yml.dist.
     # Copy them to config.yml so Git updates do not overwrite your local values.
     tvmaze:
