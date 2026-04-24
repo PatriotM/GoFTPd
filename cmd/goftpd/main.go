@@ -52,7 +52,7 @@ func main() {
 	} else {
 		core.InstallConsoleLogger(cfg.Debug)
 	}
-	core.PrintStartupBanner("GoFTPd daemon")
+	core.PrintStartupBanner(cfg.Version, "GoFTPd daemon")
 
 	// SLAVE MODE: No FTP server, just connect to master and serve files
 	if cfg.Mode == "slave" {
@@ -241,6 +241,9 @@ func main() {
 		}
 		if pluginCfg["sitename"] == nil {
 			pluginCfg["sitename"] = cfg.SiteNameShort
+		}
+		if pluginCfg["version"] == nil {
+			pluginCfg["version"] = cfg.Version
 		}
 		if pluginCfg["debug"] == nil {
 			pluginCfg["debug"] = cfg.Debug

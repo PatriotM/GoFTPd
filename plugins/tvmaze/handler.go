@@ -32,6 +32,7 @@ type Handler struct {
 	svc      *plugin.Services
 	debug    bool
 	sections []string
+	version  string
 
 	client   *http.Client
 	jobs     chan job
@@ -71,6 +72,11 @@ func (h *Handler) Init(svc *plugin.Services, cfg map[string]interface{}) error {
 		h.debug = v
 	} else if svc != nil {
 		h.debug = svc.Debug
+	}
+	if v, ok := cfg["version"].(string); ok && strings.TrimSpace(v) != "" {
+		h.version = strings.TrimSpace(v)
+	} else {
+		h.version = "1.0"
 	}
 	go h.worker()
 	if h.debug {
@@ -234,7 +240,7 @@ func (h *Handler) doLookup(j job) {
 		}
 	}
 
-	content := formatTVMazeFile(&show, ep)
+	content := formatTVMazeFile(&show, ep, h.version)
 	filePath := path.Join(j.dirPath, ".tvmaze")
 	if err := h.svc.Bridge.WriteFile(filePath, []byte(content)); err != nil {
 		log.Printf("[TVMAZE] WriteFile %s failed: %v", filePath, err)
@@ -275,9 +281,9 @@ func parseTVName(rel string) (string, int, int) {
 	return strings.ReplaceAll(rel, ".", " "), 0, 0
 }
 
-func formatTVMazeFile(show *tvmShow, ep *tvmEpisode) string {
+func formatTVMazeFile(show *tvmShow, ep *tvmEpisode, version string) string {
 	var b strings.Builder
-	const bar = "========================= TVMAZE INFO v1.0 ========================="
+	bar := fmt.Sprintf("======================== TVMAZE INFO v%s ========================", version)
 	fmt.Fprintf(&b, "%s\n\n", bar)
 
 	fmt.Fprintf(&b, " Title........: %s\n", show.Name)

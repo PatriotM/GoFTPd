@@ -760,7 +760,7 @@ configure_daemon() {
     say "Configuring daemon..."
     copy_if_missing "etc/config-example.yml" "${daemon_config}"
 
-    local daemon_mode long_name short_name cert_name enabled_bool
+    local daemon_mode long_name short_name site_version cert_name enabled_bool
     local listen_port public_ip passthrough_mode master_listen_host master_control_port
     local slave_name slave_master_host slave_master_port slave_roots slave_bind_ip fifo_path
     daemon_mode="${SETUP_DAEMON_MODE:-master}"
@@ -768,11 +768,13 @@ configure_daemon() {
         daemon_mode="$(prompt_mode "${SETUP_DAEMON_MODE:-master}")"
         long_name="$(prompt_default 'Daemon site name' "${SETUP_SITE_NAME:-GoFTPd}")"
         short_name="$(prompt_default 'Daemon short site tag' "${SETUP_SITE_SHORT:-${long_name}}")"
+        site_version="$(prompt_default 'Daemon version' "${SETUP_SITE_VERSION:-1.0.4b}")"
         cert_name="$(prompt_default 'TLS certificate display name' "${SETUP_CERT_NAME:-${long_name}}")"
 
         SETUP_DAEMON_MODE="${daemon_mode}"
         SETUP_SITE_NAME="${long_name}"
         SETUP_SITE_SHORT="${short_name}"
+        SETUP_SITE_VERSION="${site_version}"
         SETUP_CERT_NAME="${cert_name}"
         fifo_path="${SETUP_FIFO_PATH:-${FIFO_PATH_DEFAULT}}"
         SETUP_FIFO_PATH="${fifo_path}"
@@ -780,6 +782,7 @@ configure_daemon() {
         replace_matching_line "${daemon_config}" '^mode:' "mode:         ${daemon_mode}"
         replace_matching_line "${daemon_config}" '^sitename_long:' "sitename_long:  \"${long_name}\""
         replace_matching_line "${daemon_config}" '^sitename_short:' "sitename_short: \"${short_name}\""
+        replace_matching_line "${daemon_config}" '^version:' "version:        \"${site_version}\""
         replace_matching_line "${daemon_config}" '^event_fifo:' "event_fifo:     \"${fifo_path}\""
         replace_matching_line "${daemon_config}" '^sitebot_config:' "sitebot_config: \"${SETUP_SITEBOT_CONFIG_PATH:-${SITEBOT_CONFIG_DEFAULT}}\""
     else
@@ -912,7 +915,7 @@ configure_sitebot() {
     say "Configuring sitebot..."
     copy_if_missing "sitebot/etc/config.yml.example" "${sitebot_config}"
 
-    local irc_host irc_port irc_nick irc_user irc_realname irc_password irc_ssl
+    local irc_host irc_port irc_nick irc_user irc_realname irc_password irc_ssl sitebot_version
     local ftp_host ftp_port ftp_user ftp_password ftp_tls ftp_insecure bnc_target_host bnc_target_port rules_file
     local main_channel spam_channel staff_channel foreign_channel archive_channel nuke_channel enabled_bool
     local main_key spam_key staff_key foreign_key archive_key nuke_key
@@ -922,7 +925,8 @@ configure_sitebot() {
         irc_port="$(prompt_default 'IRC port' "${SETUP_IRC_PORT:-6697}")"
         irc_nick="$(prompt_default 'IRC nick' "${SETUP_IRC_NICK:-GoSitebot}")"
         irc_user="$(prompt_default 'IRC user' "${SETUP_IRC_USER:-sitebot}")"
-        irc_realname="$(prompt_default 'IRC realname' "${SETUP_IRC_REALNAME:-GoSitebot v1.0}")"
+        sitebot_version="${SETUP_SITEBOT_VERSION:-${SETUP_SITE_VERSION:-1.0.4b}}"
+        irc_realname="$(prompt_default 'IRC realname' "${SETUP_IRC_REALNAME:-GoSitebot v${sitebot_version}}")"
         irc_password="$(prompt_default 'IRC server password' "${SETUP_IRC_PASSWORD:-changeme}")"
         if prompt_yes_no "Use SSL for IRC?" "$(bool_to_prompt_default "${SETUP_IRC_SSL:-true}")"; then
             irc_ssl="true"
@@ -960,11 +964,12 @@ configure_sitebot() {
         nuke_key="$(prompt_default 'Blowfish key for nuke channel' "${SETUP_BLOWFISH_KEY_NUKE:-${main_key}}")"
     else
         say "Sitebot config already exists at ${sitebot_config}; keeping current sitebot settings."
+        sitebot_version="${SETUP_SITEBOT_VERSION:-${SETUP_SITE_VERSION:-1.0.4b}}"
         irc_host="${SETUP_IRC_HOST:-irc.example.net}"
         irc_port="${SETUP_IRC_PORT:-6697}"
         irc_nick="${SETUP_IRC_NICK:-GoSitebot}"
         irc_user="${SETUP_IRC_USER:-sitebot}"
-        irc_realname="${SETUP_IRC_REALNAME:-GoSitebot v1.0}"
+        irc_realname="${SETUP_IRC_REALNAME:-GoSitebot v${sitebot_version}}"
         irc_password="${SETUP_IRC_PASSWORD:-changeme}"
         irc_ssl="${SETUP_IRC_SSL:-true}"
         ftp_host="${SETUP_PLUGIN_FTP_HOST:-127.0.0.1}"
@@ -994,6 +999,7 @@ configure_sitebot() {
     SETUP_IRC_PORT="${irc_port}"
     SETUP_IRC_NICK="${irc_nick}"
     SETUP_IRC_USER="${irc_user}"
+    SETUP_SITEBOT_VERSION="${sitebot_version}"
     SETUP_IRC_REALNAME="${irc_realname}"
     SETUP_IRC_PASSWORD="${irc_password}"
     SETUP_IRC_SSL="${irc_ssl}"
@@ -1030,6 +1036,7 @@ configure_sitebot() {
         set_sitebot_scalar "${sitebot_config}" "realname" "\"${irc_realname}\""
         set_sitebot_scalar "${sitebot_config}" "password" "\"${irc_password}\""
         set_sitebot_scalar "${sitebot_config}" "ssl" "${irc_ssl}"
+        replace_matching_line "${sitebot_config}" '^version:' "version:       \"${sitebot_version}\""
         replace_matching_line "${sitebot_config}" '^event_fifo:' "event_fifo: \"${fifo_path}\""
 
         set_sitebot_channel_anchor "${sitebot_config}" "main" "chan_main" "${main_channel}"
@@ -1153,6 +1160,7 @@ save_state_file() {
     }
     write_state_var SETUP_SITE_NAME "${SETUP_SITE_NAME:-GoFTPd}"
     write_state_var SETUP_SITE_SHORT "${SETUP_SITE_SHORT:-GoFTPd}"
+    write_state_var SETUP_SITE_VERSION "${SETUP_SITE_VERSION:-1.0.4b}"
     write_state_var SETUP_CERT_NAME "${SETUP_CERT_NAME:-GoFTPd}"
     write_state_var SETUP_GENERATE_CERTS "${SETUP_GENERATE_CERTS:-true}"
     write_state_var SETUP_FIFO_PATH "${SETUP_FIFO_PATH:-${FIFO_PATH_DEFAULT}}"
@@ -1172,7 +1180,8 @@ save_state_file() {
     write_state_var SETUP_IRC_PORT "${SETUP_IRC_PORT:-6697}"
     write_state_var SETUP_IRC_NICK "${SETUP_IRC_NICK:-GoSitebot}"
     write_state_var SETUP_IRC_USER "${SETUP_IRC_USER:-sitebot}"
-    write_state_var SETUP_IRC_REALNAME "${SETUP_IRC_REALNAME:-GoSitebot v1.0}"
+    write_state_var SETUP_SITEBOT_VERSION "${SETUP_SITEBOT_VERSION:-${SETUP_SITE_VERSION:-1.0.4b}}"
+    write_state_var SETUP_IRC_REALNAME "${SETUP_IRC_REALNAME:-GoSitebot v${SETUP_SITEBOT_VERSION:-${SETUP_SITE_VERSION:-1.0.4b}}}"
     write_state_var SETUP_IRC_PASSWORD "${SETUP_IRC_PASSWORD:-changeme}"
     write_state_var SETUP_IRC_SSL "${SETUP_IRC_SSL:-true}"
     write_state_var SETUP_PLUGIN_FTP_HOST "${SETUP_PLUGIN_FTP_HOST:-127.0.0.1}"

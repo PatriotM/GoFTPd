@@ -38,7 +38,7 @@ func startupColorEnabled() bool {
 	return (info.Mode() & os.ModeCharDevice) != 0
 }
 
-func PrintStartupBanner(subtitle string) {
+func PrintStartupBanner(version, subtitle string) {
 	reset := ""
 	bold := ""
 	cyan := ""
@@ -65,6 +65,9 @@ func PrintStartupBanner(subtitle string) {
 	}
 	for _, line := range lines {
 		fmt.Fprintf(os.Stderr, "%s%s%s\n", line.color, line.text, reset)
+	}
+	if strings.TrimSpace(version) != "" {
+		fmt.Fprintf(os.Stderr, "%sVersion %s%s\n", cyan+bold, strings.TrimSpace(version), reset)
 	}
 	if strings.TrimSpace(subtitle) != "" {
 		fmt.Fprintf(os.Stderr, "%s%s%s\n\n", yellow, subtitle, reset)

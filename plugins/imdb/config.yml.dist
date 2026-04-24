@@ -1,2 +1,2 @@
-sections: ["X264", "X265", "BLURAY", "DVDR"]
+sections: ["X264-HD-1080P", "X264-HD-720P", "X264-SD", "X265", "BLURAY", "DVDR"]
 debug: false

@@ -20,6 +20,7 @@ type Config struct {
 	LogKeepDays        int            `yaml:"log_keep_days"`
 	LogDeleteAfterDays int            `yaml:"log_delete_after_days"`
 	LogConsole         bool           `yaml:"log_console"`
+	Version            string         `yaml:"version"`
 	EventFIFO          string         `yaml:"event_fifo"`
 	IRC                IRCConfig      `yaml:"irc"`
 	Encryption         EncConfig      `yaml:"encryption"`
@@ -75,6 +76,11 @@ func LoadConfig(path string) (*Config, error) {
 	cfg := &Config{}
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, err
+	}
+	if strings.TrimSpace(cfg.Version) == "" {
+		if idx := strings.LastIndex(strings.TrimSpace(cfg.IRC.RealName), " v"); idx >= 0 {
+			cfg.Version = strings.TrimSpace(cfg.IRC.RealName[idx+2:])
+		}
 	}
 	if err := resolveAnnounceConfigFile(&cfg.Announce, filepath.Dir(path)); err != nil {
 		return nil, err

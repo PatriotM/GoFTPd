@@ -10,7 +10,7 @@ bw_interval_ms: 500
 sections:
   - TV-1080P
   - TV-720P
-  - X264
+  - X264-SD
   - X265
   - BLURAY
   - MP3
