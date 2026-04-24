@@ -275,6 +275,82 @@ copy_plugin_config_if_missing() {
     return 1
 }
 
+daemon_plugin_enabled_in_config() {
+    local file="$1"
+    local plugin_name="$2"
+    awk -v plugin_name="${plugin_name}" '
+        BEGIN { in_plugins = 0; in_target = 0 }
+        /^plugins:$/ { in_plugins = 1; next }
+        in_plugins && $0 ~ ("^  " plugin_name ":$") { in_target = 1; next }
+        in_target && /^  [A-Za-z0-9_-]+:$/ { exit }
+        in_target && /^    enabled:[[:space:]]+/ {
+            value = $2
+            gsub(/[[:space:]]+/, "", value)
+            print value
+            exit
+        }
+    ' "${file}"
+}
+
+sitebot_plugin_enabled_in_config() {
+    local file="$1"
+    local plugin_name="$2"
+    awk -v plugin_name="${plugin_name}" '
+        BEGIN { in_plugins = 0; in_enabled = 0 }
+        /^plugins:$/ { in_plugins = 1; next }
+        in_plugins && /^  enabled:$/ { in_enabled = 1; next }
+        in_enabled && /^  config:$/ { exit }
+        in_enabled && $0 ~ ("^    " plugin_name ":[[:space:]]+") {
+            value = $2
+            gsub(/[[:space:]]+/, "", value)
+            print value
+            exit
+        }
+    ' "${file}"
+}
+
+ensure_enabled_plugin_configs() {
+    local daemon_config="${ROOT_DIR}/etc/config.yml"
+    local sitebot_config="${ROOT_DIR}/sitebot/etc/config.yml"
+    local plugin_name plugin_config enabled_value
+    local repaired_any="false"
+
+    local daemon_plugins=(dateddirs tvmaze imdb mediainfo speedtest request releaseguard pre)
+    if [ -f "${daemon_config}" ]; then
+        for plugin_name in "${daemon_plugins[@]}"; do
+            enabled_value="$(daemon_plugin_enabled_in_config "${daemon_config}" "${plugin_name}")"
+            if [ "${enabled_value}" != "true" ]; then
+                continue
+            fi
+            plugin_config="$(daemon_plugin_config_path "${plugin_name}")"
+            if copy_plugin_config_if_missing "${plugin_config}"; then
+                say "Created missing daemon plugin config for ${plugin_name}: ${plugin_config}"
+                repaired_any="true"
+            fi
+        done
+    fi
+
+    local sitebot_plugins=(Announce TVMaze IMDB News Free Affils Request BNC Control Banned Top BW Rules Topic AdminCommander)
+    if [ -f "${sitebot_config}" ]; then
+        for plugin_name in "${sitebot_plugins[@]}"; do
+            enabled_value="$(sitebot_plugin_enabled_in_config "${sitebot_config}" "${plugin_name}")"
+            if [ "${enabled_value}" != "true" ]; then
+                continue
+            fi
+            plugin_config="$(sitebot_plugin_config_path "${plugin_name}")" || continue
+            if copy_plugin_config_if_missing "${plugin_config}"; then
+                say "Created missing sitebot plugin config for ${plugin_name}: ${plugin_config}"
+                repaired_any="true"
+            fi
+        done
+    fi
+
+    if [ "${repaired_any}" = "true" ]; then
+        say ""
+        say "Repaired missing enabled plugin configs from .dist defaults."
+    fi
+}
+
 join_by() {
     local sep="$1"
     shift || true
@@ -1367,6 +1443,7 @@ say "This will only ask setup questions when a real config file is missing."
 
 configure_daemon
 configure_sitebot
+ensure_enabled_plugin_configs
 save_state_file
 ensure_script_permissions
 ensure_fifo
