@@ -37,16 +37,51 @@ PASV/CPSV/PORT, SSCN, and PROT P.
 ## Quick Start
 
 ```bash
-./build.sh
+./setup.sh build
 ./generate_certs.sh "My FTPd"
 cp etc/config-example.yml etc/config.yml
 ./goftpd
 
 cd sitebot
-./build.sh
 cp etc/config.yml.example etc/config.yml
 ./sitebot -config etc/config.yml
 ```
+
+For a first-time guided setup, use:
+
+```bash
+./setup.sh install
+```
+
+If you only want to compile both binaries without touching config setup, use:
+
+```bash
+./setup.sh build
+```
+
+It asks for master/slave mode, ports, PASV/proxy style, certificate name,
+channel names, a Blowfish key per channel, sitebot IRC settings, sitebot FTP
+plugin settings, and per-plugin enable flags only when the real config files
+do not exist yet. It also saves the answers in
+`etc/setup-interactive.env` so a reinstall or move can reuse them as defaults.
+In slave mode it asks only the slave-specific daemon questions and skips the
+sitebot flow unless you explicitly choose to configure a sitebot there too.
+If the saved defaults file exists, the installer asks whether to load it and
+use those values as the prompt defaults for the new run.
+
+To back up generated interactive configs and start over cleanly, use:
+
+```bash
+./setup.sh clean
+```
+
+Cleanup mode:
+
+- backs up generated daemon and sitebot configs
+- backs up generated plugin `config.yml` files
+- backs up and removes the shared FIFO
+- backs up and removes generated TLS certs in `etc/certs`
+- keeps `etc/setup-interactive.env` so your saved answers survive the reset
 
 Edit `etc/config.yml` before running it for real. The same config file is used
 for master and slave mode; `mode: master` or `mode: slave` decides which blocks
@@ -76,6 +111,18 @@ Main files:
 | `sitebot/etc/config.yml` | Active sitebot config |
 | `sitebot/etc/config.yml.example` | Annotated sitebot example |
 | `sitebot/etc/templates/pzsng.theme` | Sitebot theme templates |
+
+Plugin defaults are shipped as `config.yml.dist` files inside each plugin
+directory. Copy them to `config.yml` and point the main config at those files:
+
+```yaml
+plugins:
+  pre:
+    enabled: true
+    config_file: "plugins/pre/config.yml"
+```
+
+This keeps site-local plugin settings out of Git-tracked example files.
 
 ## Slaves
 
@@ -148,7 +195,8 @@ policy and the daemon checks ownership before allowing the action.
 
 ## Daemon Plugins
 
-Daemon plugins are configured under `plugins:` in `etc/config.yml`. Only
+Daemon plugins are enabled under `plugins:` in `etc/config.yml`. Plugin-specific
+defaults can live in separate files referenced with `config_file`, and only
 plugins with `enabled: true` are loaded.
 
 Built-in daemon plugins:
@@ -260,6 +308,19 @@ Built-in sitebot plugins:
 
 The example sitebot config uses YAML anchors for channel sets, so a channel can
 be changed once at the top and reused across sections and plugin config.
+
+Sitebot command plugins can use the same split config layout:
+
+```yaml
+plugins:
+  config:
+    request:
+      config_file: "plugins/request/config.yml"
+    admin_commander:
+      config_file: "plugins/admincommander/config.yml"
+```
+
+The repo ships matching `sitebot/plugins/<name>/config.yml.dist` files.
 
 ### Theme Output
 

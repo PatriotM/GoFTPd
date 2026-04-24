@@ -289,7 +289,7 @@ func (e *Engine) CanPerform(u *user.User, action string, vpath string) bool {
 	}
 
 	action = strings.ToLower(action)
-	vpath = filepath.Clean(vpath)
+	vpath = filepath.ToSlash(filepath.Clean(vpath))
 
 	// Map FTP commands to rule types
 	ruleType := ruleTypeForAction(action)
@@ -297,7 +297,8 @@ func (e *Engine) CanPerform(u *user.User, action string, vpath string) bool {
 	// Check rules for this action type only
 	if rules, ok := e.RulesByType[ruleType]; ok {
 		for _, rule := range rules {
-			if pathMatches(rule.Path, vpath) {
+			rulePath := filepath.ToSlash(filepath.Clean(strings.ReplaceAll(strings.TrimSpace(rule.Path), "\\", "/")))
+			if pathMatches(rule.Path, vpath) || pathIsBelow(vpath, rulePath) {
 				return checkRequired(rule.Required, u)
 			}
 		}
@@ -306,7 +307,8 @@ func (e *Engine) CanPerform(u *user.User, action string, vpath string) bool {
 	// Check privpath rules
 	if privRules, ok := e.RulesByType["privpath"]; ok {
 		for _, rule := range privRules {
-			if pathMatches(rule.Path, vpath) {
+			rulePath := filepath.ToSlash(filepath.Clean(strings.ReplaceAll(strings.TrimSpace(rule.Path), "\\", "/")))
+			if pathMatches(rule.Path, vpath) || pathIsBelow(vpath, rulePath) {
 				return checkRequired(rule.Required, u)
 			}
 		}
@@ -324,10 +326,11 @@ func (e *Engine) CanPerformRuleOnly(u *user.User, action string, vpath string) b
 		return false
 	}
 	ruleType := ruleTypeForAction(action)
-	vpath = filepath.Clean(vpath)
+	vpath = filepath.ToSlash(filepath.Clean(vpath))
 	if rules, ok := e.RulesByType[ruleType]; ok {
 		for _, rule := range rules {
-			if pathMatches(rule.Path, vpath) {
+			rulePath := filepath.ToSlash(filepath.Clean(strings.ReplaceAll(strings.TrimSpace(rule.Path), "\\", "/")))
+			if pathMatches(rule.Path, vpath) || pathIsBelow(vpath, rulePath) {
 				return checkRequired(rule.Required, u)
 			}
 		}
