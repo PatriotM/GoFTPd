@@ -197,32 +197,49 @@ func MarkEmptyDirsOnRescan(cfg Config) bool {
 	return cfg.Enabled && cfg.Incomplete.Enabled && cfg.Incomplete.MarkEmptyDirsOnRescan
 }
 
-func ValidateUpload(cfg Config, dirPath, fileName string, existingNames []string) error {
+func ValidateUpload(cfg Config, dirPath, fileName string, existingNames []string, sfvEntries map[string]uint32) error {
 	if !UsesRace(cfg, dirPath) {
 		return nil
 	}
 
 	lowerName := strings.ToLower(strings.TrimSpace(fileName))
 	isSFV := strings.HasSuffix(lowerName, ".sfv")
+	listedInSFV := false
+	if sfvEntries != nil {
+		_, listedInSFV = sfvEntries[raceEntryKey(fileName)]
+	}
+	isPayload := IsRacePayloadFileForDir(cfg, dirPath, fileName) || listedInSFV
 	if UsesZip(cfg, dirPath) {
 		if !IsAllowedTypeForDir(cfg, dirPath, fileName) {
 			return fmt.Errorf("zipscript: file type %q is not allowed here", normalizedExt(fileName))
 		}
 		return nil
 	}
-	inSFV := false
+	hasDirSFV := len(sfvEntries) > 0
 	for _, name := range existingNames {
 		if strings.HasSuffix(strings.ToLower(strings.TrimSpace(name)), ".sfv") {
+			hasDirSFV = true
 			if isSFV && cfg.SFV.DenyDoubleSFV {
 				return errors.New("zipscript: .sfv already exists in this release")
 			}
 		}
-		if raceEntryKey(name) == raceEntryKey(fileName) {
-			inSFV = true
+	}
+
+	if !hasDirSFV && cfg.SFV.ForceFirst && isPayload && !isSFV {
+		return errors.New("zipscript: upload the .sfv before payload files in this release")
+	}
+
+	if hasDirSFV && !isSFV && isPayload {
+		if !listedInSFV {
+			return fmt.Errorf("zipscript: %q is not listed in the .sfv", fileName)
 		}
 	}
 
-	if !inSFV && !IsAllowedTypeForDir(cfg, dirPath, fileName) {
+	if listedInSFV {
+		return nil
+	}
+
+	if !IsAllowedTypeForDir(cfg, dirPath, fileName) {
 		return fmt.Errorf("zipscript: file type %q is not allowed here", normalizedExt(fileName))
 	}
 
@@ -254,7 +271,7 @@ func IsAllowedTypeForDir(cfg Config, dirPath, fileName string) bool {
 	if isPrimaryAudioPayload(dirPath, ext) {
 		return true
 	}
-	if scenePayloadExts[ext] || regexp.MustCompile(`^r\d\d$`).MatchString(ext) {
+	if scenePayloadExts[ext] || isSceneMultipartExt(ext) {
 		return true
 	}
 	if IsIgnoredType(cfg, fileName) {
@@ -314,13 +331,18 @@ func IsRacePayloadFileForDir(cfg Config, dirPath, fileName string) bool {
 		return false
 	}
 	name := strings.ToLower(strings.TrimSpace(fileName))
-	if regexp.MustCompile(`(?i)\.(rar|r\d\d)$`).MatchString(name) {
+	if strings.HasSuffix(name, ".rar") || isSceneMultipartExt(normalizedExt(name)) {
 		return true
 	}
 	if UsesZip(cfg, dirPath) && regexp.MustCompile(`(?i)\.(zip|z\d\d)$`).MatchString(name) {
 		return true
 	}
 	return isMediaInfoFile(name)
+}
+
+func isSceneMultipartExt(ext string) bool {
+	ext = strings.ToLower(strings.TrimSpace(ext))
+	return len(ext) == 3 && ext[0] >= 'r' && ext[0] <= 'z' && ext[1] >= '0' && ext[1] <= '9' && ext[2] >= '0' && ext[2] <= '9'
 }
 
 func CanTriggerRaceEnd(cfg Config, sfvEntries map[string]uint32, fileName string) bool {

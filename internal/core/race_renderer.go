@@ -49,6 +49,26 @@ func speed(v float64) string {
 	return fmt.Sprintf("%.1fMB/s", v/1024.0/1024.0)
 }
 
+func raceSize(sizeBytes int64) string {
+	if sizeBytes <= 0 {
+		return "-"
+	}
+	value := float64(sizeBytes)
+	const (
+		mb = 1024 * 1024
+		gb = 1024 * 1024 * 1024
+		tb = 1024 * 1024 * 1024 * 1024
+	)
+	switch {
+	case value >= tb:
+		return fmt.Sprintf("%.2fT", value/tb)
+	case value >= gb:
+		return fmt.Sprintf("%.2fG", value/gb)
+	default:
+		return fmt.Sprintf("%.1fM", value/mb)
+	}
+}
+
 func line(l, fill, r byte, n int) []byte {
 	b := make([]byte, 0, n+2)
 	b = append(b, l)
@@ -61,9 +81,10 @@ func line(l, fill, r byte, n int) []byte {
 
 // sep draws a row separator using the given left-edge, junction, and right-edge
 // connector characters. Examples:
-//   sep(cpLT, cpCR, cpRT, ...)   → row between two rows that both have columns
-//   sep(cpLT, cpTD, cpRT, ...)   → row below a single-wide block, above columns
-//   sep(cpLT, cpBU, cpRT, ...)   → row below columns, above a single-wide block
+//
+//	sep(cpLT, cpCR, cpRT, ...)   → row between two rows that both have columns
+//	sep(cpLT, cpTD, cpRT, ...)   → row below a single-wide block, above columns
+//	sep(cpLT, cpBU, cpRT, ...)   → row below columns, above a single-wide block
 func sep(leftEdge, junction, rightEdge byte, widths ...int) []byte {
 	out := []byte{leftEdge}
 	for i, w := range widths {
@@ -79,11 +100,12 @@ func sep(leftEdge, junction, rightEdge byte, widths ...int) []byte {
 }
 
 func row(w io.Writer, cols ...string) {
-	widths := []int{32, 7, 8, 11, 8}
+	widths := []int{28, 11, 8, 11, 8}
 
 	buf := []byte{cpVT}
 	for i, c := range cols {
-		buf = append(buf, []byte(fmt.Sprintf("%-*s", widths[i], c))...)
+		cell := clean(c, widths[i])
+		buf = append(buf, []byte(fmt.Sprintf("%-*s", widths[i], cell))...)
 		buf = append(buf, cpVT)
 	}
 	buf = append(buf, '\r', '\n')
@@ -146,10 +168,10 @@ func RenderCompactRaceStats(w io.Writer, users []VFSRaceUser, groups []VFSRaceGr
 	}
 
 	fmt.Fprintf(w, ".-== GoFTPd Race ==------------------------------.\r\n")
-	fmt.Fprintf(w, "| #1 %-20s %4dF %7.1fM %11s %3d%% |\r\n",
+	fmt.Fprintf(w, "| #1 %-20s %4dF %7s %11s %3d%% |\r\n",
 		leader,
 		present,
-		float64(totalBytes)/(1024*1024),
+		raceSize(totalBytes),
 		speed(totalSpeed),
 		totalPct,
 	)
@@ -177,8 +199,6 @@ func RenderRaceStats(w io.Writer, users []VFSRaceUser, groups []VFSRaceGroup, to
 		totalSpeed += u.Speed
 	}
 
-	totalMB := float64(totalBytes) / (1024 * 1024)
-
 	width := 70
 
 	raw(w, line(cpTL, cpHZ, cpTR, width))
@@ -194,62 +214,62 @@ func RenderRaceStats(w io.Writer, users []VFSRaceUser, groups []VFSRaceGroup, to
 	// Junction = top-T: the section above is a single-wide block (ASCII art),
 	// so column dividers start here and only go DOWNWARD. Using cpCR here
 	// would draw little nubs sticking up above the line.
-	raw(w, sep(cpLT, cpTD, cpRT, 32, 7, 8, 11, 8))
+	raw(w, sep(cpLT, cpTD, cpRT, 28, 11, 8, 11, 8))
 	row(w, "Users", "Files", "Size", "Speed", "%")
-	raw(w, sep(cpLT, cpCR, cpRT, 32, 7, 8, 11, 8))
+	raw(w, sep(cpLT, cpCR, cpRT, 28, 11, 8, 11, 8))
 
 	for i, u := range users {
-		label := fmt.Sprintf("#%-2d %-10s/%-10s",
+		label := fmt.Sprintf("#%-2d %s/%s",
 			i+1,
-			clean(u.Name, 14),
-			clean(u.Group, 11),
+			clean(u.Name, 12),
+			clean(u.Group, 12),
 		)
 
 		row(
 			w,
 			label,
 			fmt.Sprintf("%dF", u.Files),
-			fmt.Sprintf("%.1fM", float64(u.Bytes)/(1024*1024)),
+			raceSize(u.Bytes),
 			speed(u.Speed),
 			fmt.Sprintf("%d%%", pct(u.Percent)),
 		)
 	}
 
 	if len(groups) > 0 {
-		raw(w, sep(cpLT, cpCR, cpRT, 32, 7, 8, 11, 8))
+		raw(w, sep(cpLT, cpCR, cpRT, 28, 11, 8, 11, 8))
 		row(w, "Groups", "Files", "Size", "Speed", "%")
-		raw(w, sep(cpLT, cpCR, cpRT, 32, 7, 8, 11, 8))
+		raw(w, sep(cpLT, cpCR, cpRT, 28, 11, 8, 11, 8))
 
 		for i, g := range groups {
-			label := fmt.Sprintf("#%-2d %-28s",
+			label := fmt.Sprintf("#%-2d %s",
 				i+1,
-				clean(g.Name, 28),
+				clean(g.Name, 24),
 			)
 
 			row(
 				w,
 				label,
 				fmt.Sprintf("%dF", g.Files),
-				fmt.Sprintf("%.1fM", float64(g.Bytes)/(1024*1024)),
+				raceSize(g.Bytes),
 				speed(g.Speed),
 				fmt.Sprintf("%d%%", pct(g.Percent)),
 			)
 		}
 	}
 
-	raw(w, sep(cpLT, cpCR, cpRT, 32, 7, 8, 11, 8))
+	raw(w, sep(cpLT, cpCR, cpRT, 28, 11, 8, 11, 8))
 	row(
 		w,
 		"TOTAL",
 		fmt.Sprintf("%d/%dF", present, total),
-		fmt.Sprintf("%.1fM", totalMB),
+		raceSize(totalBytes),
 		speed(totalSpeed),
 		fmt.Sprintf("%d%%", totalPct),
 	)
 
 	// Bottom border uses bottom-T junctions so column separators from the
 	// TOTAL row terminate cleanly into the bottom edge.
-	raw(w, sep(cpBL, cpBU, cpBR, 32, 7, 8, 11, 8))
+	raw(w, sep(cpBL, cpBU, cpBR, 28, 11, 8, 11, 8))
 }
 
 func RenderFTPReplyBlock(w io.Writer, code int, finalLine string, render func(io.Writer)) {

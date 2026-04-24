@@ -20,6 +20,7 @@ type PluginManager struct {
 	plugins []plugin.Plugin
 	svc     *plugin.Services
 	debug   bool
+	cfg     *Config
 }
 
 // NewPluginManager creates a manager. Call SetServices before registering
@@ -29,6 +30,10 @@ func NewPluginManager(debug bool) *PluginManager {
 		plugins: make([]plugin.Plugin, 0),
 		debug:   debug,
 	}
+}
+
+func (pm *PluginManager) SetConfig(cfg *Config) {
+	pm.cfg = cfg
 }
 
 // SetServices attaches the Services handle the manager will pass to each
@@ -96,7 +101,7 @@ func (pm *PluginManager) Dispatch(evt *plugin.Event) {
 		return
 	}
 	if evt.Section == "" && evt.Path != "" {
-		evt.Section = sectionFromPluginPath(evt.Path)
+		evt.Section = sectionFromPathWithConfig(pm.cfg, evt.Path)
 	}
 
 	pm.mu.RLock()

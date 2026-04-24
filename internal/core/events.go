@@ -264,6 +264,32 @@ func sectionFromPath(p string) string {
 	return strings.ToUpper(parts[0])
 }
 
+func sectionFromPathWithConfig(cfg *Config, p string) string {
+	section := sectionFromPath(p)
+	if cfg == nil {
+		return section
+	}
+	first := strings.TrimSpace(strings.Split(strings.TrimPrefix(path.Clean("/"+p), "/"), "/")[0])
+	if first == "" {
+		return section
+	}
+	prefix := "!Today_"
+	if cfg.Plugins != nil {
+		if pluginCfg, ok := cfg.Plugins["dateddirs"]; ok {
+			if raw, ok := pluginCfg["symlink_prefix"].(string); ok && strings.TrimSpace(raw) != "" {
+				prefix = strings.TrimSpace(raw)
+			}
+		}
+	}
+	if strings.HasPrefix(strings.ToLower(first), strings.ToLower(prefix)) {
+		trimmed := strings.TrimPrefix(first, prefix)
+		if trimmed != "" {
+			return strings.ToUpper(trimmed)
+		}
+	}
+	return section
+}
+
 func fileNameFromPath(p string) string {
 	base := path.Base(path.Clean(p))
 	if base == "/" || base == "." {
@@ -296,7 +322,7 @@ func (s *Session) emitEvent(evtType EventType, eventPath, fileName string, size 
 	if fileName == "" {
 		fileName = fileNameFromPath(eventPath)
 	}
-	section := sectionFromPath(eventPath)
+	section := sectionFromPathWithConfig(s.Config, eventPath)
 
 	evt := Event{
 		Type:      evtType,
@@ -494,7 +520,23 @@ func formatRaceDuration(ms int64) string {
 	if ms%1000 != 0 {
 		return fmt.Sprintf("%.4fs", float64(ms)/1000.0)
 	}
-	return fmt.Sprintf("%ds", ms/1000)
+	totalSeconds := ms / 1000
+	if totalSeconds < 60 {
+		return fmt.Sprintf("%ds", totalSeconds)
+	}
+	hours := totalSeconds / 3600
+	minutes := (totalSeconds % 3600) / 60
+	seconds := totalSeconds % 60
+	if hours > 0 {
+		if seconds == 0 {
+			return fmt.Sprintf("%dh%dm", hours, minutes)
+		}
+		return fmt.Sprintf("%dh%dm%ds", hours, minutes, seconds)
+	}
+	if seconds == 0 {
+		return fmt.Sprintf("%dm", minutes)
+	}
+	return fmt.Sprintf("%dm%ds", minutes, seconds)
 }
 
 func userSlowSpeed(u VFSRaceUser) float64 {

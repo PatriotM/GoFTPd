@@ -328,6 +328,45 @@ func (r *RaceDB) Reconcile(vfs *VirtualFileSystem) error {
 		}
 	}
 
+	sfvRows, err := r.db.Query(`
+        SELECT rel.path, rel.sfv_name, rf.filename, rf.expected_crc32
+        FROM releases rel
+        JOIN release_files rf ON rf.release_id = rel.id
+        WHERE rel.sfv_name <> ''
+          AND rf.is_expected = 1
+        ORDER BY rel.path, rf.filename
+    `)
+	if err != nil {
+		return err
+	}
+	defer sfvRows.Close()
+
+	sfvNameByPath := make(map[string]string)
+	sfvByPath := make(map[string]map[string]uint32)
+	for sfvRows.Next() {
+		var dirPath, sfvName, fileName string
+		var expectedCRC int64
+		if err := sfvRows.Scan(&dirPath, &sfvName, &fileName, &expectedCRC); err != nil {
+			return err
+		}
+		if sfvByPath[dirPath] == nil {
+			sfvByPath[dirPath] = make(map[string]uint32)
+		}
+		sfvNameByPath[dirPath] = sfvName
+		fileName = raceDBFileKey(fileName)
+		if fileName != "" {
+			sfvByPath[dirPath][fileName] = uint32(expectedCRC)
+		}
+	}
+	if err := sfvRows.Err(); err != nil {
+		return err
+	}
+	for dirPath, entries := range sfvByPath {
+		if len(entries) > 0 {
+			vfs.SetSFVData(dirPath, sfvNameByPath[dirPath], entries)
+		}
+	}
+
 	mediaRows, err := r.db.Query(`
         SELECT rel.path, rm.field_key, rm.field_value
         FROM releases rel
