@@ -134,16 +134,6 @@ run_cleanup_mode() {
     exit 0
 }
 
-if [ -f "${STATE_FILE}" ]; then
-    if prompt_yes_no "Load saved setup defaults from ${STATE_FILE}?" "Y"; then
-        # shellcheck disable=SC1090
-        . "${STATE_FILE}"
-        say "Loaded saved setup defaults."
-    else
-        say "Ignoring saved setup defaults for this run."
-    fi
-fi
-
 bool_to_prompt_default() {
     local value="${1:-}"
     case "${value}" in
@@ -1049,6 +1039,16 @@ case "${1:-help}" in
         exit 1
         ;;
 esac
+
+if [ -f "${STATE_FILE}" ]; then
+    if prompt_yes_no "Load saved setup defaults from ${STATE_FILE}?" "Y"; then
+        # shellcheck disable=SC1090
+        . "${STATE_FILE}"
+        say "Loaded saved setup defaults."
+    else
+        say "Ignoring saved setup defaults for this run."
+    fi
+fi
 
 show_banner
 say "This will only ask setup questions when a real config file is missing."
