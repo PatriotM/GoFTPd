@@ -197,32 +197,41 @@ func MarkEmptyDirsOnRescan(cfg Config) bool {
 	return cfg.Enabled && cfg.Incomplete.Enabled && cfg.Incomplete.MarkEmptyDirsOnRescan
 }
 
-func ValidateUpload(cfg Config, dirPath, fileName string, existingNames []string) error {
+func ValidateUpload(cfg Config, dirPath, fileName string, existingNames []string, sfvEntries map[string]uint32) error {
 	if !UsesRace(cfg, dirPath) {
 		return nil
 	}
 
 	lowerName := strings.ToLower(strings.TrimSpace(fileName))
 	isSFV := strings.HasSuffix(lowerName, ".sfv")
+	isPayload := IsRacePayloadFileForDir(cfg, dirPath, fileName)
 	if UsesZip(cfg, dirPath) {
 		if !IsAllowedTypeForDir(cfg, dirPath, fileName) {
 			return fmt.Errorf("zipscript: file type %q is not allowed here", normalizedExt(fileName))
 		}
 		return nil
 	}
-	inSFV := false
+	hasDirSFV := len(sfvEntries) > 0
 	for _, name := range existingNames {
 		if strings.HasSuffix(strings.ToLower(strings.TrimSpace(name)), ".sfv") {
+			hasDirSFV = true
 			if isSFV && cfg.SFV.DenyDoubleSFV {
 				return errors.New("zipscript: .sfv already exists in this release")
 			}
 		}
-		if raceEntryKey(name) == raceEntryKey(fileName) {
-			inSFV = true
+	}
+
+	if !hasDirSFV && cfg.SFV.ForceFirst && isPayload && !isSFV {
+		return errors.New("zipscript: upload the .sfv before payload files in this release")
+	}
+
+	if hasDirSFV && !isSFV && isPayload {
+		if _, ok := sfvEntries[raceEntryKey(fileName)]; !ok {
+			return fmt.Errorf("zipscript: %q is not listed in the .sfv", fileName)
 		}
 	}
 
-	if !inSFV && !IsAllowedTypeForDir(cfg, dirPath, fileName) {
+	if !IsAllowedTypeForDir(cfg, dirPath, fileName) {
 		return fmt.Errorf("zipscript: file type %q is not allowed here", normalizedExt(fileName))
 	}
 

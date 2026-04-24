@@ -1082,7 +1082,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		if s.Config.Mode == "master" && s.MasterManager != nil {
 			if bridge, ok := s.MasterManager.(MasterBridge); ok {
 				existingNames = zipscriptExistingNames(bridge, s.CurrentDir)
-				if err := zipscript.ValidateUpload(s.Config.Zipscript, s.CurrentDir, fileName, existingNames); err != nil {
+				if err := zipscript.ValidateUpload(s.Config.Zipscript, s.CurrentDir, fileName, existingNames, bridge.GetSFVData(s.CurrentDir)); err != nil {
 					fmt.Fprintf(s.Conn, "550 %s\r\n", err)
 					return false
 				}
