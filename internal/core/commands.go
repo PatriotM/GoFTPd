@@ -1607,6 +1607,10 @@ func incompleteMarkerEntries(bridge MasterBridge, cfg *Config, pattern, dirPath 
 	if pattern == "" || cfg == nil {
 		return nil
 	}
+	cleanDirPath := path.Clean("/" + strings.TrimSpace(dirPath))
+	if cleanDirPath == "/" {
+		return nil
+	}
 	existing := make(map[string]bool, len(entries))
 	for _, e := range entries {
 		existing[e.Name] = true
@@ -1617,7 +1621,7 @@ func incompleteMarkerEntries(bridge MasterBridge, cfg *Config, pattern, dirPath 
 			continue
 		}
 		releasePath := path.Join(dirPath, e.Name)
-		if !zipscript.UsesReleaseCheck(cfg.Zipscript, releasePath) {
+		if !zipscript.UsesReleaseCheckEntry(cfg.Zipscript, releasePath) {
 			continue
 		}
 		if zipscript.IsIgnoredReleaseSubdir(cfg.Zipscript, releasePath) {
