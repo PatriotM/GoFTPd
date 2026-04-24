@@ -34,12 +34,14 @@ say_color() {
 }
 
 show_banner() {
-    say_color "${C_CYAN}${C_BOLD}" "   ______      __________ _______ ____"
-    say_color "${C_CYAN}${C_BOLD}" "  / ____/___  / ____/ __ )__  __/ __ \\"
-    say_color "${C_GREEN}${C_BOLD}" " / / __/ __ \\/ /_  / __  | / / / /_/ /"
-    say_color "${C_GREEN}${C_BOLD}" "/ /_/ / /_/ / __/ / /_/ / / / / ____/"
-    say_color "${C_YELLOW}${C_BOLD}" "\\____/\\____/_/   /_____/ /_/ /_/"
-    say_color "${C_YELLOW}" "      Distributed FTP daemon setup and build helper"
+    say_color "${C_CYAN}${C_BOLD}" "=============================================================="
+    say_color "${C_CYAN}${C_BOLD}" "   ____       _______ ______  ____     __"
+    say_color "${C_GREEN}${C_BOLD}" "  / ___| ___ |  ___|_   _\\ \\/ /\\ \\   / /"
+    say_color "${C_GREEN}${C_BOLD}" " | |  _ / _ \\| |_    | |  \\  /  \\ \\ / / "
+    say_color "${C_YELLOW}${C_BOLD}" " | |_| | (_) |  _|   | |  /  \\   \\ V /  "
+    say_color "${C_YELLOW}${C_BOLD}" "  \\____|\\___/|_|     |_| /_/\\_\\   \\_/   "
+    say_color "${C_CYAN}${C_BOLD}" "=============================================================="
+    say_color "${C_YELLOW}" "            GoFTPd setup, build, and cleanup helper"
     printf '\n'
 }
 
