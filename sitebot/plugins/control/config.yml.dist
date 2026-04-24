@@ -1,0 +1,9 @@
+# Staff-only sitebot lifecycle commands.
+# IRC commands:
+#   !refresh
+#   !restart
+staff_channels: ["#goftpd-staff"]
+staff_hosts: []
+# reply_target supports "channel", "notice", or a fixed "#channel".
+reply_target: "channel"
+restart_delay_ms: 800

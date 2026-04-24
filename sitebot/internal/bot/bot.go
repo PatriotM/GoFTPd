@@ -14,17 +14,20 @@ import (
 	"goftpd/sitebot/internal/event"
 	"goftpd/sitebot/internal/irc"
 	"goftpd/sitebot/internal/plugin"
+	tmpl "goftpd/sitebot/internal/template"
 	admincommanderplugin "goftpd/sitebot/plugins/admincommander"
 	affilsplugin "goftpd/sitebot/plugins/affils"
 	announceplugin "goftpd/sitebot/plugins/announce"
+	bannedplugin "goftpd/sitebot/plugins/banned"
 	bncplugin "goftpd/sitebot/plugins/bnc"
 	bwplugin "goftpd/sitebot/plugins/bw"
-	bannedplugin "goftpd/sitebot/plugins/banned"
 	freeplugin "goftpd/sitebot/plugins/free"
 	imdbplugin "goftpd/sitebot/plugins/imdb"
 	newsplugin "goftpd/sitebot/plugins/news"
 	requestplugin "goftpd/sitebot/plugins/request"
 	rulesplugin "goftpd/sitebot/plugins/rules"
+	topplugin "goftpd/sitebot/plugins/top"
+	topicplugin "goftpd/sitebot/plugins/topic"
 	tvmazeplugin "goftpd/sitebot/plugins/tvmaze"
 )
 
@@ -36,6 +39,13 @@ type Bot struct {
 	Done      chan bool
 	Mutex     sync.RWMutex
 	Debug     bool
+}
+
+type controlConfig struct {
+	StaffChannels []string
+	StaffHosts    []string
+	ReplyTarget   string
+	RestartDelay  time.Duration
 }
 
 func NewBot(cfg *Config) *Bot {
@@ -240,6 +250,46 @@ func (b *Bot) initializePlugins() error {
 			return err
 		}
 		if err := b.registerPlugin("Rules", rules); err != nil {
+			return err
+		}
+	}
+	if enabled, ok := b.Config.Plugins.Enabled["Top"]; ok && enabled {
+		top := topplugin.New()
+		top.SetAsyncEmitter(func(outType, text, section, relpath string) {
+			fakeEvt := &event.Event{Type: event.EventCommand, Section: section, Path: relpath}
+			channels := b.routeChannels(fakeEvt, outType)
+			for _, line := range strings.Split(text, "\n") {
+				line = strings.TrimRight(line, "\r")
+				if line == "" {
+					continue
+				}
+				for _, ch := range channels {
+					_ = b.IRC.SendMessage(ch, line)
+				}
+			}
+		})
+		cfg := map[string]interface{}{"debug": b.Debug, "theme_file": b.Config.Announce.ThemeFile}
+		for k, v := range b.Config.Plugins.Config {
+			cfg[k] = v
+		}
+		if err := top.Initialize(cfg); err != nil {
+			return err
+		}
+		if err := b.registerPlugin("Top", top); err != nil {
+			return err
+		}
+	}
+	if enabled, ok := b.Config.Plugins.Enabled["Topic"]; ok && enabled {
+		topic := topicplugin.New()
+		topic.SetTopicSetter(b.IRC)
+		cfg := map[string]interface{}{"debug": b.Debug, "theme_file": b.Config.Announce.ThemeFile}
+		for k, v := range b.Config.Plugins.Config {
+			cfg[k] = v
+		}
+		if err := topic.Initialize(cfg); err != nil {
+			return err
+		}
+		if err := b.registerPlugin("Topic", topic); err != nil {
 			return err
 		}
 	}
@@ -567,6 +617,21 @@ func (b *Bot) handleEvent(evt *event.Event) {
 		b.handleInviteEvent(evt)
 		return
 	}
+	if handled, outs, after := b.handleControlCommand(evt); handled {
+		b.sendOutputs(evt, outs)
+		if after != nil {
+			go func(command string) {
+				time.Sleep(b.controlSettings().RestartDelay)
+				if err := after(); err != nil {
+					b.sendOutputs(evt, b.controlReply(evt, b.controlSettings(), b.renderControl("CTRLCMD_ERROR", map[string]string{
+						"command":  command,
+						"response": err.Error(),
+					}, "CONTROL: "+err.Error())))
+				}
+			}(strings.ToLower(strings.TrimSpace(evt.Data["command"])))
+		}
+		return
+	}
 	evt.Section = b.resolveSection(evt.Path, evt.Section)
 	log.Printf("[Bot] handleEvent %s section=%s path=%s file=%s user=%s", evt.Type, evt.Section, evt.Path, evt.Filename, evt.User)
 	outs, err := b.Plugins.ProcessEvent(evt)
@@ -581,6 +646,10 @@ func (b *Bot) handleEvent(evt *event.Event) {
 		return
 	}
 	log.Printf("[Bot] %s produced %d plugin outputs", evt.Type, len(outs))
+	b.sendOutputs(evt, outs)
+}
+
+func (b *Bot) sendOutputs(evt *event.Event, outs []plugin.Output) {
 	for _, out := range outs {
 		if strings.TrimSpace(out.Target) != "" {
 			for _, line := range strings.Split(out.Text, "\n") {
@@ -623,6 +692,191 @@ func (b *Bot) handleEvent(evt *event.Event) {
 			}
 		}
 	}
+}
+
+func (b *Bot) handleControlCommand(evt *event.Event) (bool, []plugin.Output, func() error) {
+	if evt.Type != event.EventCommand {
+		return false, nil, nil
+	}
+	cmd := strings.ToLower(strings.TrimSpace(evt.Data["command"]))
+	if cmd != "refresh" && cmd != "restart" {
+		return false, nil, nil
+	}
+	if enabled, ok := b.Config.Plugins.Enabled["Control"]; ok && !enabled {
+		return false, nil, nil
+	}
+
+	ctrl := b.controlSettings()
+	if !b.controlCanStaff(evt, ctrl) {
+		return true, b.controlReply(evt, ctrl, b.renderControl("CTRLCMD_DENIED", map[string]string{
+			"command": cmd,
+			"user":    evt.User,
+		}, "CONTROL: staff command only.")), nil
+	}
+
+	if cmd == "refresh" {
+		if err := b.Reload(); err != nil {
+			return true, b.controlReply(evt, ctrl, b.renderControl("CTRLCMD_ERROR", map[string]string{
+				"command":  cmd,
+				"response": err.Error(),
+			}, "CONTROL: refresh failed: "+err.Error())), nil
+		}
+		return true, b.controlReply(evt, ctrl, b.renderControl("CTRLCMD_OK", map[string]string{
+			"command":  cmd,
+			"response": "sitebot config and plugins reloaded",
+		}, "CONTROL: sitebot config and plugins reloaded.")), nil
+	}
+
+	return true, b.controlReply(evt, ctrl, b.renderControl("CTRLCMD_OK", map[string]string{
+		"command":  cmd,
+		"response": "restarting sitebot...",
+	}, "CONTROL: restarting sitebot...")), b.RestartProcess
+}
+
+func (b *Bot) Reload() error {
+	if _, err := b.Config.Rehash(); err != nil {
+		return err
+	}
+	b.Debug = b.Config.Debug
+	if b.IRC != nil {
+		b.IRC.Debug = b.Debug
+		for ch, key := range b.Config.Encryption.Keys {
+			_ = b.IRC.SetChannelKey(ch, key)
+		}
+		for _, ch := range uniqueChannels(b.Config) {
+			_ = b.IRC.Join(ch)
+		}
+	}
+	_ = b.Plugins.Close()
+	b.Plugins = plugin.NewManager()
+	return b.initializePlugins()
+}
+
+func (b *Bot) RestartProcess() error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	proc, err := os.StartProcess(exe, os.Args, &os.ProcAttr{
+		Dir:   cwd,
+		Env:   os.Environ(),
+		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
+	})
+	if err != nil {
+		return err
+	}
+	log.Printf("[Bot] Restart spawned pid=%d", proc.Pid)
+	_ = b.Stop()
+	os.Exit(0)
+	return nil
+}
+
+func (b *Bot) controlSettings() controlConfig {
+	cfg := plugin.ConfigSection(b.Config.Plugins.Config, "control")
+	out := controlConfig{
+		StaffChannels: []string{"#goftpd-staff"},
+		StaffHosts:    []string{},
+		ReplyTarget:   "channel",
+		RestartDelay:  800 * time.Millisecond,
+	}
+	if raw, ok := cfg["staff_channels"]; ok {
+		out.StaffChannels = plugin.ToStringSlice(raw, out.StaffChannels)
+	}
+	if raw, ok := cfg["staff_hosts"]; ok {
+		out.StaffHosts = plugin.ToStringSlice(raw, out.StaffHosts)
+	}
+	if s, ok := cfg["reply_target"].(string); ok && strings.TrimSpace(s) != "" {
+		out.ReplyTarget = strings.ToLower(strings.TrimSpace(s))
+	}
+	switch v := cfg["restart_delay_ms"].(type) {
+	case int:
+		if v > 0 {
+			out.RestartDelay = time.Duration(v) * time.Millisecond
+		}
+	case int64:
+		if v > 0 {
+			out.RestartDelay = time.Duration(v) * time.Millisecond
+		}
+	case float64:
+		if v > 0 {
+			out.RestartDelay = time.Duration(int(v)) * time.Millisecond
+		}
+	}
+	return out
+}
+
+func (b *Bot) controlCanStaff(evt *event.Event, cfg controlConfig) bool {
+	channel := strings.ToLower(strings.TrimSpace(evt.Data["channel"]))
+	for _, ch := range cfg.StaffChannels {
+		if strings.EqualFold(strings.TrimSpace(ch), channel) {
+			return true
+		}
+	}
+	host := strings.ToLower(strings.TrimSpace(evt.Data["host"]))
+	for _, pattern := range cfg.StaffHosts {
+		if wildcardMatch(strings.ToLower(strings.TrimSpace(pattern)), host) {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *Bot) controlReply(evt *event.Event, cfg controlConfig, lines ...string) []plugin.Output {
+	target := b.commandReplyTarget(evt, cfg.ReplyTarget)
+	notice := strings.EqualFold(strings.TrimSpace(cfg.ReplyTarget), "notice")
+	out := make([]plugin.Output, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		out = append(out, plugin.Output{Type: "COMMAND", Target: target, Notice: notice, Text: line})
+	}
+	return out
+}
+
+func (b *Bot) commandReplyTarget(evt *event.Event, replyTarget string) string {
+	replyTarget = strings.TrimSpace(replyTarget)
+	switch {
+	case strings.HasPrefix(replyTarget, "#"):
+		return replyTarget
+	case strings.EqualFold(replyTarget, "notice"):
+		return evt.User
+	default:
+		if ch := strings.TrimSpace(evt.Data["channel"]); ch != "" {
+			return ch
+		}
+		return evt.User
+	}
+}
+
+func (b *Bot) renderControl(key string, vars map[string]string, fallback string) string {
+	themeFile := strings.TrimSpace(b.Config.Announce.ThemeFile)
+	if themeFile == "" {
+		return fallback
+	}
+	th, err := tmpl.LoadTheme(themeFile)
+	if err != nil {
+		return fallback
+	}
+	if raw, ok := th.Announces[key]; ok && raw != "" {
+		return tmpl.Render(raw, vars)
+	}
+	return fallback
+}
+
+func wildcardMatch(pattern, value string) bool {
+	if pattern == "" || value == "" {
+		return false
+	}
+	if ok, _ := filepath.Match(pattern, value); ok {
+		return true
+	}
+	return pattern == value
 }
 func (b *Bot) Stop() error {
 	close(b.Done)

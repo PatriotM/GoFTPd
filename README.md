@@ -74,6 +74,9 @@ In slave mode it asks only the slave-specific daemon questions and skips the
 sitebot flow unless you explicitly choose to configure a sitebot there too.
 If the saved defaults file exists, the installer asks whether to load it and
 use those values as the prompt defaults for the new run.
+If your main daemon or sitebot config already exists, rerunning `./setup.sh install`
+still creates any newly added plugin `config.yml` files from their `.dist`
+templates and asks whether to enable just those new plugins.
 
 To back up generated interactive configs and start over cleanly, use:
 
@@ -312,7 +315,10 @@ Built-in sitebot plugins:
 | `Affils` | `!affils` |
 | `Request` | `!request`, `!requests`, `!reqfill`, `!reqdel`, staff `!reqwipe` |
 | `Banned` | `!banned`, `!banned <filter>`, `!banned allow [filter]` |
+| `Top` | `!top`, `!top 5`, `!top 10`, `!top 25`, optional timed TOP announce |
 | `Rules` | `!rules` (reads `rules_file` when configured, otherwise uses `SITE RULES`) |
+| `Topic` | staff-only `!topic #channel topic text` with FiSH topic encryption when a key exists |
+| `Control` | staff-only `!refresh` and `!restart` for live config/plugin reload and bot re-exec |
 | `AdminCommander` | staff-only IRC gateway for configured SITE commands |
 
 The example sitebot config uses YAML anchors for channel sets, so a channel can
@@ -416,3 +422,4 @@ MIT
 ## Credits
 
 Inspired by [drftpd](https://github.com/drftpd-ng/drftpd), [glftpd](https://glftpd.io), and [pzs-ng](https://github.com/pzs-ng/pzs-ng).
+

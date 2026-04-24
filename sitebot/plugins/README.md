@@ -13,7 +13,10 @@ NOTICE) that the bot sends to channels.
 - **free** - handles `!free` (disk space) IRC command
 - **bnc** - handles `!bnc` FTP login health checks across one or more configured targets
 - **banned** - handles `!banned` by querying `SITE BANNED`
+- **top** - handles `!top`, reading daily upload stats from goftpd user files and optionally auto-announcing the leaderboard
 - **rules** - handles `!rules`, reading a configured rules file or falling back to `SITE RULES`
+- **topic** - handles staff-only `!topic #channel topic text`, using FiSH topic encryption when a channel key exists
+- **control** - built-in staff control surface for `!refresh` and `!restart`
 
 ## Writing a new plugin
 

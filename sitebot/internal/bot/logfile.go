@@ -5,20 +5,25 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
 
 // rotatingLog is an io.Writer that writes to a file and rotates it daily.
 // At midnight (local time), the previous day's file is renamed to
-// `<basePath>.YYYY-MM-DD` and any rotated file older than `keepDays` is
-// deleted.
+// `<basePath>.YYYY-MM-DD` and any rotated file older than `deleteAfterDays`
+// is deleted.
 type rotatingLog struct {
 	mu              sync.Mutex
 	basePath        string
 	deleteAfterDays int
 	f               *os.File
 	day             string
+}
+
+type filteredConsoleWriter struct {
+	target io.Writer
 }
 
 func newRotatingLog(basePath string, deleteAfterDays int) (*rotatingLog, error) {
@@ -66,7 +71,6 @@ func (r *rotatingLog) rotate(newDay string) error {
 		return err
 	}
 	r.day = newDay
-
 	r.purgeOld()
 	return nil
 }
@@ -97,10 +101,40 @@ func (r *rotatingLog) purgeOld() {
 	}
 }
 
-// InstallFileLogger redirects the standard `log` package to a rotating file,
-// and optionally also mirrors to stderr. Pass logFilePath="" to disable.
-// deleteAfterDays controls when rotated files are deleted (minimum 1).
-func InstallFileLogger(logFilePath string, deleteAfterDays int, alsoConsole bool) error {
+func (w filteredConsoleWriter) Write(p []byte) (int, error) {
+	if shouldWriteConsoleLog(p) {
+		_, err := w.target.Write(p)
+		return len(p), err
+	}
+	return len(p), nil
+}
+
+func shouldWriteConsoleLog(p []byte) bool {
+	line := strings.ToLower(string(p))
+	markers := []string{
+		" error",
+		"[error]",
+		" failed",
+		"[fatal]",
+		" fatal",
+		" panic",
+		"[panic]",
+		" warning",
+		"[warn]",
+		"[warning]",
+	}
+	for _, marker := range markers {
+		if strings.Contains(line, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// InstallFileLogger redirects the standard log package to a rotating file,
+// and optionally mirrors to stderr. When debug is false, console output is
+// filtered down to warnings/errors while the file still receives the full log.
+func InstallFileLogger(logFilePath string, deleteAfterDays int, alsoConsole bool, debug bool) error {
 	if logFilePath == "" {
 		return nil
 	}
@@ -109,11 +143,27 @@ func InstallFileLogger(logFilePath string, deleteAfterDays int, alsoConsole bool
 		return err
 	}
 	if alsoConsole {
-		log.SetOutput(io.MultiWriter(os.Stderr, r))
-		log.Printf("[LOG] File logging enabled: %s (delete after %d days, console mirrored)", logFilePath, deleteAfterDays)
+		console := io.Writer(os.Stderr)
+		if !debug {
+			console = filteredConsoleWriter{target: os.Stderr}
+		}
+		log.SetOutput(io.MultiWriter(console, r))
+		if debug {
+			log.Printf("[LOG] File logging enabled: %s (delete after %d days, console mirrored)", logFilePath, deleteAfterDays)
+		}
 	} else {
 		log.SetOutput(r)
-		log.Printf("[LOG] File logging enabled: %s (delete after %d days, console disabled)", logFilePath, deleteAfterDays)
+		if debug {
+			log.Printf("[LOG] File logging enabled: %s (delete after %d days, console disabled)", logFilePath, deleteAfterDays)
+		}
 	}
 	return nil
+}
+
+func InstallConsoleLogger(debug bool) {
+	if debug {
+		log.SetOutput(os.Stderr)
+		return
+	}
+	log.SetOutput(filteredConsoleWriter{target: os.Stderr})
 }

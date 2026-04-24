@@ -497,3 +497,4 @@ log_file:       "logs/goftpd.log"
 log_delete_after_days: 1
 log_keep_days:  1
 log_console:    true
+

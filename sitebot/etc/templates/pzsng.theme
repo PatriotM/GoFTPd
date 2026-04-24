@@ -371,6 +371,16 @@ announce.BANNEDCMD_LINE = "%b{%c01{BANNED:}} %c05{%line}"
 
 announce.BANNEDCMD_ERROR = "%b{%c01{BANNED:}} %c04{%response}"
 
+announce.TOPCMD_HEADER = "%c03{TOP UPLOADERS FOR THE DAY:} %c01{[ }%c06{%count} Users %c01{]}"
+
+announce.TOPCMD_ENTRY = "%c01{[ }%c06{%rank} %c01{]} %b{%user} %c01{- (}%files %c01{Files) - (}%size%c01{)}"
+
+announce.TOPCMD_TOTAL = "%c03{TOTAL UPLOADS FOR THE DAY:} %c01{( }%files %c01{Files ) - ( }%size %c01{)}"
+
+announce.TOPCMD_EMPTY = "%b{%c03{TOP:}} %c05{No uploads recorded for today.}"
+
+announce.TOPCMD_ERROR = "%b{%c03{TOP:}} %c04{%response}"
+
 announce.BW = "%b{%c01{BANDWiDTH:}} %c01{Checking GoFTPd bandwidth, please wait ...}"
 
 announce.BW_LINE = "%c01{%response}"
@@ -380,6 +390,13 @@ announce.BW_ERROR = "%b{%c01{BANDWiDTH:}} %c04{%response}"
 announce.RULESCMD_LINE = "%b{%c01{RULES:}} %c05{%line}"
 
 announce.RULESCMD_ERROR = "%b{%c01{RULES:}} %c04{%response}"
+announce.CTRLCMD_OK = "%b{%c02{CONTROL:}} %c05{%response}"
+announce.CTRLCMD_ERROR = "%b{%c02{CONTROL:}} %c04{%response}"
+announce.CTRLCMD_DENIED = "%b{%c02{CONTROL:}} %c04{Staff command only.}"
+announce.TOPICCMD_OK = "%b{%c02{TOPIC:}} %c05{%response}"
+announce.TOPICCMD_ERROR = "%b{%c02{TOPIC:}} %c04{%response}"
+announce.TOPICCMD_DENIED = "%b{%c02{TOPIC:}} %c04{Staff command only.}"
+announce.TOPICCMD_USAGE = "%b{%c02{TOPIC:}} %c01{Usage:} %c05{!topic #channel topic text}"
 
 announce.NUKE = "%b{%c01{NUKE:}} %c01{[}%section_colored%c01{]} %c06{%b{%relname}} %c01{by} %c04{%u_name}"
 
@@ -418,4 +435,5 @@ announce.REQUESTCMD_LINE = "%b{%c02{REQUEST:}} %c05{%line}"
 announce.REQUESTCMD_ERROR = "%b{%c02{REQUEST:}} %c04{SITE %command failed:} %c05{%response}"
 announce.REQUESTCMD_DENIED = "%b{%c02{REQUEST:}} %c04{%response}"
 announce.REQUESTCMD_USAGE = "%b{%c02{REQUEST:}} %c01{Usage:} %c05{%response}"
+
 

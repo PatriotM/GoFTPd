@@ -42,13 +42,15 @@ func main() {
 		log.Fatalf("Invalid timezone %q in etc/config.yml: %v", cfg.Timezone, err)
 	}
 
-	// 1a. Install file logger (active only when debug=true AND log_file is set).
-	// Tee's log output to both stderr and the file, rotates daily, keeps the
-	// last log_keep_days archived copies (default 1).
-	if cfg.Debug && cfg.LogFile != "" {
-		if err := core.InstallFileLogger(cfg.LogFile, cfg.LogDeleteAfterDays, cfg.LogConsole); err != nil {
+	// 1a. Install logging early. File logs always keep the full stream when
+	// log_file is set. Console stays full in debug mode, otherwise it is
+	// filtered down to warnings/errors.
+	if cfg.LogFile != "" {
+		if err := core.InstallFileLogger(cfg.LogFile, cfg.LogDeleteAfterDays, cfg.LogConsole, cfg.Debug); err != nil {
 			log.Printf("[LOG] file logger init failed: %v (continuing with stderr only)", err)
 		}
+	} else {
+		core.InstallConsoleLogger(cfg.Debug)
 	}
 
 	// SLAVE MODE: No FTP server, just connect to master and serve files
