@@ -97,7 +97,19 @@ replace_matching_line() {
     local pattern="$2"
     local replacement="$3"
     awk -v pattern="${pattern}" -v replacement="${replacement}" '
-        $0 ~ pattern { print replacement; next }
+        $0 ~ pattern {
+            line = $0
+            comment = ""
+            hash_pos = index(line, "#")
+            if (hash_pos > 0) {
+                comment = substr(line, hash_pos)
+                sub(/[[:space:]]+$/, "", replacement)
+                print replacement " " comment
+            } else {
+                print replacement
+            }
+            next
+        }
         { print }
     ' "${file}" > "${file}.tmp"
     mv "${file}.tmp" "${file}"
@@ -235,6 +247,13 @@ set_yaml_array_line() {
     replace_matching_line "${file}" "${key_pattern}" "${replacement}"
 }
 
+set_sitebot_scalar() {
+    local file="$1"
+    local key="$2"
+    local value="$3"
+    replace_matching_line "${file}" "^  ${key}:" "  ${key}: ${value}"
+}
+
 configure_sitebot_plugin_channels() {
     local main_channel="$1"
     local staff_channel="$2"
@@ -272,6 +291,67 @@ EOF
 
     if [ -f "sitebot/plugins/admincommander/config.yml" ]; then
         set_yaml_array_line "sitebot/plugins/admincommander/config.yml" '^staff_channels:' "staff_channels: [\"${staff_channel}\"]"
+    fi
+}
+
+configure_sitebot_plugin_connections() {
+    local ftp_host="$1"
+    local ftp_port="$2"
+    local ftp_user="$3"
+    local ftp_password="$4"
+    local ftp_tls="$5"
+    local ftp_insecure="$6"
+    local bnc_target_host="$7"
+    local bnc_target_port="$8"
+
+    if [ -f "sitebot/plugins/request/config.yml" ]; then
+        set_yaml_array_line "sitebot/plugins/request/config.yml" '^host:' "host: \"${ftp_host}\""
+        set_yaml_array_line "sitebot/plugins/request/config.yml" '^port:' "port: ${ftp_port}"
+        set_yaml_array_line "sitebot/plugins/request/config.yml" '^user:' "user: \"${ftp_user}\""
+        set_yaml_array_line "sitebot/plugins/request/config.yml" '^password:' "password: \"${ftp_password}\""
+        set_yaml_array_line "sitebot/plugins/request/config.yml" '^tls:' "tls: ${ftp_tls}"
+        set_yaml_array_line "sitebot/plugins/request/config.yml" '^insecure_skip_verify:' "insecure_skip_verify: ${ftp_insecure}"
+    fi
+
+    if [ -f "sitebot/plugins/bw/config.yml" ]; then
+        set_yaml_array_line "sitebot/plugins/bw/config.yml" '^host:' "host: \"${ftp_host}\""
+        set_yaml_array_line "sitebot/plugins/bw/config.yml" '^port:' "port: ${ftp_port}"
+        set_yaml_array_line "sitebot/plugins/bw/config.yml" '^user:' "user: \"${ftp_user}\""
+        set_yaml_array_line "sitebot/plugins/bw/config.yml" '^password:' "password: \"${ftp_password}\""
+        set_yaml_array_line "sitebot/plugins/bw/config.yml" '^tls:' "tls: ${ftp_tls}"
+        set_yaml_array_line "sitebot/plugins/bw/config.yml" '^insecure_skip_verify:' "insecure_skip_verify: ${ftp_insecure}"
+    fi
+
+    if [ -f "sitebot/plugins/admincommander/config.yml" ]; then
+        set_yaml_array_line "sitebot/plugins/admincommander/config.yml" '^host:' "host: \"${ftp_host}\""
+        set_yaml_array_line "sitebot/plugins/admincommander/config.yml" '^port:' "port: ${ftp_port}"
+        set_yaml_array_line "sitebot/plugins/admincommander/config.yml" '^user:' "user: \"${ftp_user}\""
+        set_yaml_array_line "sitebot/plugins/admincommander/config.yml" '^password:' "password: \"${ftp_password}\""
+        set_yaml_array_line "sitebot/plugins/admincommander/config.yml" '^tls:' "tls: ${ftp_tls}"
+        set_yaml_array_line "sitebot/plugins/admincommander/config.yml" '^insecure_skip_verify:' "insecure_skip_verify: ${ftp_insecure}"
+    fi
+
+    if [ -f "sitebot/plugins/bnc/config.yml" ]; then
+        set_yaml_array_line "sitebot/plugins/bnc/config.yml" '^user:' "user: \"${ftp_user}\""
+        set_yaml_array_line "sitebot/plugins/bnc/config.yml" '^password:' "password: \"${ftp_password}\""
+        set_yaml_array_line "sitebot/plugins/bnc/config.yml" '^tls:' "tls: ${ftp_tls}"
+        set_yaml_array_line "sitebot/plugins/bnc/config.yml" '^insecure_skip_verify:' "insecure_skip_verify: ${ftp_insecure}"
+        awk -v target_host="${bnc_target_host}" -v target_port="${bnc_target_port}" '
+            BEGIN { in_targets = 0; emitted = 0 }
+            /^targets:$/ {
+                print
+                print "  - name: \"sitename\""
+                print "    host: \"" target_host "\""
+                print "    port: " target_port
+                in_targets = 1
+                emitted = 1
+                next
+            }
+            in_targets && ($0 ~ /^  - / || $0 ~ /^    /) { next }
+            in_targets { in_targets = 0 }
+            { print }
+        ' "sitebot/plugins/bnc/config.yml" > "sitebot/plugins/bnc/config.yml.tmp"
+        mv "sitebot/plugins/bnc/config.yml.tmp" "sitebot/plugins/bnc/config.yml"
     fi
 }
 
@@ -407,8 +487,37 @@ configure_sitebot() {
     copy_if_missing "sitebot/etc/config.yml.example" "${sitebot_config}"
     copy_dist_configs_if_missing "sitebot/plugins"
 
+    local irc_host irc_port irc_nick irc_user irc_realname irc_password irc_ssl
+    local ftp_host ftp_port ftp_user ftp_password ftp_tls ftp_insecure bnc_target_host bnc_target_port
     local main_channel spam_channel staff_channel foreign_channel archive_channel nuke_channel blowfish_key enabled_bool
     local fifo_path
+    irc_host="$(prompt_default 'IRC host' "${SETUP_IRC_HOST:-irc.example.net}")"
+    irc_port="$(prompt_default 'IRC port' "${SETUP_IRC_PORT:-6697}")"
+    irc_nick="$(prompt_default 'IRC nick' "${SETUP_IRC_NICK:-GoSitebot}")"
+    irc_user="$(prompt_default 'IRC user' "${SETUP_IRC_USER:-sitebot}")"
+    irc_realname="$(prompt_default 'IRC realname' "${SETUP_IRC_REALNAME:-GoSitebot v1.0}")"
+    irc_password="$(prompt_default 'IRC server password' "${SETUP_IRC_PASSWORD:-changeme}")"
+    if prompt_yes_no "Use SSL for IRC?" "$(bool_to_prompt_default "${SETUP_IRC_SSL:-true}")"; then
+        irc_ssl="true"
+    else
+        irc_ssl="false"
+    fi
+    ftp_host="$(prompt_default 'Sitebot FTP host for plugins' "${SETUP_PLUGIN_FTP_HOST:-127.0.0.1}")"
+    ftp_port="$(prompt_default 'Sitebot FTP port for plugins' "${SETUP_PLUGIN_FTP_PORT:-21212}")"
+    ftp_user="$(prompt_default 'Sitebot FTP user for plugins' "${SETUP_PLUGIN_FTP_USER:-goftpd}")"
+    ftp_password="$(prompt_default 'Sitebot FTP password for plugins' "${SETUP_PLUGIN_FTP_PASSWORD:-goftpd}")"
+    if prompt_yes_no "Use TLS for sitebot FTP plugins?" "$(bool_to_prompt_default "${SETUP_PLUGIN_FTP_TLS:-true}")"; then
+        ftp_tls="true"
+    else
+        ftp_tls="false"
+    fi
+    if prompt_yes_no "Skip TLS verify for sitebot FTP plugins?" "$(bool_to_prompt_default "${SETUP_PLUGIN_FTP_INSECURE:-true}")"; then
+        ftp_insecure="true"
+    else
+        ftp_insecure="false"
+    fi
+    bnc_target_host="$(prompt_default 'BNC target host' "${SETUP_BNC_TARGET_HOST:-${ftp_host}}")"
+    bnc_target_port="$(prompt_default 'BNC target port' "${SETUP_BNC_TARGET_PORT:-${ftp_port}}")"
     main_channel="$(prompt_default 'Main IRC channel' "${SETUP_MAIN_CHANNEL:-#goftpd}")"
     spam_channel="$(prompt_default 'Spam IRC channel' "${SETUP_SPAM_CHANNEL:-#goftpd-spam}")"
     staff_channel="$(prompt_default 'Staff IRC channel' "${SETUP_STAFF_CHANNEL:-#goftpd-staff}")"
@@ -417,6 +526,21 @@ configure_sitebot() {
     nuke_channel="$(prompt_default 'Nuke IRC channel' "${SETUP_NUKE_CHANNEL:-#goftpd-nuke}")"
     blowfish_key="$(prompt_default 'Shared Blowfish key for configured channels' "${SETUP_BLOWFISH_KEY:-YourBlowfishKeyHere123456}")"
 
+    SETUP_IRC_HOST="${irc_host}"
+    SETUP_IRC_PORT="${irc_port}"
+    SETUP_IRC_NICK="${irc_nick}"
+    SETUP_IRC_USER="${irc_user}"
+    SETUP_IRC_REALNAME="${irc_realname}"
+    SETUP_IRC_PASSWORD="${irc_password}"
+    SETUP_IRC_SSL="${irc_ssl}"
+    SETUP_PLUGIN_FTP_HOST="${ftp_host}"
+    SETUP_PLUGIN_FTP_PORT="${ftp_port}"
+    SETUP_PLUGIN_FTP_USER="${ftp_user}"
+    SETUP_PLUGIN_FTP_PASSWORD="${ftp_password}"
+    SETUP_PLUGIN_FTP_TLS="${ftp_tls}"
+    SETUP_PLUGIN_FTP_INSECURE="${ftp_insecure}"
+    SETUP_BNC_TARGET_HOST="${bnc_target_host}"
+    SETUP_BNC_TARGET_PORT="${bnc_target_port}"
     SETUP_MAIN_CHANNEL="${main_channel}"
     SETUP_SPAM_CHANNEL="${spam_channel}"
     SETUP_STAFF_CHANNEL="${staff_channel}"
@@ -428,6 +552,13 @@ configure_sitebot() {
     SETUP_FIFO_PATH="${fifo_path}"
     SETUP_SITEBOT_CONFIG_PATH="${ROOT_DIR}/sitebot/etc/config.yml"
 
+    set_sitebot_scalar "${sitebot_config}" "host" "\"${irc_host}\""
+    set_sitebot_scalar "${sitebot_config}" "port" "${irc_port}"
+    set_sitebot_scalar "${sitebot_config}" "nick" "\"${irc_nick}\""
+    set_sitebot_scalar "${sitebot_config}" "user" "\"${irc_user}\""
+    set_sitebot_scalar "${sitebot_config}" "realname" "\"${irc_realname}\""
+    set_sitebot_scalar "${sitebot_config}" "password" "\"${irc_password}\""
+    set_sitebot_scalar "${sitebot_config}" "ssl" "${irc_ssl}"
     replace_matching_line "${sitebot_config}" '^event_fifo:' "event_fifo: \"${fifo_path}\""
 
     set_sitebot_channel_anchor "${sitebot_config}" "main" "chan_main" "${main_channel}"
@@ -440,6 +571,7 @@ configure_sitebot() {
     rewrite_sitebot_invite_channel "${sitebot_config}" "${staff_channel}"
     rewrite_sitebot_encryption_keys "${sitebot_config}" "${main_channel}" "${spam_channel}" "${staff_channel}" "${foreign_channel}" "${archive_channel}" "${nuke_channel}" "${blowfish_key}"
     configure_sitebot_plugin_channels "${main_channel}" "${staff_channel}" "${nuke_channel}"
+    configure_sitebot_plugin_connections "${ftp_host}" "${ftp_port}" "${ftp_user}" "${ftp_password}" "${ftp_tls}" "${ftp_insecure}" "${bnc_target_host}" "${bnc_target_port}"
 
     local sitebot_plugins=(Announce TVMaze IMDB News Free Affils Request BNC BW AdminCommander)
     local plugin_name
@@ -514,6 +646,21 @@ save_state_file() {
     write_state_var SETUP_SLAVE_MASTER_PORT "${SETUP_SLAVE_MASTER_PORT:-1099}"
     write_state_var SETUP_SLAVE_ROOTS "${SETUP_SLAVE_ROOTS:-./site}"
     write_state_var SETUP_SLAVE_BIND_IP "${SETUP_SLAVE_BIND_IP:-}"
+    write_state_var SETUP_IRC_HOST "${SETUP_IRC_HOST:-irc.example.net}"
+    write_state_var SETUP_IRC_PORT "${SETUP_IRC_PORT:-6697}"
+    write_state_var SETUP_IRC_NICK "${SETUP_IRC_NICK:-GoSitebot}"
+    write_state_var SETUP_IRC_USER "${SETUP_IRC_USER:-sitebot}"
+    write_state_var SETUP_IRC_REALNAME "${SETUP_IRC_REALNAME:-GoSitebot v1.0}"
+    write_state_var SETUP_IRC_PASSWORD "${SETUP_IRC_PASSWORD:-changeme}"
+    write_state_var SETUP_IRC_SSL "${SETUP_IRC_SSL:-true}"
+    write_state_var SETUP_PLUGIN_FTP_HOST "${SETUP_PLUGIN_FTP_HOST:-127.0.0.1}"
+    write_state_var SETUP_PLUGIN_FTP_PORT "${SETUP_PLUGIN_FTP_PORT:-21212}"
+    write_state_var SETUP_PLUGIN_FTP_USER "${SETUP_PLUGIN_FTP_USER:-goftpd}"
+    write_state_var SETUP_PLUGIN_FTP_PASSWORD "${SETUP_PLUGIN_FTP_PASSWORD:-goftpd}"
+    write_state_var SETUP_PLUGIN_FTP_TLS "${SETUP_PLUGIN_FTP_TLS:-true}"
+    write_state_var SETUP_PLUGIN_FTP_INSECURE "${SETUP_PLUGIN_FTP_INSECURE:-true}"
+    write_state_var SETUP_BNC_TARGET_HOST "${SETUP_BNC_TARGET_HOST:-127.0.0.1}"
+    write_state_var SETUP_BNC_TARGET_PORT "${SETUP_BNC_TARGET_PORT:-21212}"
     write_state_var SETUP_MAIN_CHANNEL "${SETUP_MAIN_CHANNEL:-#goftpd}"
     write_state_var SETUP_SPAM_CHANNEL "${SETUP_SPAM_CHANNEL:-#goftpd-spam}"
     write_state_var SETUP_STAFF_CHANNEL "${SETUP_STAFF_CHANNEL:-#goftpd-staff}"
