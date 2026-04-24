@@ -80,8 +80,51 @@ func UsesReleaseCheck(cfg Config, dirPath string) bool {
 	return pathMatchesAny(dirPath, cfg.Sections.ReleaseCheck)
 }
 
+// UsesReleaseCheckEntry reports whether dirPath matches a configured
+// release_check pattern as an actual release entry, not merely as a parent or
+// descendant covered by the broader pathMatchesAny semantics.
+func UsesReleaseCheckEntry(cfg Config, dirPath string) bool {
+	if !cfg.Enabled {
+		return false
+	}
+	if pathMatchesAny(dirPath, cfg.Sections.NoCheck) {
+		return false
+	}
+	if len(cfg.Sections.ReleaseCheck) == 0 {
+		return UsesRaceEntry(cfg, dirPath)
+	}
+	return pathMatchesAnyExact(dirPath, cfg.Sections.ReleaseCheck)
+}
+
 func UsesCleanup(cfg Config, dirPath string) bool {
 	return UsesReleaseCheck(cfg, dirPath)
+}
+
+func UsesRaceEntry(cfg Config, dirPath string) bool {
+	return UsesSFVEntry(cfg, dirPath) || UsesZipEntry(cfg, dirPath)
+}
+
+func UsesSFVEntry(cfg Config, dirPath string) bool {
+	if !cfg.Enabled {
+		return false
+	}
+	if pathMatchesAny(dirPath, cfg.Sections.NoCheck) {
+		return false
+	}
+	if len(cfg.Sections.SFV) == 0 {
+		return true
+	}
+	return pathMatchesAnyExact(dirPath, cfg.Sections.SFV)
+}
+
+func UsesZipEntry(cfg Config, dirPath string) bool {
+	if !cfg.Enabled {
+		return false
+	}
+	if pathMatchesAny(dirPath, cfg.Sections.NoCheck) {
+		return false
+	}
+	return pathMatchesAnyExact(dirPath, cfg.Sections.Zip)
 }
 
 func AnnounceReleaseSubdirs(cfg Config) bool {
@@ -534,6 +577,20 @@ func pathMatchesAny(dirPath string, patterns []string) bool {
 			if cleanPath == base || strings.HasPrefix(cleanPath, base+"/") {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+func pathMatchesAnyExact(dirPath string, patterns []string) bool {
+	cleanPath := normalizePath(dirPath)
+	for _, pattern := range patterns {
+		pattern = normalizePattern(pattern)
+		if pattern == "" {
+			continue
+		}
+		if ok, _ := path.Match(pattern, cleanPath); ok {
+			return true
 		}
 	}
 	return false

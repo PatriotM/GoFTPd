@@ -275,6 +275,105 @@ copy_plugin_config_if_missing() {
     return 1
 }
 
+plugin_config_dist_missing() {
+    local target_file="$1"
+    local dist_file="${target_file}.dist"
+    [ ! -f "${target_file}" ] && [ ! -f "${dist_file}" ]
+}
+
+daemon_plugin_enabled_in_config() {
+    local file="$1"
+    local plugin_name="$2"
+    awk -v plugin_name="${plugin_name}" '
+        BEGIN { in_plugins = 0; in_target = 0 }
+        /^plugins:$/ { in_plugins = 1; next }
+        in_plugins && $0 ~ ("^  " plugin_name ":$") { in_target = 1; next }
+        in_target && /^  [A-Za-z0-9_-]+:$/ { exit }
+        in_target && /^    enabled:[[:space:]]+/ {
+            value = $2
+            gsub(/[[:space:]]+/, "", value)
+            print value
+            exit
+        }
+    ' "${file}"
+}
+
+sitebot_plugin_enabled_in_config() {
+    local file="$1"
+    local plugin_name="$2"
+    awk -v plugin_name="${plugin_name}" '
+        BEGIN { in_plugins = 0; in_enabled = 0 }
+        /^plugins:$/ { in_plugins = 1; next }
+        in_plugins && /^  enabled:$/ { in_enabled = 1; next }
+        in_enabled && /^  config:$/ { exit }
+        in_enabled && $0 ~ ("^    " plugin_name ":[[:space:]]+") {
+            value = $2
+            gsub(/[[:space:]]+/, "", value)
+            print value
+            exit
+        }
+    ' "${file}"
+}
+
+ensure_enabled_plugin_configs() {
+    local daemon_config="${ROOT_DIR}/etc/config.yml"
+    local sitebot_config="${ROOT_DIR}/sitebot/etc/config.yml"
+    local plugin_name plugin_config enabled_value
+    local repaired_any="false"
+    local missing_any="false"
+
+    local daemon_plugins=(autonuke dateddirs tvmaze imdb mediainfo speedtest request releaseguard pre)
+    if [ -f "${daemon_config}" ]; then
+        for plugin_name in "${daemon_plugins[@]}"; do
+            enabled_value="$(daemon_plugin_enabled_in_config "${daemon_config}" "${plugin_name}")"
+            if [ "${enabled_value}" != "true" ]; then
+                continue
+            fi
+            plugin_config="$(daemon_plugin_config_path "${plugin_name}")"
+            if copy_plugin_config_if_missing "${plugin_config}"; then
+                say "Created missing daemon plugin config for ${plugin_name}: ${plugin_config}"
+                repaired_any="true"
+            elif plugin_config_dist_missing "${plugin_config}"; then
+                say_color "${C_YELLOW}${C_BOLD}" "Daemon plugin ${plugin_name} is enabled but ${plugin_config} is missing."
+                say "  No ${plugin_config}.dist was found either."
+                say "  This usually means the plugin files were not updated on disk yet."
+                say "  Update/install the plugin files, then rerun ./setup.sh install."
+                missing_any="true"
+            fi
+        done
+    fi
+
+    local sitebot_plugins=(Announce TVMaze IMDB News Free Affils Request BNC Control Banned Top BW Rules Topic AdminCommander)
+    if [ -f "${sitebot_config}" ]; then
+        for plugin_name in "${sitebot_plugins[@]}"; do
+            enabled_value="$(sitebot_plugin_enabled_in_config "${sitebot_config}" "${plugin_name}")"
+            if [ "${enabled_value}" != "true" ]; then
+                continue
+            fi
+            plugin_config="$(sitebot_plugin_config_path "${plugin_name}")" || continue
+            if copy_plugin_config_if_missing "${plugin_config}"; then
+                say "Created missing sitebot plugin config for ${plugin_name}: ${plugin_config}"
+                repaired_any="true"
+            elif plugin_config_dist_missing "${plugin_config}"; then
+                say_color "${C_YELLOW}${C_BOLD}" "Sitebot plugin ${plugin_name} is enabled but ${plugin_config} is missing."
+                say "  No ${plugin_config}.dist was found either."
+                say "  This usually means the plugin files were not updated on disk yet."
+                say "  Update/install the plugin files, then rerun ./setup.sh install."
+                missing_any="true"
+            fi
+        done
+    fi
+
+    if [ "${repaired_any}" = "true" ]; then
+        say ""
+        say "Repaired missing enabled plugin configs from .dist defaults."
+    fi
+    if [ "${missing_any}" = "true" ]; then
+        say ""
+        say_color "${C_YELLOW}${C_BOLD}" "Some enabled plugins could not be prepared automatically."
+    fi
+}
+
 join_by() {
     local sep="$1"
     shift || true
@@ -661,7 +760,7 @@ configure_daemon() {
     say "Configuring daemon..."
     copy_if_missing "etc/config-example.yml" "${daemon_config}"
 
-    local daemon_mode long_name short_name cert_name enabled_bool
+    local daemon_mode long_name short_name site_version cert_name enabled_bool
     local listen_port public_ip passthrough_mode master_listen_host master_control_port
     local slave_name slave_master_host slave_master_port slave_roots slave_bind_ip fifo_path
     daemon_mode="${SETUP_DAEMON_MODE:-master}"
@@ -669,11 +768,13 @@ configure_daemon() {
         daemon_mode="$(prompt_mode "${SETUP_DAEMON_MODE:-master}")"
         long_name="$(prompt_default 'Daemon site name' "${SETUP_SITE_NAME:-GoFTPd}")"
         short_name="$(prompt_default 'Daemon short site tag' "${SETUP_SITE_SHORT:-${long_name}}")"
+        site_version="$(prompt_default 'Daemon version' "${SETUP_SITE_VERSION:-1.0.4b}")"
         cert_name="$(prompt_default 'TLS certificate display name' "${SETUP_CERT_NAME:-${long_name}}")"
 
         SETUP_DAEMON_MODE="${daemon_mode}"
         SETUP_SITE_NAME="${long_name}"
         SETUP_SITE_SHORT="${short_name}"
+        SETUP_SITE_VERSION="${site_version}"
         SETUP_CERT_NAME="${cert_name}"
         fifo_path="${SETUP_FIFO_PATH:-${FIFO_PATH_DEFAULT}}"
         SETUP_FIFO_PATH="${fifo_path}"
@@ -681,6 +782,7 @@ configure_daemon() {
         replace_matching_line "${daemon_config}" '^mode:' "mode:         ${daemon_mode}"
         replace_matching_line "${daemon_config}" '^sitename_long:' "sitename_long:  \"${long_name}\""
         replace_matching_line "${daemon_config}" '^sitename_short:' "sitename_short: \"${short_name}\""
+        replace_matching_line "${daemon_config}" '^version:' "version:        \"${site_version}\""
         replace_matching_line "${daemon_config}" '^event_fifo:' "event_fifo:     \"${fifo_path}\""
         replace_matching_line "${daemon_config}" '^sitebot_config:' "sitebot_config: \"${SETUP_SITEBOT_CONFIG_PATH:-${SITEBOT_CONFIG_DEFAULT}}\""
     else
@@ -743,7 +845,7 @@ configure_daemon() {
     local daemon_enabled=()
     local daemon_disabled=()
     if [ "${daemon_mode}" = "master" ]; then
-        daemon_plugins=(dateddirs tvmaze imdb mediainfo speedtest request releaseguard pre)
+        daemon_plugins=(autonuke dateddirs tvmaze imdb mediainfo speedtest request releaseguard pre)
     fi
 
     local plugin_name
@@ -813,7 +915,7 @@ configure_sitebot() {
     say "Configuring sitebot..."
     copy_if_missing "sitebot/etc/config.yml.example" "${sitebot_config}"
 
-    local irc_host irc_port irc_nick irc_user irc_realname irc_password irc_ssl
+    local irc_host irc_port irc_nick irc_user irc_realname irc_password irc_ssl sitebot_version
     local ftp_host ftp_port ftp_user ftp_password ftp_tls ftp_insecure bnc_target_host bnc_target_port rules_file
     local main_channel spam_channel staff_channel foreign_channel archive_channel nuke_channel enabled_bool
     local main_key spam_key staff_key foreign_key archive_key nuke_key
@@ -823,7 +925,8 @@ configure_sitebot() {
         irc_port="$(prompt_default 'IRC port' "${SETUP_IRC_PORT:-6697}")"
         irc_nick="$(prompt_default 'IRC nick' "${SETUP_IRC_NICK:-GoSitebot}")"
         irc_user="$(prompt_default 'IRC user' "${SETUP_IRC_USER:-sitebot}")"
-        irc_realname="$(prompt_default 'IRC realname' "${SETUP_IRC_REALNAME:-GoSitebot v1.0}")"
+        sitebot_version="${SETUP_SITEBOT_VERSION:-${SETUP_SITE_VERSION:-1.0.4b}}"
+        irc_realname="$(prompt_default 'IRC realname' "${SETUP_IRC_REALNAME:-GoSitebot v${sitebot_version}}")"
         irc_password="$(prompt_default 'IRC server password' "${SETUP_IRC_PASSWORD:-changeme}")"
         if prompt_yes_no "Use SSL for IRC?" "$(bool_to_prompt_default "${SETUP_IRC_SSL:-true}")"; then
             irc_ssl="true"
@@ -861,11 +964,12 @@ configure_sitebot() {
         nuke_key="$(prompt_default 'Blowfish key for nuke channel' "${SETUP_BLOWFISH_KEY_NUKE:-${main_key}}")"
     else
         say "Sitebot config already exists at ${sitebot_config}; keeping current sitebot settings."
+        sitebot_version="${SETUP_SITEBOT_VERSION:-${SETUP_SITE_VERSION:-1.0.4b}}"
         irc_host="${SETUP_IRC_HOST:-irc.example.net}"
         irc_port="${SETUP_IRC_PORT:-6697}"
         irc_nick="${SETUP_IRC_NICK:-GoSitebot}"
         irc_user="${SETUP_IRC_USER:-sitebot}"
-        irc_realname="${SETUP_IRC_REALNAME:-GoSitebot v1.0}"
+        irc_realname="${SETUP_IRC_REALNAME:-GoSitebot v${sitebot_version}}"
         irc_password="${SETUP_IRC_PASSWORD:-changeme}"
         irc_ssl="${SETUP_IRC_SSL:-true}"
         ftp_host="${SETUP_PLUGIN_FTP_HOST:-127.0.0.1}"
@@ -895,6 +999,7 @@ configure_sitebot() {
     SETUP_IRC_PORT="${irc_port}"
     SETUP_IRC_NICK="${irc_nick}"
     SETUP_IRC_USER="${irc_user}"
+    SETUP_SITEBOT_VERSION="${sitebot_version}"
     SETUP_IRC_REALNAME="${irc_realname}"
     SETUP_IRC_PASSWORD="${irc_password}"
     SETUP_IRC_SSL="${irc_ssl}"
@@ -931,6 +1036,7 @@ configure_sitebot() {
         set_sitebot_scalar "${sitebot_config}" "realname" "\"${irc_realname}\""
         set_sitebot_scalar "${sitebot_config}" "password" "\"${irc_password}\""
         set_sitebot_scalar "${sitebot_config}" "ssl" "${irc_ssl}"
+        replace_matching_line "${sitebot_config}" '^version:' "version:       \"${sitebot_version}\""
         replace_matching_line "${sitebot_config}" '^event_fifo:' "event_fifo: \"${fifo_path}\""
 
         set_sitebot_channel_anchor "${sitebot_config}" "main" "chan_main" "${main_channel}"
@@ -1054,6 +1160,7 @@ save_state_file() {
     }
     write_state_var SETUP_SITE_NAME "${SETUP_SITE_NAME:-GoFTPd}"
     write_state_var SETUP_SITE_SHORT "${SETUP_SITE_SHORT:-GoFTPd}"
+    write_state_var SETUP_SITE_VERSION "${SETUP_SITE_VERSION:-1.0.4b}"
     write_state_var SETUP_CERT_NAME "${SETUP_CERT_NAME:-GoFTPd}"
     write_state_var SETUP_GENERATE_CERTS "${SETUP_GENERATE_CERTS:-true}"
     write_state_var SETUP_FIFO_PATH "${SETUP_FIFO_PATH:-${FIFO_PATH_DEFAULT}}"
@@ -1073,7 +1180,8 @@ save_state_file() {
     write_state_var SETUP_IRC_PORT "${SETUP_IRC_PORT:-6697}"
     write_state_var SETUP_IRC_NICK "${SETUP_IRC_NICK:-GoSitebot}"
     write_state_var SETUP_IRC_USER "${SETUP_IRC_USER:-sitebot}"
-    write_state_var SETUP_IRC_REALNAME "${SETUP_IRC_REALNAME:-GoSitebot v1.0}"
+    write_state_var SETUP_SITEBOT_VERSION "${SETUP_SITEBOT_VERSION:-${SETUP_SITE_VERSION:-1.0.4b}}"
+    write_state_var SETUP_IRC_REALNAME "${SETUP_IRC_REALNAME:-GoSitebot v${SETUP_SITEBOT_VERSION:-${SETUP_SITE_VERSION:-1.0.4b}}}"
     write_state_var SETUP_IRC_PASSWORD "${SETUP_IRC_PASSWORD:-changeme}"
     write_state_var SETUP_IRC_SSL "${SETUP_IRC_SSL:-true}"
     write_state_var SETUP_PLUGIN_FTP_HOST "${SETUP_PLUGIN_FTP_HOST:-127.0.0.1}"
@@ -1098,6 +1206,7 @@ save_state_file() {
     write_state_var SETUP_BLOWFISH_KEY_ARCHIVE "${SETUP_BLOWFISH_KEY_ARCHIVE:-${SETUP_BLOWFISH_KEY_MAIN:-YourBlowfishKeyHere123456}}"
     write_state_var SETUP_BLOWFISH_KEY_NUKE "${SETUP_BLOWFISH_KEY_NUKE:-${SETUP_BLOWFISH_KEY_MAIN:-YourBlowfishKeyHere123456}}"
     write_state_var SETUP_DAEMON_PLUGIN_DATEDDIRS "${SETUP_DAEMON_PLUGIN_DATEDDIRS:-true}"
+    write_state_var SETUP_DAEMON_PLUGIN_AUTONUKE "${SETUP_DAEMON_PLUGIN_AUTONUKE:-false}"
     write_state_var SETUP_DAEMON_PLUGIN_TVMAZE "${SETUP_DAEMON_PLUGIN_TVMAZE:-true}"
     write_state_var SETUP_DAEMON_PLUGIN_IMDB "${SETUP_DAEMON_PLUGIN_IMDB:-true}"
     write_state_var SETUP_DAEMON_PLUGIN_MEDIAINFO "${SETUP_DAEMON_PLUGIN_MEDIAINFO:-true}"
@@ -1367,6 +1476,7 @@ say "This will only ask setup questions when a real config file is missing."
 
 configure_daemon
 configure_sitebot
+ensure_enabled_plugin_configs
 save_state_file
 ensure_script_permissions
 ensure_fifo

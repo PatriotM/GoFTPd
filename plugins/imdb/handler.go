@@ -7,7 +7,7 @@
 //	plugins:
 //	  imdb:
 //	    enabled: true
-//	    sections: ["MOVIE", "X264", "X265", "BLURAY", "DVDR"]
+//	    sections: ["MOVIE", "X264-HD-1080P", "X264-HD-720P", "X264-SD", "X265", "BLURAY", "DVDR"]
 //	    debug: false
 package imdb
 
@@ -32,6 +32,7 @@ type Handler struct {
 	svc      *plugin.Services
 	debug    bool
 	sections []string
+	version  string
 
 	client   *http.Client
 	jobs     chan job
@@ -63,12 +64,17 @@ func (h *Handler) Init(svc *plugin.Services, cfg map[string]interface{}) error {
 	h.svc = svc
 	h.sections = toStringSlice(cfg["sections"])
 	if len(h.sections) == 0 {
-		h.sections = []string{"MOVIE", "X264", "X265", "BLURAY", "DVDR"}
+		h.sections = []string{"MOVIE", "X264-HD-1080P", "X264-HD-720P", "X264-SD", "X265", "BLURAY", "DVDR"}
 	}
 	if v, ok := cfg["debug"].(bool); ok {
 		h.debug = v
 	} else if svc != nil {
 		h.debug = svc.Debug
+	}
+	if v, ok := cfg["version"].(string); ok && strings.TrimSpace(v) != "" {
+		h.version = strings.TrimSpace(v)
+	} else {
+		h.version = "1.0"
 	}
 	go h.worker()
 	if h.debug {
@@ -227,7 +233,7 @@ func (h *Handler) doLookup(j job) {
 		best = full
 	}
 
-	content := formatIMDBFile(best)
+	content := formatIMDBFile(best, h.version)
 	filePath := path.Join(j.dirPath, ".imdb")
 	if err := h.svc.Bridge.WriteFile(filePath, []byte(content)); err != nil {
 		log.Printf("[IMDB] WriteFile %s failed: %v", filePath, err)
@@ -286,9 +292,9 @@ func parseMovieName(rel string) (string, int) {
 	return strings.TrimSpace(title), year
 }
 
-func formatIMDBFile(t *imdbTitle) string {
+func formatIMDBFile(t *imdbTitle, version string) string {
 	var b strings.Builder
-	const bar = "========================== IMDB INFO v1.0 =========================="
+	bar := fmt.Sprintf("======================== IMDB INFO v%s =========================", version)
 	fmt.Fprintf(&b, "%s\n\n", bar)
 
 	fmt.Fprintf(&b, " Title........: %s\n", t.PrimaryTitle)

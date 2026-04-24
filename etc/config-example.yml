@@ -431,6 +431,9 @@ zipscript:
       group: false              # create <group_path>/<Group>/<Release> symlinks
 
 plugins:
+  autonuke:
+    enabled: false
+    config_file: "plugins/autonuke/config.yml"
   dateddirs:
     enabled: true
     config_file: "plugins/dateddirs/config.yml"
@@ -492,7 +495,7 @@ xdupe_db_path: "./logs/xdupe.db"
 #  older than that many days. log_keep_days is kept as an older alias.
 #  Set log_file: "" to disable file logging.
 # =============================================================================
-debug:          true
+debug:          false
 log_file:       "logs/goftpd.log"
 log_delete_after_days: 1
 log_keep_days:  1

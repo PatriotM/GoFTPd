@@ -29,9 +29,10 @@ func createUserFromArgs(s *Session, username, plaintextPassword, primaryGroup st
 	}
 
 	var ips []string
-	for _, ip := range ipArgs {
-		if !strings.Contains(ip, "@") {
-			ip = "*@" + ip
+	for _, rawIP := range ipArgs {
+		ip := normalizeUserIP(rawIP)
+		if ip == "" {
+			return nil, "", fmt.Errorf("invalid IP mask %q", strings.TrimSpace(rawIP))
 		}
 		ips = append(ips, ip)
 	}
@@ -424,6 +425,171 @@ func (s *Session) HandleSiteDelIP(args []string) bool {
 
 	u.Save()
 	fmt.Fprintf(s.Conn, "200 Removed %d IP(s) from %s (remaining: %d).\r\n", removed, args[0], len(u.IPs))
+	return false
+}
+
+func (s *Session) HandleSiteSelfIP(args []string) bool {
+	if !s.User.HasFlag("1") {
+		fmt.Fprintf(s.Conn, "550 Access denied.\r\n")
+		return false
+	}
+	if len(args) < 3 {
+		fmt.Fprintf(s.Conn, "501 Usage: SITE SELFIP <LIST|ADD|DEL|CHG> <user> <pass> [args]\r\n")
+		return false
+	}
+
+	action := strings.ToUpper(strings.TrimSpace(args[0]))
+	username := strings.TrimSpace(args[1])
+	password := args[2]
+
+	targetUser, authReason := s.authenticateSelfIPUser(username, password)
+	if targetUser == nil {
+		fmt.Fprintf(s.Conn, "550 Authentication failed: %s.\r\n", authReason)
+		return false
+	}
+
+	switch action {
+	case "LIST":
+		fmt.Fprintf(s.Conn, "200- IPs for %s:\r\n", targetUser.Name)
+		if len(targetUser.IPs) == 0 {
+			fmt.Fprintf(s.Conn, "200- No IPs configured.\r\n")
+		}
+		for i, ip := range targetUser.IPs {
+			fmt.Fprintf(s.Conn, "200- [%02d] %s\r\n", i+1, ip)
+		}
+		fmt.Fprintf(s.Conn, "200 End of IP list.\r\n")
+		return false
+	case "ADD":
+		if len(args) < 4 {
+			fmt.Fprintf(s.Conn, "501 Usage: SITE SELFIP ADD <user> <pass> <ident@ip> [ident@ip ...]\r\n")
+			return false
+		}
+		added := 0
+		for _, ip := range args[3:] {
+			ip = normalizeUserIP(ip)
+			if ip == "" || containsExact(targetUser.IPs, ip) {
+				continue
+			}
+			targetUser.IPs = append(targetUser.IPs, ip)
+			added++
+		}
+		targetUser.Save()
+		if added > 0 {
+			s.emitSelfIPChange(targetUser.Name, "ADD", "", strings.Join(args[3:], ", "), added)
+		}
+		fmt.Fprintf(s.Conn, "200 Added %d IP(s) to %s (total: %d).\r\n", added, targetUser.Name, len(targetUser.IPs))
+		return false
+	case "DEL":
+		if len(args) < 4 {
+			fmt.Fprintf(s.Conn, "501 Usage: SITE SELFIP DEL <user> <pass> <ident@ip> [ident@ip ...]\r\n")
+			return false
+		}
+		removed := 0
+		for _, ip := range args[3:] {
+			ip = normalizeUserIP(ip)
+			for i, existing := range targetUser.IPs {
+				if existing == ip {
+					targetUser.IPs = append(targetUser.IPs[:i], targetUser.IPs[i+1:]...)
+					removed++
+					break
+				}
+			}
+		}
+		targetUser.Save()
+		if removed > 0 {
+			s.emitSelfIPChange(targetUser.Name, "DEL", strings.Join(args[3:], ", "), "", removed)
+		}
+		fmt.Fprintf(s.Conn, "200 Removed %d IP(s) from %s (remaining: %d).\r\n", removed, targetUser.Name, len(targetUser.IPs))
+		return false
+	case "CHG", "CHANGE":
+		if len(args) < 5 {
+			fmt.Fprintf(s.Conn, "501 Usage: SITE SELFIP CHG <user> <pass> <oldip> <newip>\r\n")
+			return false
+		}
+		oldIP := normalizeUserIP(args[3])
+		newIP := normalizeUserIP(args[4])
+		if oldIP == "" || newIP == "" {
+			fmt.Fprintf(s.Conn, "550 Invalid IP argument.\r\n")
+			return false
+		}
+		replaced := false
+		for i, existing := range targetUser.IPs {
+			if existing == oldIP {
+				targetUser.IPs[i] = newIP
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			fmt.Fprintf(s.Conn, "550 IP %s not found on %s.\r\n", oldIP, targetUser.Name)
+			return false
+		}
+		targetUser.Save()
+		s.emitSelfIPChange(targetUser.Name, "CHG", oldIP, newIP, 1)
+		fmt.Fprintf(s.Conn, "200 Changed IP for %s: %s -> %s.\r\n", targetUser.Name, oldIP, newIP)
+		return false
+	default:
+		fmt.Fprintf(s.Conn, "501 Usage: SITE SELFIP <LIST|ADD|DEL|CHG> <user> <pass> [args]\r\n")
+		return false
+	}
+}
+
+func (s *Session) authenticateSelfIPUser(username, password string) (*user.User, string) {
+	u, err := user.LoadUser(username, s.GroupMap)
+	if err != nil {
+		if _, statErr := os.Stat(deletedUserPath(username)); statErr == nil {
+			return nil, "user deleted"
+		}
+		return nil, "user not found"
+	}
+
+	passwordOK := false
+	passwds, err := LoadPasswdFile(s.Config.PasswdFile)
+	if err == nil {
+		if hash, ok := passwds[u.Name]; ok {
+			passwordOK = VerifyPassword(password, hash)
+		}
+	}
+	if !passwordOK && u.Password != "" {
+		passwordOK = (u.Password == password)
+	}
+	if !passwordOK {
+		return nil, "password not accepted"
+	}
+	return u, ""
+}
+
+func normalizeUserIP(ip string) string {
+	ip = strings.TrimSpace(ip)
+	if ip == "" {
+		return ""
+	}
+	if !strings.Contains(ip, "@") {
+		ip = "*@" + ip
+	}
+	if !looksLikeUserIPMask(ip) {
+		return ""
+	}
+	return ip
+}
+
+func looksLikeUserIPMask(ip string) bool {
+	if !strings.Contains(ip, "@") {
+		return false
+	}
+	host := strings.TrimSpace(strings.SplitN(ip, "@", 2)[1])
+	if host == "" {
+		return false
+	}
+	return strings.ContainsAny(host, ".*:") || strings.EqualFold(host, "*")
+}
+
+func containsExact(values []string, needle string) bool {
+	for _, value := range values {
+		if value == needle {
+			return true
+		}
+	}
 	return false
 }
 

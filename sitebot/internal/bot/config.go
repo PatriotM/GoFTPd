@@ -20,12 +20,20 @@ type Config struct {
 	LogKeepDays        int            `yaml:"log_keep_days"`
 	LogDeleteAfterDays int            `yaml:"log_delete_after_days"`
 	LogConsole         bool           `yaml:"log_console"`
+	Version            string         `yaml:"version"`
 	EventFIFO          string         `yaml:"event_fifo"`
 	IRC                IRCConfig      `yaml:"irc"`
 	Encryption         EncConfig      `yaml:"encryption"`
 	Announce           AnnounceConfig `yaml:"announce"`
+	Help               HelpConfig     `yaml:"help"`
 	Sections           []SectionRoute `yaml:"sections"`
 	Plugins            PluginsConfig  `yaml:"plugins"`
+}
+
+type HelpConfig struct {
+	Channels    []string `yaml:"channels"`
+	ReplyTarget string   `yaml:"reply_target"`
+	Lines       []string `yaml:"lines"`
 }
 
 type IRCConfig struct {
@@ -76,6 +84,11 @@ func LoadConfig(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, err
 	}
+	if strings.TrimSpace(cfg.Version) == "" {
+		if idx := strings.LastIndex(strings.TrimSpace(cfg.IRC.RealName), " v"); idx >= 0 {
+			cfg.Version = strings.TrimSpace(cfg.IRC.RealName[idx+2:])
+		}
+	}
 	if err := resolveAnnounceConfigFile(&cfg.Announce, filepath.Dir(path)); err != nil {
 		return nil, err
 	}
@@ -93,6 +106,12 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if cfg.Plugins.Config == nil {
 		cfg.Plugins.Config = map[string]interface{}{}
+	}
+	if len(cfg.Help.Channels) == 0 {
+		cfg.Help.Channels = []string{"#goftpd"}
+	}
+	if strings.TrimSpace(cfg.Help.ReplyTarget) == "" {
+		cfg.Help.ReplyTarget = "pm"
 	}
 	if !cfg.LogConsole {
 		// default false value from yaml means either unset or explicit false.
@@ -198,8 +217,7 @@ func loadConfigFileMap(path, baseDir string) (map[string]interface{}, error) {
 	}
 	data, err := os.ReadFile(filepath.Clean(resolved))
 	if err != nil {
-		distHint := strings.TrimSuffix(path, ".yml") + ".yml.dist"
-		return nil, fmt.Errorf("config_file %q not found (checked: %s). Copy %q to %q or update config_file", path, strings.Join(checked, ", "), distHint, path)
+		return nil, fmt.Errorf("config_file %q not found; check config", path)
 	}
 	out := map[string]interface{}{}
 	if err := yaml.Unmarshal(data, &out); err != nil {
@@ -257,6 +275,7 @@ func (c *Config) Rehash() (string, error) {
 
 	c.Encryption = fresh.Encryption
 	c.Announce = fresh.Announce
+	c.Help = fresh.Help
 	c.Sections = fresh.Sections
 	c.Plugins = fresh.Plugins
 	return c.configPath, nil

@@ -21,6 +21,7 @@ import (
 	"goftpd/internal/protocol"
 	"goftpd/internal/slave"
 	"goftpd/internal/timeutil"
+	"goftpd/plugins/autonuke"
 	"goftpd/plugins/dateddirs"
 	"goftpd/plugins/imdb"
 	"goftpd/plugins/mediainfo"
@@ -52,6 +53,7 @@ func main() {
 	} else {
 		core.InstallConsoleLogger(cfg.Debug)
 	}
+	core.PrintStartupBanner(cfg.Version, "GoFTPd daemon")
 
 	// SLAVE MODE: No FTP server, just connect to master and serve files
 	if cfg.Mode == "slave" {
@@ -241,12 +243,22 @@ func main() {
 		if pluginCfg["sitename"] == nil {
 			pluginCfg["sitename"] = cfg.SiteNameShort
 		}
+		if pluginCfg["version"] == nil {
+			pluginCfg["version"] = cfg.Version
+		}
 		if pluginCfg["debug"] == nil {
 			pluginCfg["debug"] = cfg.Debug
+		}
+		if canonicalName == "autonuke" {
+			if _, ok := pluginCfg["zipscript_release_check"]; !ok {
+				pluginCfg["zipscript_release_check"] = append([]string(nil), cfg.Zipscript.Sections.ReleaseCheck...)
+			}
 		}
 
 		var p plugin.Plugin
 		switch canonicalName {
+		case "autonuke":
+			p = autonuke.New()
 		case "dateddirs":
 			p = dateddirs.New()
 		case "tvmaze":
@@ -322,7 +334,8 @@ func main() {
 	if cfg.PluginManager != nil {
 		pluginCount = len(cfg.PluginManager.GetPlugins())
 	}
-	log.Printf("GoFTPd online at %s [Mode=%s] [Plugins=%d]", listenAddr, cfg.Mode, pluginCount)
+	log.Printf("[STARTUP] GoFTPd online [mode=%s] [listen=%s] [public_ip=%s] [passthrough=%t] [plugins=%d]",
+		cfg.Mode, listenAddr, cfg.PublicIP, cfg.Passthrough, pluginCount)
 
 	// Accept FTP clients
 	go func() {
@@ -354,8 +367,6 @@ func main() {
 
 // startSlave runs the slave daemon — no FTP server, just connect to master.
 func startSlave(cfg *core.Config) {
-	log.Printf("[SLAVE] Name '%s', connecting to master", cfg.Mode)
-
 	// Extract slave config from the map
 	slaveCfg := cfg.Slave
 	name, _ := slaveCfg["name"].(string)
@@ -381,7 +392,8 @@ func startSlave(cfg *core.Config) {
 	bindIP, _ := slaveCfg["bind_ip"].(string)
 	timeout := intFromCfg(slaveCfg, "timeout", 60)
 
-	log.Printf("[SLAVE] Name=%s Master=%s:%d Roots=%v", name, masterHost, masterPort, roots)
+	log.Printf("[STARTUP] Slave mode [name=%s] [master=%s:%d] [roots=%v] [bind_ip=%s] [pasv=%d-%d]",
+		name, masterHost, masterPort, roots, bindIP, pasvMin, pasvMax)
 
 	s := slave.NewSlave(slave.SlaveConfig{
 		Name:        name,

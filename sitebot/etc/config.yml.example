@@ -1,8 +1,9 @@
-debug: true
+debug: false
 log_file:      "logs/sitebot.log"
 log_delete_after_days: 1
 log_keep_days: 1
 log_console:   true
+version:       "1.0.4b"
 
 event_fifo: "/GoFTPd/etc/goftpd.sitebot.fifo"
 
@@ -21,7 +22,7 @@ irc:
   port: 6697
   nick: "GoSitebot"
   user: "sitebot"
-  realname: "GoSitebot v1.0"
+  realname: "GoSitebot v1.0.4b"
   password: "changeme"
   ssl: true
   auto_oper: false
@@ -57,6 +58,17 @@ encryption:
 
 announce:
   config_file: "plugins/announce/config.yml"
+
+help:
+  channels: *chan_main
+  reply_target: "pm"
+  lines:
+    - "!help - show this help in PM"
+    - "!rules - show site rules in PM"
+    - "!top [5|10|25] - show daily top uploaders"
+    - "!request <release> - add a request"
+    - "!requests - list requests"
+    - "!ip - PM help for self-service IP commands"
 
 sections:
   - name: "DEFAULT"
@@ -331,13 +343,14 @@ plugins:
     BNC: true
     Control: true
     Banned: true
+    SelfIP: true
     Top: true
     BW: true
     Rules: true
     Topic: true
     AdminCommander: true
   config:
-    debug: true
+    debug: false
     # Plugin defaults live in sitebot/plugins/<name>/config.yml.dist.
     # Copy them to config.yml so Git updates do not overwrite your local values.
     tvmaze:
@@ -364,6 +377,8 @@ plugins:
       config_file: "plugins/bw/config.yml"
     rules:
       config_file: "plugins/rules/config.yml"
+    selfip:
+      config_file: "plugins/selfip/config.yml"
     topic:
       config_file: "plugins/topic/config.yml"
     admin_commander:

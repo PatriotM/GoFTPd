@@ -27,6 +27,7 @@ func main() {
 	} else {
 		bot.InstallConsoleLogger(cfg.Debug)
 	}
+	bot.PrintStartupBanner(cfg.Version, "GoSitebot")
 
 	b := bot.NewBot(cfg)
 	if err := b.Start(); err != nil {

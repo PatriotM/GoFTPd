@@ -85,7 +85,7 @@ func New() *IMDBPlugin {
 	return &IMDBPlugin{
 		seen:     map[string]bool{},
 		client:   &http.Client{Timeout: 8 * time.Second},
-		sections: []string{"MOVIE", "X264", "X265", "BLURAY", "DVDR"},
+		sections: []string{"MOVIE", "X264-HD-1080P", "X264-HD-720P", "X264-SD", "X264-HD-FOREIGN", "X264-SD-FOREIGN", "X265", "X265-FOREIGN", "BLURAY", "DVDR", "BLURAY-UHD"},
 		jobs:     make(chan imdbJob, 64),
 	}
 }
