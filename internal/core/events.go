@@ -30,6 +30,7 @@ const (
 	EventNewUser       EventType = "NEWUSER"
 	EventLoginFail     EventType = "LOGINFAIL"
 	EventSelfIP        EventType = "SELFIP"
+	EventSlaveAuthFail EventType = "SLAVEAUTHFAIL"
 	EventMKDir         EventType = "MKDIR"
 	EventRMDir         EventType = "RMDIR"
 	EventRename        EventType = "RENAME"
@@ -253,15 +254,8 @@ func PublishEvent(cfg *Config, evt Event) {
 }
 
 func sectionFromPath(p string) string {
-	cleaned := path.Clean("/" + strings.TrimSpace(p))
-	if cleaned == "/" || cleaned == "." {
-		return "DEFAULT"
-	}
-	parts := strings.Split(strings.TrimPrefix(cleaned, "/"), "/")
-	if len(parts) == 0 || parts[0] == "" {
-		return "DEFAULT"
-	}
-	return strings.ToUpper(parts[0])
+	section, _ := zipscript.SectionInfoFromPath(p)
+	return section
 }
 
 func sectionFromPathWithConfig(cfg *Config, p string) string {
@@ -433,7 +427,7 @@ func emitRaceEnd(s *Session, users []VFSRaceUser, totalBytes int64, total int, x
 	if subdir := zipscript.ReleaseSubdirLabel(s.Config.Zipscript, s.CurrentDir); subdir != "" {
 		common["release_subdir"] = subdir
 		common["release_name"] = path.Base(path.Dir(s.CurrentDir))
-		if !zipscript.AnnounceReleaseSubdirs(s.Config.Zipscript) {
+		if zipscript.IsIgnoredReleaseSubdir(s.Config.Zipscript, s.CurrentDir) || !zipscript.AnnounceReleaseSubdirs(s.Config.Zipscript) {
 			common["skip_release_announce"] = "true"
 		}
 	}

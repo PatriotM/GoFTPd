@@ -6,6 +6,170 @@ import (
 	"goftpd/internal/user"
 )
 
+func TestLoadStructuredYAMLRules(t *testing.T) {
+	data := []byte(`
+roles:
+  anyone:
+    anyone: true
+  staff:
+    any_groups: ["STAFF", "SiteOP"]
+  siteop:
+    all_flags: ["1"]
+  goftpd_bot:
+    users: ["goftpd"]
+
+rules:
+  sitecmd:
+    - allow: [HELP, AFFILS, PRE]
+      required: $anyone
+    - allow: [WHO, SWHO]
+      required: $staff
+    - allow: [REHASH]
+      required: $siteop
+    - deny: ["*"]
+      required:
+        nobody: true
+  nuke:
+    - path: /site/*
+      required: $goftpd_bot
+`)
+
+	e := &Engine{RulesByType: map[string][]Rule{}}
+	if !loadYAMLRules(e, data) {
+		t.Fatal("loadYAMLRules() = false, want true")
+	}
+
+	if got := len(e.RulesByType["sitecmd"]); got != 7 {
+		t.Fatalf("len(sitecmd rules) = %d, want 7", got)
+	}
+	if got := len(e.RulesByType["nuke"]); got != 1 {
+		t.Fatalf("len(nuke rules) = %d, want 1", got)
+	}
+
+	anyUser := &user.User{Name: "tester"}
+	staffUser := &user.User{Name: "staffer", PrimaryGroup: "STAFF", Groups: map[string]int{"STAFF": 0}}
+	siteopUser := &user.User{Name: "siteop", Flags: "1"}
+	goftpdBot := &user.User{Name: "goftpd"}
+
+	if !e.CanPerformRuleOnly(anyUser, "sitecmd", "AFFILS") {
+		t.Fatal("public AFFILS rule should allow any user")
+	}
+	if e.CanPerformRuleOnly(anyUser, "sitecmd", "WHO") {
+		t.Fatal("WHO should not be public")
+	}
+	if !e.CanPerformRuleOnly(staffUser, "sitecmd", "WHO") {
+		t.Fatal("WHO should allow staff user")
+	}
+	if !e.CanPerformRuleOnly(siteopUser, "sitecmd", "REHASH") {
+		t.Fatal("REHASH should allow siteop user")
+	}
+	if !e.CanPerform(goftpdBot, "NUKE", "/site/MP3/Release-GRP") {
+		t.Fatal("goftpd bot should be allowed to nuke in structured config")
+	}
+}
+
+func TestStructuredRequirementSupportsAllGroupsAndAnyFlags(t *testing.T) {
+	req := &Requirement{
+		AllGroups: []string{"Admin", "NUKERS"},
+		AnyFlags:  []string{"A", "B"},
+	}
+
+	allowed := &user.User{
+		Name:         "allowed",
+		Flags:        "B",
+		PrimaryGroup: "Admin",
+		Groups:       map[string]int{"Admin": 0, "NUKERS": 0},
+	}
+	deniedMissingGroup := &user.User{
+		Name:         "denied-group",
+		Flags:        "A",
+		PrimaryGroup: "Admin",
+		Groups:       map[string]int{"Admin": 0},
+	}
+	deniedMissingFlag := &user.User{
+		Name:         "denied-flag",
+		Flags:        "1",
+		PrimaryGroup: "Admin",
+		Groups:       map[string]int{"Admin": 0, "NUKERS": 0},
+	}
+
+	if !checkRequirement(req, allowed) {
+		t.Fatal("checkRequirement() should allow user matching all groups and any flag")
+	}
+	if checkRequirement(req, deniedMissingGroup) {
+		t.Fatal("checkRequirement() should reject user missing one required group")
+	}
+	if checkRequirement(req, deniedMissingFlag) {
+		t.Fatal("checkRequirement() should reject user missing any required flag")
+	}
+}
+
+func TestStructuredRequirementSupportsAnyOfAcrossFlagsAndGroups(t *testing.T) {
+	req := &Requirement{
+		AnyOf: []*Requirement{
+			{AllFlags: []string{"1"}},
+			{AllGroups: []string{"NUKERS"}},
+		},
+	}
+
+	flagUser := &user.User{Name: "flag-user", Flags: "1"}
+	groupUser := &user.User{
+		Name:         "group-user",
+		PrimaryGroup: "NUKERS",
+		Groups:       map[string]int{"NUKERS": 0},
+	}
+	denied := &user.User{Name: "denied", Flags: "3"}
+
+	if !checkRequirement(req, flagUser) {
+		t.Fatal("any_of should allow user with matching flag branch")
+	}
+	if !checkRequirement(req, groupUser) {
+		t.Fatal("any_of should allow user with matching group branch")
+	}
+	if checkRequirement(req, denied) {
+		t.Fatal("any_of should reject user matching no branch")
+	}
+}
+
+func TestLoadStructuredYAMLRulesWithAnyOf(t *testing.T) {
+	data := []byte(`
+roles:
+  anyone:
+    anyone: true
+
+rules:
+  nuke:
+    - path: /site/*
+      required:
+        any_of:
+          - all_flags: ["1"]
+          - all_groups: ["NUKERS"]
+`)
+
+	e := &Engine{RulesByType: map[string][]Rule{}}
+	if !loadYAMLRules(e, data) {
+		t.Fatal("loadYAMLRules() = false, want true")
+	}
+
+	flagUser := &user.User{Name: "flag-user", Flags: "1"}
+	groupUser := &user.User{
+		Name:         "group-user",
+		PrimaryGroup: "NUKERS",
+		Groups:       map[string]int{"NUKERS": 0},
+	}
+	denied := &user.User{Name: "denied", Flags: "3"}
+
+	if !e.CanPerform(flagUser, "NUKE", "/site/MP3/Release-GRP") {
+		t.Fatal("structured any_of should allow matching flag branch")
+	}
+	if !e.CanPerform(groupUser, "NUKE", "/site/MP3/Release-GRP") {
+		t.Fatal("structured any_of should allow matching group branch")
+	}
+	if e.CanPerform(denied, "NUKE", "/site/MP3/Release-GRP") {
+		t.Fatal("structured any_of should reject unmatched user")
+	}
+}
+
 func TestMatchesRulePathCoversPrivatePathDescendants(t *testing.T) {
 	e := &Engine{RulesByType: map[string][]Rule{
 		"privpath": {

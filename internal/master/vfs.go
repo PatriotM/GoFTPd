@@ -37,6 +37,14 @@ type VFSDirMeta struct {
 	MediaInfo  map[string]string // cached release media fields, e.g. genre/year
 }
 
+type VFSRaceCache struct {
+	Users      []RaceUserStat
+	Groups     []RaceGroupStat
+	TotalBytes int64
+	Present    int
+	Total      int
+}
+
 type VFSSearchResult struct {
 	Path    string
 	Files   int
@@ -49,7 +57,9 @@ type VFSSearchResult struct {
 //	/ VirtualFileSystemDirectory.
 type VirtualFileSystem struct {
 	files         map[string]*VFSFile
+	children      map[string]map[string]struct{}
 	dirMeta       map[string]*VFSDirMeta // dir path -> metadata (SFV cache etc)
+	raceState     map[string]*VFSRaceCache
 	protectedDirs map[string]bool
 	mu            sync.RWMutex
 }
@@ -57,10 +67,13 @@ type VirtualFileSystem struct {
 func NewVirtualFileSystem() *VirtualFileSystem {
 	vfs := &VirtualFileSystem{
 		files:         make(map[string]*VFSFile),
+		children:      make(map[string]map[string]struct{}),
 		dirMeta:       make(map[string]*VFSDirMeta),
+		raceState:     make(map[string]*VFSRaceCache),
 		protectedDirs: make(map[string]bool),
 	}
 	vfs.files["/"] = &VFSFile{Path: "/", IsDir: true, Seen: true}
+	vfs.children["/"] = make(map[string]struct{})
 	return vfs
 }
 
@@ -97,23 +110,12 @@ func (vfs *VirtualFileSystem) AddFile(path string, file VFSFile) {
 	}
 
 	vfs.files[path] = &file
-
-	// Ensure parent dirs exist
-	dir := filepath.Dir(path)
-	for dir != "/" && dir != "." {
-		if existing, exists := vfs.files[dir]; !exists {
-			vfs.files[dir] = &VFSFile{
-				Path:      dir,
-				IsDir:     true,
-				SlaveName: file.SlaveName,
-				Seen:      true, // Keep parent directories alive
-			}
-		} else {
-			// Ensure existing parent directories are also marked as seen so they aren't purged
-			existing.Seen = true
-		}
-		dir = filepath.Dir(dir)
+	vfs.ensureParentDirsLocked(path, file.SlaveName)
+	vfs.linkChildLocked(cleanVFSPath(filepath.Dir(path)), path)
+	if file.IsDir {
+		vfs.ensureChildrenBucketLocked(path)
 	}
+	vfs.refreshRaceStateForPathLocked(path)
 }
 
 func (vfs *VirtualFileSystem) AddSymlink(linkPath, targetPath string) {
@@ -135,6 +137,10 @@ func (vfs *VirtualFileSystem) AddSymlink(linkPath, targetPath string) {
 		LastModified: time.Now().Unix(),
 		Seen:         true,
 	}
+	vfs.ensureParentDirsLocked(linkPath, "")
+	vfs.linkChildLocked(cleanVFSPath(filepath.Dir(linkPath)), linkPath)
+	vfs.ensureChildrenBucketLocked(linkPath)
+	vfs.refreshRaceStateForPathLocked(linkPath)
 }
 
 func (vfs *VirtualFileSystem) Chmod(path string, mode uint32) {
@@ -168,6 +174,7 @@ func (vfs *VirtualFileSystem) MarkAllUnseen(slaveName string) {
 func (vfs *VirtualFileSystem) PurgeUnseen(slaveName string) {
 	vfs.mu.Lock()
 	defer vfs.mu.Unlock()
+	changed := false
 	for path, file := range vfs.files {
 		if vfs.protectedDirs[path] {
 			file.Seen = true
@@ -176,7 +183,12 @@ func (vfs *VirtualFileSystem) PurgeUnseen(slaveName string) {
 		}
 		if file.SlaveName == slaveName && !file.Seen {
 			delete(vfs.files, path)
+			changed = true
 		}
+	}
+	if changed {
+		vfs.rebuildChildrenLocked()
+		vfs.rebuildAllRaceStatesLocked()
 	}
 }
 
@@ -205,6 +217,8 @@ func (vfs *VirtualFileSystem) SetProtectedDirs(paths []string) {
 			f.SlaveName = ""
 		}
 	}
+	vfs.rebuildChildrenLocked()
+	vfs.rebuildAllRaceStatesLocked()
 }
 
 func (vfs *VirtualFileSystem) GetFile(path string) *VFSFile {
@@ -217,7 +231,7 @@ func (vfs *VirtualFileSystem) DeleteFile(path string) {
 	vfs.mu.Lock()
 	defer vfs.mu.Unlock()
 
-	path = filepath.Clean(path)
+	path = cleanVFSPath(path)
 	delete(vfs.files, path)
 
 	// Also delete children if directory
@@ -227,6 +241,8 @@ func (vfs *VirtualFileSystem) DeleteFile(path string) {
 			delete(vfs.files, k)
 		}
 	}
+	vfs.rebuildChildrenLocked()
+	vfs.rebuildAllRaceStatesLocked()
 }
 
 // ListDirectory returns direct children of a directory.
@@ -234,34 +250,15 @@ func (vfs *VirtualFileSystem) ListDirectory(dirPath string) []*VFSFile {
 	vfs.mu.RLock()
 	defer vfs.mu.RUnlock()
 
-	dirPath = filepath.Clean(dirPath)
-	if !strings.HasSuffix(dirPath, "/") {
-		dirPath += "/"
-	}
-	if dirPath == "//" {
-		dirPath = "/"
+	dirPath = cleanVFSPath(dirPath)
+	childPaths := vfs.children[dirPath]
+	if len(childPaths) == 0 {
+		return nil
 	}
 
-	var results []*VFSFile
-	seen := make(map[string]bool)
-
-	for path, file := range vfs.files {
-		if path == dirPath || path == strings.TrimSuffix(dirPath, "/") {
-			continue // skip self
-		}
-
-		if !strings.HasPrefix(path, dirPath) {
-			continue
-		}
-
-		// Only direct children (no deeper nesting)
-		remainder := path[len(dirPath):]
-		if strings.Contains(remainder, "/") {
-			continue
-		}
-
-		if !seen[path] {
-			seen[path] = true
+	results := make([]*VFSFile, 0, len(childPaths))
+	for childPath := range childPaths {
+		if file := vfs.files[childPath]; file != nil {
 			results = append(results, file)
 		}
 	}
@@ -294,8 +291,8 @@ func (vfs *VirtualFileSystem) RenameFile(from, to string) {
 	vfs.mu.Lock()
 	defer vfs.mu.Unlock()
 
-	from = filepath.Clean(from)
-	to = filepath.Clean(to)
+	from = cleanVFSPath(from)
+	to = cleanVFSPath(to)
 
 	file := vfs.files[from]
 	if file == nil {
@@ -335,6 +332,8 @@ func (vfs *VirtualFileSystem) RenameFile(from, to string) {
 		delete(vfs.dirMeta, mv.old)
 		vfs.dirMeta[mv.new] = meta
 	}
+	vfs.rebuildChildrenLocked()
+	vfs.rebuildAllRaceStatesLocked()
 }
 
 // ClearSlave removes all files belonging to a slave (called when slave goes offline)
@@ -342,10 +341,16 @@ func (vfs *VirtualFileSystem) ClearSlave(slaveName string) {
 	vfs.mu.Lock()
 	defer vfs.mu.Unlock()
 
+	changed := false
 	for path, file := range vfs.files {
 		if file.SlaveName == slaveName {
 			delete(vfs.files, path)
+			changed = true
 		}
+	}
+	if changed {
+		vfs.rebuildChildrenLocked()
+		vfs.rebuildAllRaceStatesLocked()
 	}
 }
 
@@ -499,6 +504,8 @@ func (vfs *VirtualFileSystem) LoadFromDisk(filePath string) error {
 	if vfs.protectedDirs == nil {
 		vfs.protectedDirs = make(map[string]bool)
 	}
+	vfs.rebuildChildrenLocked()
+	vfs.rebuildAllRaceStatesLocked()
 
 	log.Printf("[VFS] Loaded %d entries from %s", len(vfs.files), filePath)
 	return nil
@@ -534,6 +541,7 @@ func (vfs *VirtualFileSystem) SetSFVData(dirPath string, sfvName string, entries
 	}
 	meta.SFVEntries = normalized
 	meta.SFVName = sfvName
+	vfs.refreshRaceStateLocked(dirPath)
 }
 
 // SetMediaInfo caches release-level mediainfo fields on a directory.
@@ -580,14 +588,15 @@ func (vfs *VirtualFileSystem) GetSFVData(dirPath string) *VFSDirMeta {
 
 // RaceUserStat holds per-user race statistics computed from VFS.
 type RaceUserStat struct {
-	Name      string
-	Group     string
-	Files     int
-	Bytes     int64
-	Speed     float64 // bytes/sec average across this user's files
-	PeakSpeed float64 // bytes/sec of this user's fastest single file
-	SlowSpeed float64 // bytes/sec of this user's slowest single file
-	Percent   int
+	Name       string
+	Group      string
+	Files      int
+	Bytes      int64
+	Speed      float64 // bytes/sec average across this user's files
+	PeakSpeed  float64 // bytes/sec of this user's fastest single file
+	SlowSpeed  float64 // bytes/sec of this user's slowest single file
+	Percent    int
+	DurationMs int64 // sum of file durations for this user
 }
 
 // RaceGroupStat holds per-group race statistics.
@@ -606,39 +615,191 @@ func (vfs *VirtualFileSystem) GetRaceStats(dirPath string) (users []RaceUserStat
 	defer vfs.mu.RUnlock()
 
 	dirPath = filepath.Clean(dirPath)
-	meta := vfs.dirMeta[dirPath]
-	if meta == nil || len(meta.SFVEntries) == 0 {
+	cache := vfs.raceState[dirPath]
+	if cache == nil {
 		return
 	}
+	users = append(users, cache.Users...)
+	groups = append(groups, cache.Groups...)
+	totalBytes = cache.TotalBytes
+	present = cache.Present
+	total = cache.Total
+	return
+}
 
-	total = len(meta.SFVEntries)
+func raceFileKey(name string) string {
+	name = strings.TrimSpace(filepath.ToSlash(name))
+	name = strings.TrimPrefix(name, "./")
+	return strings.ToLower(name)
+}
+
+func (vfs *VirtualFileSystem) ensureChildrenBucketLocked(dirPath string) {
+	dirPath = cleanVFSPath(dirPath)
+	if vfs.children == nil {
+		vfs.children = make(map[string]map[string]struct{})
+	}
+	if _, ok := vfs.children[dirPath]; !ok {
+		vfs.children[dirPath] = make(map[string]struct{})
+	}
+}
+
+func (vfs *VirtualFileSystem) linkChildLocked(parentPath, childPath string) {
+	parentPath = cleanVFSPath(parentPath)
+	childPath = cleanVFSPath(childPath)
+	vfs.ensureChildrenBucketLocked(parentPath)
+	vfs.children[parentPath][childPath] = struct{}{}
+}
+
+func (vfs *VirtualFileSystem) ensureParentDirsLocked(path string, slaveName string) {
+	path = cleanVFSPath(path)
+	if _, ok := vfs.files["/"]; !ok {
+		vfs.files["/"] = &VFSFile{Path: "/", IsDir: true, Seen: true}
+	}
+	vfs.ensureChildrenBucketLocked("/")
+
+	dir := cleanVFSPath(filepath.Dir(path))
+	for dir != "." && dir != "" {
+		if existing, exists := vfs.files[dir]; !exists {
+			vfs.files[dir] = &VFSFile{
+				Path:      dir,
+				IsDir:     true,
+				SlaveName: slaveName,
+				Seen:      true,
+			}
+		} else {
+			existing.Path = dir
+			existing.IsDir = true
+			existing.Seen = true
+		}
+		vfs.ensureChildrenBucketLocked(dir)
+		if dir == "/" {
+			break
+		}
+		parent := cleanVFSPath(filepath.Dir(dir))
+		vfs.linkChildLocked(parent, dir)
+		dir = parent
+	}
+}
+
+func (vfs *VirtualFileSystem) rebuildChildrenLocked() {
+	if vfs.files == nil {
+		vfs.files = make(map[string]*VFSFile)
+	}
+	if _, ok := vfs.files["/"]; !ok {
+		vfs.files["/"] = &VFSFile{Path: "/", IsDir: true, Seen: true}
+	}
+
+	for path, file := range vfs.files {
+		if file == nil {
+			delete(vfs.files, path)
+			continue
+		}
+		cleanPath := cleanVFSPath(path)
+		if cleanPath != path {
+			delete(vfs.files, path)
+			if _, exists := vfs.files[cleanPath]; !exists {
+				file.Path = cleanPath
+				vfs.files[cleanPath] = file
+			}
+			continue
+		}
+		file.Path = cleanPath
+	}
+
+	paths := make([]string, 0, len(vfs.files))
+	for path := range vfs.files {
+		paths = append(paths, path)
+	}
+	sort.Slice(paths, func(i, j int) bool {
+		di := strings.Count(paths[i], "/")
+		dj := strings.Count(paths[j], "/")
+		if di != dj {
+			return di < dj
+		}
+		return paths[i] < paths[j]
+	})
+	for _, path := range paths {
+		file := vfs.files[path]
+		if file == nil {
+			continue
+		}
+		vfs.ensureParentDirsLocked(path, file.SlaveName)
+	}
+
+	children := make(map[string]map[string]struct{})
+	for path, file := range vfs.files {
+		if file != nil && file.IsDir {
+			children[path] = make(map[string]struct{})
+		}
+	}
+	if _, ok := children["/"]; !ok {
+		children["/"] = make(map[string]struct{})
+	}
+	for path := range vfs.files {
+		if path == "/" {
+			continue
+		}
+		parent := cleanVFSPath(filepath.Dir(path))
+		if _, ok := children[parent]; !ok {
+			children[parent] = make(map[string]struct{})
+		}
+		children[parent][path] = struct{}{}
+	}
+	vfs.children = children
+}
+
+func (vfs *VirtualFileSystem) rebuildAllRaceStatesLocked() {
+	if vfs.raceState == nil {
+		vfs.raceState = make(map[string]*VFSRaceCache)
+	}
+	for dirPath := range vfs.raceState {
+		delete(vfs.raceState, dirPath)
+	}
+	for dirPath, meta := range vfs.dirMeta {
+		if meta == nil || len(meta.SFVEntries) == 0 {
+			continue
+		}
+		vfs.refreshRaceStateLocked(dirPath)
+	}
+}
+
+func (vfs *VirtualFileSystem) refreshRaceStateForPathLocked(path string) {
+	dirPath := cleanVFSPath(filepath.Dir(path))
+	vfs.refreshRaceStateLocked(dirPath)
+}
+
+func (vfs *VirtualFileSystem) refreshRaceStateLocked(dirPath string) {
+	dirPath = cleanVFSPath(dirPath)
+	meta := vfs.dirMeta[dirPath]
+	if meta == nil || len(meta.SFVEntries) == 0 {
+		delete(vfs.raceState, dirPath)
+		return
+	}
+	if vfs.raceState == nil {
+		vfs.raceState = make(map[string]*VFSRaceCache)
+	}
+
 	userMap := make(map[string]*RaceUserStat)
 	groupMap := make(map[string]*RaceGroupStat)
-
-	prefix := dirPath + "/"
-	if dirPath == "/" {
-		prefix = "/"
-	}
-
 	presentFiles := make(map[string]*VFSFile)
-	for path, f := range vfs.files {
-		if f == nil || f.IsDir || !strings.HasPrefix(path, prefix) {
+	for childPath := range vfs.children[dirPath] {
+		f := vfs.files[childPath]
+		if f == nil || f.IsDir {
 			continue
 		}
-		rel := path[len(prefix):]
-		if strings.Contains(rel, "/") || strings.Contains(rel, "\\") {
-			continue
-		}
-		presentFiles[raceFileKey(rel)] = f
+		presentFiles[raceFileKey(filepath.Base(childPath))] = f
 	}
 
+	cache := &VFSRaceCache{
+		Total: len(meta.SFVEntries),
+	}
 	for sfvFile := range meta.SFVEntries {
 		f := presentFiles[raceFileKey(sfvFile)]
 		if f == nil {
 			continue
 		}
-		present++
-		totalBytes += f.Size
+		cache.Present++
+		cache.TotalBytes += f.Size
 
 		owner := f.Owner
 		if owner == "" {
@@ -649,9 +810,8 @@ func (vfs *VirtualFileSystem) GetRaceStats(dirPath string) (users []RaceUserStat
 			group = "NoGroup"
 		}
 
-		// User stats
-		us, ok := userMap[owner]
-		if !ok {
+		us := userMap[owner]
+		if us == nil {
 			us = &RaceUserStat{Name: owner, Group: group}
 			userMap[owner] = us
 		}
@@ -666,11 +826,11 @@ func (vfs *VirtualFileSystem) GetRaceStats(dirPath string) (users []RaceUserStat
 			if us.SlowSpeed == 0 || fileSpeed < us.SlowSpeed {
 				us.SlowSpeed = fileSpeed
 			}
+			us.DurationMs += f.XferTime
 		}
 
-		// Group stats
-		gs, ok := groupMap[group]
-		if !ok {
+		gs := groupMap[group]
+		if gs == nil {
 			gs = &RaceGroupStat{Name: group}
 			groupMap[group] = gs
 		}
@@ -681,31 +841,45 @@ func (vfs *VirtualFileSystem) GetRaceStats(dirPath string) (users []RaceUserStat
 		}
 	}
 
-	// Calculate percentages and build sorted lists
+	cache.Users = make([]RaceUserStat, 0, len(userMap))
 	for _, us := range userMap {
-		if total > 0 {
-			us.Percent = (us.Files * 100) / total
+		if cache.Total > 0 {
+			us.Percent = (us.Files * 100) / cache.Total
 		}
 		if us.Files > 0 {
-			us.Speed = us.Speed / float64(us.Files) // average speed
+			us.Speed = us.Speed / float64(us.Files)
 		}
-		users = append(users, *us)
+		cache.Users = append(cache.Users, *us)
 	}
+	sort.Slice(cache.Users, func(i, j int) bool {
+		if cache.Users[i].Files != cache.Users[j].Files {
+			return cache.Users[i].Files > cache.Users[j].Files
+		}
+		if cache.Users[i].Bytes != cache.Users[j].Bytes {
+			return cache.Users[i].Bytes > cache.Users[j].Bytes
+		}
+		return strings.ToLower(cache.Users[i].Name) < strings.ToLower(cache.Users[j].Name)
+	})
+
+	cache.Groups = make([]RaceGroupStat, 0, len(groupMap))
 	for _, gs := range groupMap {
-		if total > 0 {
-			gs.Percent = (gs.Files * 100) / total
+		if cache.Total > 0 {
+			gs.Percent = (gs.Files * 100) / cache.Total
 		}
 		if gs.Files > 0 {
 			gs.Speed = gs.Speed / float64(gs.Files)
 		}
-		groups = append(groups, *gs)
+		cache.Groups = append(cache.Groups, *gs)
 	}
+	sort.Slice(cache.Groups, func(i, j int) bool {
+		if cache.Groups[i].Files != cache.Groups[j].Files {
+			return cache.Groups[i].Files > cache.Groups[j].Files
+		}
+		if cache.Groups[i].Bytes != cache.Groups[j].Bytes {
+			return cache.Groups[i].Bytes > cache.Groups[j].Bytes
+		}
+		return strings.ToLower(cache.Groups[i].Name) < strings.ToLower(cache.Groups[j].Name)
+	})
 
-	return
-}
-
-func raceFileKey(name string) string {
-	name = strings.TrimSpace(filepath.ToSlash(name))
-	name = strings.TrimPrefix(name, "./")
-	return strings.ToLower(name)
+	vfs.raceState[dirPath] = cache
 }

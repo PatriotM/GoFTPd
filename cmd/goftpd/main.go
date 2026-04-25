@@ -105,6 +105,15 @@ func main() {
 			cfg.TLSEnabled,
 			cfg.TLSCert,
 			cfg.TLSKey,
+			time.Duration(intFromCfg(cfg.Master, "heartbeat_timeout", 60))*time.Second,
+		)
+		if err := sm.ConfigureAuthAllowlist(stringSliceFromCfg(cfg.Master, "slave_allowlist")); err != nil {
+			log.Fatalf("Invalid master.slave_allowlist: %v", err)
+		}
+		sm.ConfigureAuthGuard(
+			intFromCfg(cfg.Master, "slave_auth_fail_limit", 2),
+			time.Duration(intFromCfg(cfg.Master, "slave_auth_fail_window_seconds", 900))*time.Second,
+			time.Duration(intFromCfg(cfg.Master, "slave_auth_ban_seconds", 3600))*time.Second,
 		)
 		sm.SetDiskStatusHook(func(name string, status protocol.DiskStatus, online, available bool, sections []string) {
 			core.PublishEvent(cfg, core.Event{
@@ -118,6 +127,22 @@ func main() {
 					"available":   fmt.Sprintf("%t", available),
 					"sections":    strings.Join(sections, ","),
 				},
+			})
+		})
+		sm.SetSecurityHook(func(ip, remoteAddr, action, reason string, strikes, limit int, bannedUntil time.Time) {
+			data := map[string]string{
+				"remote_ip":    ip,
+				"remote_addr":  remoteAddr,
+				"action":       action,
+				"reason":       reason,
+				"strikes":      fmt.Sprintf("%d", strikes),
+				"limit":        fmt.Sprintf("%d", limit),
+				"banned_until": bannedUntil.Format(time.RFC3339),
+			}
+			core.PublishEvent(cfg, core.Event{
+				Type:      core.EventSlaveAuthFail,
+				Timestamp: time.Now(),
+				Data:      data,
 			})
 		})
 		policies := make(map[string]master.SlaveRoutePolicy, len(cfg.Slaves))
@@ -434,6 +459,40 @@ func intFromCfg(m map[string]interface{}, key string, def int) int {
 		return int(val)
 	default:
 		return def
+	}
+}
+
+func stringSliceFromCfg(m map[string]interface{}, key string) []string {
+	if m == nil {
+		return nil
+	}
+	raw, ok := m[key]
+	if !ok || raw == nil {
+		return nil
+	}
+	switch v := raw.(type) {
+	case []string:
+		out := make([]string, 0, len(v))
+		for _, s := range v {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case []interface{}:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				s = strings.TrimSpace(s)
+				if s != "" {
+					out = append(out, s)
+				}
+			}
+		}
+		return out
+	default:
+		return nil
 	}
 }
 

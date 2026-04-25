@@ -67,6 +67,7 @@ func (b *Bot) Start() error {
 	for ch, key := range b.Config.Encryption.Keys {
 		_ = b.IRC.SetChannelKey(ch, key)
 	}
+	_ = b.IRC.SetPrivateKey(strings.TrimSpace(b.Config.Encryption.PrivateKey))
 	if err := b.initializePlugins(); err != nil {
 		return err
 	}
@@ -410,13 +411,21 @@ func (b *Bot) commandEventFromPrivmsg(line string) *event.Event {
 	}
 	target = strings.TrimSpace(target)
 	msg = strings.TrimSpace(msg)
-	if enc, ok := b.IRC.Keys[target]; ok && strings.HasPrefix(msg, "+OK ") {
+	if strings.HasPrefix(msg, "+OK ") {
 		ciphertext := strings.TrimSpace(strings.TrimPrefix(msg, "+OK "))
 		ciphertext = strings.TrimPrefix(ciphertext, "*")
-		if plain, err := enc.Decrypt(ciphertext); err == nil {
-			msg = cleanIRCText(plain)
-		} else if b.Debug {
-			log.Printf("[Bot] Failed to decrypt command from %s in %s: %v", sender, target, err)
+		var enc *irc.BlowfishEncryptor
+		if targetEnc, ok := b.IRC.Keys[target]; ok {
+			enc = targetEnc
+		} else if strings.EqualFold(strings.TrimSpace(target), strings.TrimSpace(b.Config.IRC.Nick)) {
+			enc = b.IRC.PrivateKey
+		}
+		if enc != nil {
+			if plain, err := enc.Decrypt(ciphertext); err == nil {
+				msg = cleanIRCText(plain)
+			} else if b.Debug {
+				log.Printf("[Bot] Failed to decrypt command from %s in %s: %v", sender, target, err)
+			}
 		}
 	}
 	isChannel := strings.HasPrefix(target, "#")
@@ -577,11 +586,15 @@ func pathMatches(pattern, p string) bool {
 	if ok, _ := filepath.Match(strings.TrimSpace(pattern), p); ok {
 		return true
 	}
-	return strings.HasPrefix(strings.ToLower(p), strings.ToLower(strings.TrimRight(pattern, "*")))
+	prefix := strings.TrimRight(strings.TrimSpace(pattern), "*")
+	if strings.EqualFold(strings.TrimRight(p, "/"), strings.TrimRight(strings.TrimSuffix(prefix, "/"), "/")) {
+		return true
+	}
+	return strings.HasPrefix(strings.ToLower(p), strings.ToLower(prefix))
 }
 
 func (b *Bot) resolveSection(pathValue, fallback string) string {
-	best := strings.TrimSpace(fallback)
+	best := inferNestedSection(pathValue, fallback)
 	bestScore := -1
 	for _, sec := range b.Config.Sections {
 		for _, pat := range sec.Paths {
@@ -600,6 +613,29 @@ func (b *Bot) resolveSection(pathValue, fallback string) string {
 	}
 	return best
 }
+
+func inferNestedSection(pathValue, fallback string) string {
+	cleaned := filepath.ToSlash(filepath.Clean("/" + strings.TrimSpace(pathValue)))
+	if cleaned == "/" || cleaned == "." {
+		return strings.TrimSpace(fallback)
+	}
+	parts := strings.Split(strings.TrimPrefix(cleaned, "/"), "/")
+	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {
+		return strings.TrimSpace(fallback)
+	}
+	root := strings.ToUpper(strings.TrimSpace(parts[0]))
+	switch root {
+	case "FOREIGN", "PRE", "ARCHIVE":
+		if len(parts) >= 2 && strings.TrimSpace(parts[1]) != "" {
+			return strings.ToUpper(strings.TrimSpace(parts[1]))
+		}
+	}
+	if strings.TrimSpace(fallback) == "" {
+		return root
+	}
+	return strings.TrimSpace(fallback)
+}
+
 func (b *Bot) routeChannels(evt *event.Event, outType string) []string {
 	if chs := b.Config.Announce.TypeRoutes[outType]; len(chs) > 0 {
 		return nonEmptyChannels(chs)
@@ -866,6 +902,7 @@ func (b *Bot) Reload() error {
 		for ch, key := range b.Config.Encryption.Keys {
 			_ = b.IRC.SetChannelKey(ch, key)
 		}
+		_ = b.IRC.SetPrivateKey(strings.TrimSpace(b.Config.Encryption.PrivateKey))
 		for _, ch := range uniqueChannels(b.Config) {
 			_ = b.IRC.Join(ch)
 		}

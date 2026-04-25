@@ -149,7 +149,6 @@ var _ plugin.MasterBridge = (*Bridge)(nil)
 // ListDir returns directory entries from the master's VFS.
 func (b *Bridge) ListDir(dirPath string) []core.MasterFileEntry {
 	vfsFiles := b.sm.GetVFS().ListDirectory(dirPath)
-	log.Printf("[Bridge] ListDir(%s) -> %d entries from VFS", dirPath, len(vfsFiles))
 	entries := make([]core.MasterFileEntry, 0, len(vfsFiles))
 	for _, f := range vfsFiles {
 		entries = append(entries, core.MasterFileEntry{
@@ -830,23 +829,23 @@ func (b *Bridge) CacheMediaInfo(dirPath string, fields map[string]string) {
 // GetVFSRaceStats returns race statistics for a directory,
 // counting ONLY files that are listed in the cached SFV data.
 func (b *Bridge) GetVFSRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRaceGroup, int64, int, int) {
-	if b.raceDB != nil {
+	users, groups, totalBytes, present, total := b.sm.GetVFS().GetRaceStats(dirPath)
+	if total == 0 && b.raceDB != nil {
 		return b.raceDB.GetRaceStats(filepath.Clean(dirPath))
 	}
-
-	users, groups, totalBytes, present, total := b.sm.GetVFS().GetRaceStats(dirPath)
 
 	coreUsers := make([]core.VFSRaceUser, len(users))
 	for i, u := range users {
 		coreUsers[i] = core.VFSRaceUser{
-			Name:      u.Name,
-			Group:     u.Group,
-			Files:     u.Files,
-			Bytes:     u.Bytes,
-			Speed:     u.Speed,
-			PeakSpeed: u.PeakSpeed,
-			SlowSpeed: u.SlowSpeed,
-			Percent:   u.Percent,
+			Name:       u.Name,
+			Group:      u.Group,
+			Files:      u.Files,
+			Bytes:      u.Bytes,
+			Speed:      u.Speed,
+			PeakSpeed:  u.PeakSpeed,
+			SlowSpeed:  u.SlowSpeed,
+			Percent:    u.Percent,
+			DurationMs: u.DurationMs,
 		}
 	}
 	coreGroups := make([]core.VFSRaceGroup, len(groups))
@@ -913,6 +912,11 @@ func (b *Bridge) GetDirMediaInfo(dirPath string) map[string]string {
 }
 
 func (b *Bridge) SearchDirs(query string, limit int) []core.VFSSearchResult {
+	if b.raceDB != nil {
+		if results := b.raceDB.SearchDirs(query, limit); len(results) > 0 {
+			return results
+		}
+	}
 	vfsResults := b.sm.GetVFS().SearchDirs(query, limit)
 	results := make([]core.VFSSearchResult, 0, len(vfsResults))
 	for _, r := range vfsResults {

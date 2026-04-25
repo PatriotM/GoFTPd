@@ -1159,7 +1159,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				if subdir := zipscript.ReleaseSubdirLabel(s.Config.Zipscript, s.CurrentDir); subdir != "" {
 					data["release_subdir"] = subdir
 					data["release_name"] = path.Base(path.Dir(s.CurrentDir))
-					if !zipscript.AnnounceReleaseSubdirs(s.Config.Zipscript) {
+					if zipscript.IsIgnoredReleaseSubdir(s.Config.Zipscript, s.CurrentDir) || !zipscript.AnnounceReleaseSubdirs(s.Config.Zipscript) {
 						data["skip_release_announce"] = "true"
 					}
 				}
@@ -1302,7 +1302,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				if subdir := zipscript.ReleaseSubdirLabel(s.Config.Zipscript, s.CurrentDir); subdir != "" {
 					data["release_subdir"] = subdir
 					data["release_name"] = path.Base(path.Dir(s.CurrentDir))
-					if !zipscript.AnnounceReleaseSubdirs(s.Config.Zipscript) {
+					if zipscript.IsIgnoredReleaseSubdir(s.Config.Zipscript, s.CurrentDir) || !zipscript.AnnounceReleaseSubdirs(s.Config.Zipscript) {
 						data["skip_release_announce"] = "true"
 					}
 				}
@@ -1648,37 +1648,10 @@ func incompleteMarkerEntries(bridge MasterBridge, cfg *Config, pattern, dirPath 
 			continue
 		}
 		_, _, _, present, total := bridge.GetVFSRaceStats(releasePath)
-		emptyDir := false
-		if total <= 0 {
-			if zipscript.MarkEmptyDirsOnRescan(cfg.Zipscript) {
-				visible := 0
-				for _, child := range bridge.ListDir(releasePath) {
-					if !strings.HasPrefix(child.Name, ".") {
-						visible++
-					}
-				}
-				emptyDir = visible == 0
-			}
-			if !emptyDir {
-				continue
-			}
-		}
-		if total > 0 && present < total {
-			marker := incompleteMarkerName(pattern, e.Name)
-			if marker != "" && !existing[marker] {
-				out = append(out, MasterFileEntry{
-					Name:       marker,
-					IsSymlink:  true,
-					LinkTarget: releasePath,
-					ModTime:    e.ModTime,
-					Owner:      "GoFTPd",
-					Group:      "GoFTPd",
-				})
-				existing[marker] = true
-			}
-		}
+		releaseEntries := bridge.ListDir(releasePath)
+
 		noSFVPattern := zipscript.NoSFVIndicator(cfg.Zipscript)
-		if noSFVPattern != "" && !zipscript.UsesZip(cfg.Zipscript, releasePath) && !hasSFVEntry(bridge.ListDir(releasePath)) {
+		if noSFVPattern != "" && !zipscript.UsesZip(cfg.Zipscript, releasePath) && !hasSFVEntry(releaseEntries) {
 			marker := incompleteMarkerName(noSFVPattern, e.Name)
 			if marker != "" && !existing[marker] {
 				out = append(out, MasterFileEntry{
@@ -1693,8 +1666,38 @@ func incompleteMarkerEntries(bridge MasterBridge, cfg *Config, pattern, dirPath 
 			}
 		}
 		nfoPattern := zipscript.NFOIndicator(cfg.Zipscript)
-		if nfoPattern != "" && !hasNFOEntry(bridge.ListDir(releasePath)) {
+		if nfoPattern != "" && !hasNFOEntry(releaseEntries) {
 			marker := incompleteMarkerName(nfoPattern, e.Name)
+			if marker != "" && !existing[marker] {
+				out = append(out, MasterFileEntry{
+					Name:       marker,
+					IsSymlink:  true,
+					LinkTarget: releasePath,
+					ModTime:    e.ModTime,
+					Owner:      "GoFTPd",
+					Group:      "GoFTPd",
+				})
+				existing[marker] = true
+			}
+		}
+
+		emptyDir := false
+		if total <= 0 {
+			if zipscript.MarkEmptyDirsOnRescan(cfg.Zipscript) {
+				visible := 0
+				for _, child := range releaseEntries {
+					if !strings.HasPrefix(child.Name, ".") {
+						visible++
+					}
+				}
+				emptyDir = visible == 0
+			}
+			if !emptyDir {
+				continue
+			}
+		}
+		if total > 0 && present < total {
+			marker := incompleteMarkerName(pattern, e.Name)
 			if marker != "" && !existing[marker] {
 				out = append(out, MasterFileEntry{
 					Name:       marker,
@@ -1857,6 +1860,9 @@ func dirRaceProgress(bridge MasterBridge, cfg *Config, dirPath string) (totalByt
 }
 
 func dirRaceStatusName(bridge MasterBridge, cfg *Config, dirPath, siteName string) string {
+	if !raceStatusEligibleDir(dirPath) {
+		return ""
+	}
 	totalBytes, present, total := dirRaceProgress(bridge, cfg, dirPath)
 	if total <= 0 {
 		return ""
@@ -1867,6 +1873,22 @@ func dirRaceStatusName(bridge MasterBridge, cfg *Config, dirPath, siteName strin
 	}
 	pct := (present * 100) / total
 	return fmt.Sprintf("%s - %3d%% Complete - [%s]", progressBar(present, total, 20), pct, siteName)
+}
+
+func raceStatusEligibleDir(dirPath string) bool {
+	cleaned := path.Clean("/" + strings.TrimSpace(dirPath))
+	if cleaned == "/" || cleaned == "." {
+		return false
+	}
+	parts := strings.Split(strings.TrimPrefix(cleaned, "/"), "/")
+	if len(parts) < 2 {
+		return false
+	}
+	switch strings.ToUpper(strings.TrimSpace(parts[0])) {
+	case "FOREIGN", "PRE", "ARCHIVE":
+		return len(parts) >= 3
+	}
+	return true
 }
 
 func emitRaceEndAfter(s *Session, users []VFSRaceUser, totalBytes int64, total int, xferMs int64, delay time.Duration) {
@@ -2002,7 +2024,7 @@ func shouldAnnounceNoRace(cfg *Config, dirPath string, existingNames []string, f
 	if cfg == nil || !cfg.Zipscript.Enabled || !cfg.Zipscript.Race.AnnounceNoRace {
 		return false
 	}
-	if zipscript.IsIgnoredReleaseSubdir(cfg.Zipscript, dirPath) && !zipscript.AnnounceReleaseSubdirs(cfg.Zipscript) {
+	if zipscript.IsIgnoredReleaseSubdir(cfg.Zipscript, dirPath) {
 		return false
 	}
 	if zipscript.UsesRace(cfg.Zipscript, dirPath) || zipscript.IsIgnoredType(cfg.Zipscript, fileName) {
