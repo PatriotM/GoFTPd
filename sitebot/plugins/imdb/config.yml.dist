@@ -1,3 +1,5 @@
+# Section matching is case-insensitive substring based.
+# These are the sections where MOVIE-INFO lookups should run.
 sections:
   - BLURAY
   - BLURAY-UHD

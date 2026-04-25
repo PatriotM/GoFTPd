@@ -3,11 +3,15 @@
 #   !topic #channel your topic text here
 staff_channels: ["#goftpd-staff"]
 staff_hosts: []
+
 # Optional allowlist of channels that may be targeted by !topic.
+# Example: ["#goftpd", "#goftpd-chat"]
 allowed_targets: []
+
 # When true and the bot has a FiSH key for the target channel, send TOPIC
 # as +OK *<ciphertext> so FiSH clients can decrypt it.
 encrypt_topic: true
+
 # reply_target supports "channel", "notice", or a fixed "#channel".
 # Default is "notice" so !topic confirmations stay out of the public channel.
 reply_target: "notice"

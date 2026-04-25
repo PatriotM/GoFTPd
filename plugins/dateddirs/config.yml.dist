@@ -1,6 +1,20 @@
+# Sections that should get dated subdirs.
 sections: ["EBOOKS", "MP3", "FLAC", "0DAY", "XXX-0DAY"]
-format: "MMDD" # readable tokens only: MM=month, DD=day, YY=2-digit year, YYYY=4-digit year, WW=ISO week (examples: MMDD, YYYY-MM-DD, WW-YYYY)
+
+# Readable tokens only:
+#   MM   = month
+#   DD   = day
+#   YY   = 2-digit year
+#   YYYY = 4-digit year
+#   WW   = ISO week
+# Examples: MMDD, YYYY-MM-DD, WW-YYYY
+format: "MMDD"
+
+# Create a convenience symlink like !Today_MP3 -> /MP3/0425.
 today_symlink: true
 symlink_prefix: "!Today_"
+
+# After this age, the dated dir is made read-only.
 readonly_after_minutes: 60
+
 debug: false

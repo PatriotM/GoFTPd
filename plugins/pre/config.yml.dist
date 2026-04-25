@@ -1,12 +1,19 @@
 # Shared affil file used by the daemon PRE plugin and the sitebot Affils plugin.
 affils_file: "etc/affils.yml"
+
 permissions_file: "etc/permissions.yml"
 group_file: "etc/group"
 acl_base_path: "/site"
 admin_flags: "1"
+
+# Base PRE root used for affil predirs.
 base: "/PRE"
+
+# PRE bandwidth/HOF timing window.
 bw_duration: 30
 bw_interval_ms: 500
+
+# Sections where SITE PRE is allowed.
 sections:
   - TV-1080P
   - TV-720P
@@ -16,6 +23,8 @@ sections:
   - MP3
   - FLAC
   - 0DAY
+
+# Sections that should pre into dated subdirs instead of the plain section root.
 dated_sections:
   - MP3
   - FLAC

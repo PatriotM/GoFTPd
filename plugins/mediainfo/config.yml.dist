@@ -1,7 +1,19 @@
+# Binary name or full path used for mediainfo lookups on slaves.
 binary: "mediainfo"
+
+# Per-file mediainfo timeout.
 timeout_seconds: 20
+
+# Sections where sample/audio mediainfo should be announced.
 sections: ["FLAC", "MP3", "TV", "X264-HD-1080P", "X264-HD-720P", "X264-SD", "X265", "BLURAY"]
+
+# Audio payload extensions that should trigger AUDIO-INFO style lookups.
 audio_extensions: ["flac", "mp3", "m4a", "wav"]
+
+# Video payload extensions that should trigger SAMPLE-INFO style lookups.
 video_extensions: ["mkv", "mp4", "avi", "m2ts"]
+
+# When true, only sample files are announced for video sections.
 sample_only: true
+
 debug: false

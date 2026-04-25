@@ -8,10 +8,12 @@ skip_paths:
   - "/LINKS/*"
   - "/SPEEDTEST/*"
 
+# Basic name hygiene checks.
 deny_same_name_in_parent: true
 deny_case_conflicts: true
 check_nuked_names: true
 nuked_prefixes: ["[NUKED]-"]
+
 debug: false
 
 # Block release groups by regex.

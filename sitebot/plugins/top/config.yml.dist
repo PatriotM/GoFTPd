@@ -5,11 +5,16 @@
 #   !top 10
 #   !top 25
 users_dir: "../etc/users"
+
 channels: ["#goftpd-chat"]
+
 # reply_target supports "channel", "notice", "pm", or a fixed "#channel".
 reply_target: "channel"
+
+# Bounds for !top requests from IRC.
 default_count: 10
 max_count: 25
+
 # Optional periodic announce. Routed through sitebot's normal type routing as
 # output type TOP, then announce.default_channel, then irc.channels.
 auto_enabled: false

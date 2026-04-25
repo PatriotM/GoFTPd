@@ -1,2 +1,4 @@
+# Sections where the daemon-side TVMaze helper should run.
 sections: ["TV"]
+
 debug: false
