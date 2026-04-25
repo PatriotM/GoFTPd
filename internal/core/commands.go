@@ -368,7 +368,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						s.CurrentDir, len(users), len(groups), totalBytes, present, total)
 				}
 
-				if present > 0 || total > 0 || len(users) > 0 || len(groups) > 0 || totalBytes > 0 {
+				if HasRaceStats(users, groups, totalBytes, present, total) {
 					var builder strings.Builder
 					RenderRaceStats(
 						&builder,
@@ -380,6 +380,12 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						s.Config.Version,
 					)
 
+					for _, line := range strings.Split(strings.TrimRight(builder.String(), "\r\n"), "\n") {
+						fmt.Fprintf(s.Conn, "250-%s\r\n", line)
+					}
+				} else {
+					var builder strings.Builder
+					RenderRaceHeader(&builder, s.Config.Version)
 					for _, line := range strings.Split(strings.TrimRight(builder.String(), "\r\n"), "\n") {
 						fmt.Fprintf(s.Conn, "250-%s\r\n", line)
 					}
