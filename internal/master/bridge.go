@@ -149,7 +149,6 @@ var _ plugin.MasterBridge = (*Bridge)(nil)
 // ListDir returns directory entries from the master's VFS.
 func (b *Bridge) ListDir(dirPath string) []core.MasterFileEntry {
 	vfsFiles := b.sm.GetVFS().ListDirectory(dirPath)
-	log.Printf("[Bridge] ListDir(%s) -> %d entries from VFS", dirPath, len(vfsFiles))
 	entries := make([]core.MasterFileEntry, 0, len(vfsFiles))
 	for _, f := range vfsFiles {
 		entries = append(entries, core.MasterFileEntry{
