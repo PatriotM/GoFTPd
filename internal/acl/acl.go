@@ -2,6 +2,7 @@ package acl
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	pathpkg "path"
 	"path/filepath"
@@ -12,9 +13,26 @@ import (
 )
 
 type Rule struct {
-	Type     string `yaml:"type"`     // privpath, upload, download, makedir, delete, nuke, etc
-	Path     string `yaml:"path"`     // /site/*, /site/PRE/*, etc
-	Required string `yaml:"required"` // 1, *, "1 =SiteOP", "A =NUKERS", "=Admin", etc
+	Type        string       `yaml:"type"`     // privpath, upload, download, makedir, delete, nuke, etc
+	Path        string       `yaml:"path"`     // /site/*, /site/PRE/*, etc
+	Required    string       `yaml:"required"` // 1, *, "1 =SiteOP", "A =NUKERS", "=Admin", etc
+	Requirement *Requirement `yaml:"-"`
+}
+
+type Requirement struct {
+	RoleRef   string
+	Anyone    bool
+	Nobody    bool
+	AllFlags  []string
+	AnyFlags  []string
+	NotFlags  []string
+	AllGroups []string
+	AnyGroups []string
+	NotGroups []string
+	Users     []string
+	NotUsers  []string
+	AnyOf     []*Requirement
+	AllOf     []*Requirement
 }
 
 type Engine struct {
@@ -23,6 +41,193 @@ type Engine struct {
 
 type yamlRulesFile struct {
 	Rules []Rule `yaml:"rules"`
+}
+
+type yamlStructuredRulesFile struct {
+	Roles map[string]yamlRequirementRef `yaml:"roles"`
+	Rules yaml.Node                     `yaml:"rules"`
+}
+
+type yamlRuleGroupEntry struct {
+	Path     string             `yaml:"path"`
+	Paths    []string           `yaml:"paths"`
+	Allow    []string           `yaml:"allow"`
+	Deny     []string           `yaml:"deny"`
+	Required yamlRequirementRef `yaml:"required"`
+}
+
+type yamlRequirementRef struct {
+	RoleName string
+	Spec     *Requirement
+}
+
+func (r *yamlRequirementRef) UnmarshalYAML(value *yaml.Node) error {
+	switch value.Kind {
+	case 0:
+		return nil
+	default:
+		req, err := parseRequirementNode(value)
+		if err != nil {
+			return err
+		}
+		if req == nil {
+			return fmt.Errorf("unsupported required format")
+		}
+		r.RoleName = ""
+		r.Spec = req
+		return nil
+	}
+}
+
+func parseRequirementNode(value *yaml.Node) (*Requirement, error) {
+	switch value.Kind {
+	case yaml.ScalarNode:
+		text := strings.TrimSpace(value.Value)
+		if strings.HasPrefix(text, "$") {
+			return &Requirement{RoleRef: strings.TrimSpace(strings.TrimPrefix(text, "$"))}, nil
+		}
+		req := &Requirement{}
+		return req, parseRequirementScalar(req, text)
+	case yaml.MappingNode:
+		req := &Requirement{}
+		for i := 0; i+1 < len(value.Content); i += 2 {
+			key := strings.ToLower(strings.TrimSpace(value.Content[i].Value))
+			val := value.Content[i+1]
+			switch key {
+			case "anyone":
+				var b bool
+				if err := val.Decode(&b); err != nil {
+					return nil, err
+				}
+				req.Anyone = b
+			case "nobody":
+				var b bool
+				if err := val.Decode(&b); err != nil {
+					return nil, err
+				}
+				req.Nobody = b
+			case "all_flags":
+				if err := val.Decode(&req.AllFlags); err != nil {
+					return nil, err
+				}
+			case "any_flags":
+				if err := val.Decode(&req.AnyFlags); err != nil {
+					return nil, err
+				}
+			case "not_flags":
+				if err := val.Decode(&req.NotFlags); err != nil {
+					return nil, err
+				}
+			case "all_groups":
+				if err := val.Decode(&req.AllGroups); err != nil {
+					return nil, err
+				}
+			case "any_groups":
+				if err := val.Decode(&req.AnyGroups); err != nil {
+					return nil, err
+				}
+			case "not_groups":
+				if err := val.Decode(&req.NotGroups); err != nil {
+					return nil, err
+				}
+			case "users":
+				if err := val.Decode(&req.Users); err != nil {
+					return nil, err
+				}
+			case "not_users":
+				if err := val.Decode(&req.NotUsers); err != nil {
+					return nil, err
+				}
+			case "any_of":
+				children, err := parseRequirementList(val)
+				if err != nil {
+					return nil, err
+				}
+				req.AnyOf = children
+			case "all_of":
+				children, err := parseRequirementList(val)
+				if err != nil {
+					return nil, err
+				}
+				req.AllOf = children
+			default:
+				return nil, fmt.Errorf("unsupported required key %q", key)
+			}
+		}
+		return req, nil
+	default:
+		return nil, fmt.Errorf("unsupported required format")
+	}
+}
+
+func parseRequirementList(value *yaml.Node) ([]*Requirement, error) {
+	if value.Kind != yaml.SequenceNode {
+		return nil, fmt.Errorf("expected sequence")
+	}
+	var out []*Requirement
+	for _, child := range value.Content {
+		req, err := parseRequirementNode(child)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, req)
+	}
+	return out, nil
+}
+
+func parseRequirementScalar(req *Requirement, text string) error {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	if text == "*" {
+		req.Anyone = true
+		return nil
+	}
+	if text == "!*" {
+		req.Nobody = true
+		return nil
+	}
+	for _, token := range strings.Fields(text) {
+		token = strings.TrimSpace(token)
+		if token == "" {
+			continue
+		}
+		switch {
+		case token == "*":
+			req.Anyone = true
+		case token == "!*":
+			req.Nobody = true
+		case strings.HasPrefix(token, "!@"):
+			name := strings.TrimSpace(strings.TrimPrefix(token, "!@"))
+			if name != "" {
+				req.NotUsers = append(req.NotUsers, name)
+			}
+		case strings.HasPrefix(token, "!="):
+			group := strings.TrimSpace(strings.TrimPrefix(token, "!="))
+			if group != "" {
+				req.NotGroups = append(req.NotGroups, group)
+			}
+		case strings.HasPrefix(token, "!"):
+			flag := strings.TrimSpace(strings.TrimPrefix(token, "!"))
+			if flag != "" {
+				req.NotFlags = append(req.NotFlags, flag)
+			}
+		case strings.HasPrefix(token, "@"):
+			name := strings.TrimSpace(strings.TrimPrefix(token, "@"))
+			if name != "" {
+				req.Users = append(req.Users, name)
+			}
+		case strings.HasPrefix(token, "="):
+			group := strings.TrimSpace(strings.TrimPrefix(token, "="))
+			if group != "" {
+				req.AnyGroups = append(req.AnyGroups, group)
+			}
+		default:
+			req.AllFlags = append(req.AllFlags, token)
+		}
+	}
+	return nil
 }
 
 // LoadEngine loads ACL rules from a file
@@ -73,10 +278,32 @@ func LoadEngine(path string) (*Engine, error) {
 func loadYAMLRules(e *Engine, data []byte) bool {
 	var file yamlRulesFile
 	if err := yaml.Unmarshal(data, &file); err != nil {
-		return false
+		var structured yamlStructuredRulesFile
+		if err2 := yaml.Unmarshal(data, &structured); err2 != nil {
+			return false
+		}
+		rules, ok := compileStructuredRules(structured)
+		if !ok {
+			return false
+		}
+		for _, rule := range rules {
+			e.RulesByType[rule.Type] = append(e.RulesByType[rule.Type], rule)
+		}
+		return true
 	}
 	if len(file.Rules) == 0 {
-		return false
+		var structured yamlStructuredRulesFile
+		if err := yaml.Unmarshal(data, &structured); err != nil {
+			return false
+		}
+		rules, ok := compileStructuredRules(structured)
+		if !ok {
+			return false
+		}
+		for _, rule := range rules {
+			e.RulesByType[rule.Type] = append(e.RulesByType[rule.Type], rule)
+		}
+		return true
 	}
 	for _, rule := range file.Rules {
 		rule.Type = strings.ToLower(strings.TrimSpace(rule.Type))
@@ -88,9 +315,193 @@ func loadYAMLRules(e *Engine, data []byte) bool {
 		if rule.Required == "" {
 			rule.Required = "*"
 		}
+		if rule.Requirement == nil {
+			rule.Requirement = &Requirement{}
+			_ = parseRequirementScalar(rule.Requirement, rule.Required)
+		}
 		e.RulesByType[rule.Type] = append(e.RulesByType[rule.Type], rule)
 	}
 	return true
+}
+
+func compileStructuredRules(file yamlStructuredRulesFile) ([]Rule, bool) {
+	if file.Rules.Kind == 0 {
+		return nil, false
+	}
+	if file.Rules.Kind == yaml.SequenceNode {
+		return nil, false
+	}
+	roles := make(map[string]*Requirement, len(file.Roles))
+	for name, ref := range file.Roles {
+		req, ok := resolveRequirement(ref, file.Roles, nil)
+		if !ok {
+			return nil, false
+		}
+		roles[strings.ToLower(strings.TrimSpace(name))] = req
+	}
+	var groups map[string][]yamlRuleGroupEntry
+	if err := file.Rules.Decode(&groups); err != nil {
+		return nil, false
+	}
+	var compiled []Rule
+	for ruleType, entries := range groups {
+		ruleType = strings.ToLower(strings.TrimSpace(ruleType))
+		if ruleType == "" {
+			continue
+		}
+		for _, entry := range entries {
+			req, ok := resolveRequirement(entry.Required, file.Roles, roles)
+			if !ok {
+				return nil, false
+			}
+			requiredText := requirementToLegacyString(req)
+			paths := expandRuleEntryPaths(entry)
+			for _, path := range paths {
+				path = strings.TrimSpace(path)
+				if path == "" {
+					continue
+				}
+				compiled = append(compiled, Rule{
+					Type:        ruleType,
+					Path:        path,
+					Required:    requiredText,
+					Requirement: cloneRequirement(req),
+				})
+			}
+		}
+	}
+	return compiled, len(compiled) > 0
+}
+
+func expandRuleEntryPaths(entry yamlRuleGroupEntry) []string {
+	var paths []string
+	if entry.Path != "" {
+		paths = append(paths, entry.Path)
+	}
+	paths = append(paths, entry.Paths...)
+	paths = append(paths, entry.Allow...)
+	paths = append(paths, entry.Deny...)
+	return paths
+}
+
+func resolveRequirement(ref yamlRequirementRef, rawRoles map[string]yamlRequirementRef, expanded map[string]*Requirement) (*Requirement, bool) {
+	if ref.Spec != nil {
+		if ref.Spec.RoleRef != "" {
+			return resolveRoleRequirement(ref.Spec.RoleRef, rawRoles, expanded)
+		}
+		return cloneRequirement(ref.Spec), true
+	}
+	if ref.RoleName == "" {
+		req := &Requirement{Anyone: true}
+		return req, true
+	}
+	return resolveRoleRequirement(ref.RoleName, rawRoles, expanded)
+}
+
+func resolveRoleRequirement(name string, rawRoles map[string]yamlRequirementRef, expanded map[string]*Requirement) (*Requirement, bool) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return nil, false
+	}
+	if expanded != nil {
+		if req, ok := expanded[name]; ok {
+			return cloneRequirement(req), true
+		}
+	}
+	roleRef, ok := rawRoles[name]
+	if !ok {
+		for key, candidate := range rawRoles {
+			if strings.EqualFold(key, name) {
+				roleRef = candidate
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return nil, false
+		}
+	}
+	if roleRef.Spec != nil {
+		if roleRef.Spec.RoleRef != "" {
+			return resolveRoleRequirement(roleRef.Spec.RoleRef, rawRoles, expanded)
+		}
+		return cloneRequirement(roleRef.Spec), true
+	}
+	return nil, false
+}
+
+func cloneRequirement(req *Requirement) *Requirement {
+	if req == nil {
+		return nil
+	}
+	return &Requirement{
+		RoleRef:   req.RoleRef,
+		Anyone:    req.Anyone,
+		Nobody:    req.Nobody,
+		AllFlags:  append([]string(nil), req.AllFlags...),
+		AnyFlags:  append([]string(nil), req.AnyFlags...),
+		NotFlags:  append([]string(nil), req.NotFlags...),
+		AllGroups: append([]string(nil), req.AllGroups...),
+		AnyGroups: append([]string(nil), req.AnyGroups...),
+		NotGroups: append([]string(nil), req.NotGroups...),
+		Users:     append([]string(nil), req.Users...),
+		NotUsers:  append([]string(nil), req.NotUsers...),
+		AnyOf:     cloneRequirementList(req.AnyOf),
+		AllOf:     cloneRequirementList(req.AllOf),
+	}
+}
+
+func cloneRequirementList(reqs []*Requirement) []*Requirement {
+	if len(reqs) == 0 {
+		return nil
+	}
+	out := make([]*Requirement, 0, len(reqs))
+	for _, req := range reqs {
+		out = append(out, cloneRequirement(req))
+	}
+	return out
+}
+
+func requirementToLegacyString(req *Requirement) string {
+	if req == nil {
+		return "*"
+	}
+	if req.Nobody {
+		return "!*"
+	}
+	var parts []string
+	if req.Anyone {
+		parts = append(parts, "*")
+	}
+	parts = append(parts, req.AllFlags...)
+	for _, flag := range req.AnyFlags {
+		parts = append(parts, "{anyflag:"+flag+"}")
+	}
+	for _, flag := range req.NotFlags {
+		parts = append(parts, "!"+flag)
+	}
+	for _, group := range req.AllGroups {
+		parts = append(parts, "{allgroup:"+group+"}")
+	}
+	for _, group := range req.AnyGroups {
+		parts = append(parts, "="+group)
+	}
+	for _, group := range req.NotGroups {
+		parts = append(parts, "!="+group)
+	}
+	for _, userName := range req.Users {
+		parts = append(parts, "@"+userName)
+	}
+	for _, userName := range req.NotUsers {
+		parts = append(parts, "!@"+userName)
+	}
+	if len(req.AnyOf) > 0 || len(req.AllOf) > 0 {
+		parts = append(parts, "{structured}")
+	}
+	if len(parts) == 0 {
+		return "*"
+	}
+	return strings.Join(parts, " ")
 }
 
 // pathMatches checks if path matches pattern
@@ -141,106 +552,106 @@ func pathMatches(pattern, vpath string) bool {
 
 // checkRequired checks if user meets requirement
 func checkRequired(required string, u *user.User) bool {
-	required = strings.TrimSpace(required)
+	req := &Requirement{}
+	_ = parseRequirementScalar(req, required)
+	return checkRequirement(req, u)
+}
 
-	// "*" = anyone
-	if required == "*" {
+func checkRequirement(req *Requirement, u *user.User) bool {
+	if req == nil {
 		return true
 	}
-
-	var flags []string
-	var groups []string
-	var users []string
-	var denyFlags []string
-	var denyGroups []string
-	var denyUsers []string
-	allowAll := false
-	for _, token := range strings.Fields(required) {
-		token = strings.TrimSpace(token)
-		if token == "" {
-			continue
-		}
-		if token == "*" {
-			allowAll = true
-			continue
-		}
-		if token == "!*" {
-			return false
-		}
-		if strings.HasPrefix(token, "!@") {
-			name := strings.TrimSpace(strings.TrimPrefix(token, "!@"))
-			if name != "" {
-				denyUsers = append(denyUsers, name)
-			}
-			continue
-		}
-		if strings.HasPrefix(token, "!=") {
-			group := strings.TrimSpace(strings.TrimPrefix(token, "!="))
-			if group != "" {
-				denyGroups = append(denyGroups, group)
-			}
-			continue
-		}
-		if strings.HasPrefix(token, "!") {
-			flag := strings.TrimSpace(strings.TrimPrefix(token, "!"))
-			if flag != "" {
-				denyFlags = append(denyFlags, flag)
-			}
-			continue
-		}
-		if strings.HasPrefix(token, "@") {
-			name := strings.TrimSpace(strings.TrimPrefix(token, "@"))
-			if name != "" {
-				users = append(users, name)
-			}
-			continue
-		}
-		if strings.HasPrefix(token, "=") {
-			group := strings.TrimSpace(strings.TrimPrefix(token, "="))
-			if group != "" {
-				groups = append(groups, group)
-			}
-			continue
-		}
-		flags = append(flags, token)
+	if req.Nobody {
+		return false
+	}
+	if u == nil {
+		return false
 	}
 
-	for _, flag := range denyFlags {
+	for _, flag := range req.NotFlags {
 		if u.HasFlag(flag) {
 			return false
 		}
 	}
-	for _, group := range denyGroups {
+	for _, group := range req.NotGroups {
 		if u.IsInGroup(group) {
 			return false
 		}
 	}
-	for _, name := range denyUsers {
+	for _, name := range req.NotUsers {
 		if strings.EqualFold(u.Name, name) {
 			return false
 		}
 	}
-	if !hasAllFlags(u, flags) {
+	if !hasAllFlags(u, req.AllFlags) {
 		return false
 	}
-	if len(users) > 0 {
-		for _, name := range users {
-			if strings.EqualFold(u.Name, name) {
-				return true
+	if len(req.AnyFlags) > 0 {
+		matched := false
+		for _, flag := range req.AnyFlags {
+			if u.HasFlag(flag) {
+				matched = true
+				break
 			}
 		}
-		return false
-	}
-	if len(groups) == 0 {
-		return allowAll || len(flags) > 0 || len(denyFlags) > 0 || len(denyGroups) > 0 || len(denyUsers) > 0
-	}
-	for _, group := range groups {
-		if u.IsInGroup(group) {
-			return true
+		if !matched {
+			return false
 		}
 	}
+	for _, group := range req.AllGroups {
+		if !u.IsInGroup(group) {
+			return false
+		}
+	}
+	if len(req.AnyGroups) > 0 {
+		matched := false
+		for _, group := range req.AnyGroups {
+			if u.IsInGroup(group) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	if len(req.Users) > 0 {
+		matched := false
+		for _, name := range req.Users {
+			if strings.EqualFold(u.Name, name) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	for _, child := range req.AllOf {
+		if !checkRequirement(child, u) {
+			return false
+		}
+	}
+	if len(req.AnyOf) > 0 {
+		matched := false
+		for _, child := range req.AnyOf {
+			if checkRequirement(child, u) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
 
-	return false
+func ruleAllows(rule Rule, u *user.User) bool {
+	if rule.Requirement != nil {
+		return checkRequirement(rule.Requirement, u)
+	}
+	return checkRequired(rule.Required, u)
 }
 
 func ruleTypeForAction(action string) string {
@@ -299,7 +710,7 @@ func (e *Engine) CanPerform(u *user.User, action string, vpath string) bool {
 		for _, rule := range rules {
 			rulePath := filepath.ToSlash(filepath.Clean(strings.ReplaceAll(strings.TrimSpace(rule.Path), "\\", "/")))
 			if pathMatches(rule.Path, vpath) || pathIsBelow(vpath, rulePath) {
-				return checkRequired(rule.Required, u)
+				return ruleAllows(rule, u)
 			}
 		}
 	}
@@ -309,7 +720,7 @@ func (e *Engine) CanPerform(u *user.User, action string, vpath string) bool {
 		for _, rule := range privRules {
 			rulePath := filepath.ToSlash(filepath.Clean(strings.ReplaceAll(strings.TrimSpace(rule.Path), "\\", "/")))
 			if pathMatches(rule.Path, vpath) || pathIsBelow(vpath, rulePath) {
-				return checkRequired(rule.Required, u)
+				return ruleAllows(rule, u)
 			}
 		}
 	}
@@ -331,7 +742,7 @@ func (e *Engine) CanPerformRuleOnly(u *user.User, action string, vpath string) b
 		for _, rule := range rules {
 			rulePath := filepath.ToSlash(filepath.Clean(strings.ReplaceAll(strings.TrimSpace(rule.Path), "\\", "/")))
 			if pathMatches(rule.Path, vpath) || pathIsBelow(vpath, rulePath) {
-				return checkRequired(rule.Required, u)
+				return ruleAllows(rule, u)
 			}
 		}
 	}
