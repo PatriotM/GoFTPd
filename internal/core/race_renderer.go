@@ -130,7 +130,7 @@ func HasRaceStats(users []VFSRaceUser, groups []VFSRaceGroup, totalBytes int64, 
 	if totalBytes > 0 {
 		return true
 	}
-	if present > 0 || total > 0 {
+	if present > 0 {
 		return true
 	}
 	return false
@@ -202,7 +202,7 @@ func RenderRaceStats(w io.Writer, users []VFSRaceUser, groups []VFSRaceGroup, to
 	width := 70
 
 	raw(w, line(cpTL, cpHZ, cpTR, width))
-	text(w, fmt.Sprintf(" GoFTPd %s :: Race Stats ", version), width)
+	text(w, fmt.Sprintf(" You are using GoFTPd v%s ", version), width)
 	text(w, "", width)
 	text(w, "   ____       _____ _____ ____     _  ", width)
 	text(w, "  / ___| ___ |  ___|_   _|  _ \\ __| | ", width)
@@ -270,6 +270,21 @@ func RenderRaceStats(w io.Writer, users []VFSRaceUser, groups []VFSRaceGroup, to
 	// Bottom border uses bottom-T junctions so column separators from the
 	// TOTAL row terminate cleanly into the bottom edge.
 	raw(w, sep(cpBL, cpBU, cpBR, 28, 11, 8, 11, 8))
+}
+
+func RenderRaceHeader(w io.Writer, version string) {
+	width := 70
+
+	raw(w, line(cpTL, cpHZ, cpTR, width))
+	text(w, fmt.Sprintf(" You are using GoFTPd v%s ", version), width)
+	text(w, "", width)
+	text(w, "   ____       _____ _____ ____     _  ", width)
+	text(w, "  / ___| ___ |  ___|_   _|  _ \\ __| | ", width)
+	text(w, " | |  _ / _ \\| |_    | | | |_) / _` | ", width)
+	text(w, " | |_| | (_) |  _|   | | |  __/ (_| | ", width)
+	text(w, "  \\____|\\___/|_|     |_| |_|   \\__,_| ", width)
+	text(w, "", width)
+	raw(w, line(cpBL, cpHZ, cpBR, width))
 }
 
 func RenderFTPReplyBlock(w io.Writer, code int, finalLine string, render func(io.Writer)) {
