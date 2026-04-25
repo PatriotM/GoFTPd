@@ -84,9 +84,14 @@ func (p *Plugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 		return p.reply(evt, p.render("TOPICCMD_ERROR", map[string]string{"response": "topic setter is not configured"}, "TOPIC: topic setter is not configured.")), nil
 	}
 
-	target, topicText := parseTopicArgs(evt.Data["args"])
+	rawArgs := strings.TrimSpace(evt.Data["args"])
+	if rawArgs == "" {
+		return p.reply(evt, "TOPIC: Usage: !topic #channel topic text"), nil
+	}
+
+	target, topicText := parseTopicArgs(rawArgs)
 	if target == "" || topicText == "" {
-		return p.reply(evt, p.render("TOPICCMD_USAGE", map[string]string{}, "TOPIC: Usage: !topic #channel topic text")), nil
+		return p.reply(evt, "TOPIC: Usage: !topic #channel topic text"), nil
 	}
 	if !p.targetAllowed(target) {
 		return p.reply(evt, p.render("TOPICCMD_ERROR", map[string]string{"response": fmt.Sprintf("target %s is not allowed", target)}, "TOPIC: target channel is not allowed.")), nil
@@ -98,8 +103,9 @@ func (p *Plugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 		}, "TOPIC: failed to set topic: "+err.Error())), nil
 	}
 	return p.reply(evt, p.render("TOPICCMD_OK", map[string]string{
-		"channel": target,
-		"topic":   topicText,
+		"channel":  target,
+		"topic":    topicText,
+		"response": topicText,
 	}, fmt.Sprintf("TOPIC: set %s", target))), nil
 }
 

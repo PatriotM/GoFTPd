@@ -8,8 +8,10 @@ password: "goftpd"
 tls: true
 insecure_skip_verify: true
 timeout_seconds: 10
+
 staff_channels: ["#goftpd-staff"]
 staff_hosts: []
+
 # Only these SITE subcommands can be called from IRC. Use ["*"] only if
 # the staff channel is fully trusted and the FTP user is intentionally
 # allowed to run every SITE admin command.
@@ -65,5 +67,6 @@ allowed_commands:
   - REQFILLED
   - REQDEL
   - REQWIPE
+
 # reply_target supports "channel", "notice", or a fixed "#channel".
 reply_target: "channel"

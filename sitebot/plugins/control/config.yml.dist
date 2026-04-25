@@ -4,6 +4,9 @@
 #   !restart
 staff_channels: ["#goftpd-staff"]
 staff_hosts: []
+
 # reply_target supports "channel", "notice", or a fixed "#channel".
 reply_target: "channel"
+
+# Delay before restart so the reply can make it to IRC first.
 restart_delay_ms: 800

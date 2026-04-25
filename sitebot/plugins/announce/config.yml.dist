@@ -1,5 +1,10 @@
+# Fallback channel for announce types that do not have a more specific route.
 default_channel: "#goftpd-staff"
+
+# Shared theme file used to render formatted announce lines.
 theme_file: "./etc/templates/pzsng.theme"
+
+# Explicit type -> channel routes.
 type_routes:
   NUKE: ["#goftpd-nuke"]
   UNNUKE: ["#goftpd-nuke"]

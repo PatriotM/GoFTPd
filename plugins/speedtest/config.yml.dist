@@ -1,3 +1,7 @@
+# Virtual speedtest root.
 dir: "/SPEEDTEST"
+
+# Sparse file sizes to create, in megabytes.
 files_mb: [100, 500, 1000]
+
 debug: false

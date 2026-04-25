@@ -6,9 +6,13 @@ password: "goftpd"
 tls: true
 insecure_skip_verify: true
 timeout_seconds: 10
+
 channels: ["#goftpd-chat"]
+
 # reply_target supports "channel", "notice", or a fixed "#channel".
 reply_target: "channel"
+
+# One login target per site to check.
 targets:
   # setup.sh replaces this with your configured site name by default.
   - name: "GoFTPd"
