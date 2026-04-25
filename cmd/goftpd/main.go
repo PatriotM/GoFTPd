@@ -105,6 +105,7 @@ func main() {
 			cfg.TLSEnabled,
 			cfg.TLSCert,
 			cfg.TLSKey,
+			time.Duration(intFromCfg(cfg.Master, "heartbeat_timeout", 60))*time.Second,
 		)
 		sm.SetDiskStatusHook(func(name string, status protocol.DiskStatus, online, available bool, sections []string) {
 			core.PublishEvent(cfg, core.Event{

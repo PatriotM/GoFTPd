@@ -35,7 +35,8 @@ passthrough:  true              # true = client connects directly to slave (reco
 master:
   listen_host:       "0.0.0.0"  # Interface to bind slave-control socket
   control_port:      1099       # Port slaves connect to
-  heartbeat_timeout: 60         # Seconds before a silent slave is marked offline
+  heartbeat_timeout: 60         # Seconds before the master marks a silent slave offline.
+                                # The master will try a ping at about half this interval.
 
 
 # =============================================================================
@@ -52,7 +53,8 @@ slave:
   bind_ip:       ""             # Public IP advertised in PASV responses from this slave.
                                 # If empty, slave auto-detects from the master connection.
                                 # Set explicitly if the slave sits behind NAT.
-  timeout:       60             # Network timeout in seconds for slave↔master operations
+  timeout:       60             # Slave-side inactivity timeout for master traffic.
+                                # Keep this aligned with master.heartbeat_timeout.
 
 
 # =============================================================================

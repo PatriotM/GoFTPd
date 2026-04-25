@@ -20,11 +20,12 @@ import (
 const vfsFilePath = "userdata/vfs.dat"
 
 type SlaveManager struct {
-	listenHost string
-	listenPort int
-	tlsEnabled bool
-	tlsCert    string
-	tlsKey     string
+	listenHost       string
+	listenPort       int
+	tlsEnabled       bool
+	tlsCert          string
+	tlsKey           string
+	heartbeatTimeout time.Duration
 
 	slaves   map[string]*RemoteSlave
 	slavesMu sync.RWMutex
@@ -54,16 +55,20 @@ type SlaveRoutePolicy struct {
 	ReadOnly bool     // scan/download only; never selected for uploads
 }
 
-func NewSlaveManager(host string, port int, tlsEnabled bool, tlsCert, tlsKey string) *SlaveManager {
+func NewSlaveManager(host string, port int, tlsEnabled bool, tlsCert, tlsKey string, heartbeatTimeout time.Duration) *SlaveManager {
+	if heartbeatTimeout <= 0 {
+		heartbeatTimeout = 60 * time.Second
+	}
 	return &SlaveManager{
-		listenHost: host,
-		listenPort: port,
-		tlsEnabled: tlsEnabled,
-		tlsCert:    tlsCert,
-		tlsKey:     tlsKey,
-		slaves:     make(map[string]*RemoteSlave),
-		policies:   make(map[string]SlaveRoutePolicy),
-		vfs:        NewVirtualFileSystem(),
+		listenHost:       host,
+		listenPort:       port,
+		tlsEnabled:       tlsEnabled,
+		tlsCert:          tlsCert,
+		tlsKey:           tlsKey,
+		heartbeatTimeout: heartbeatTimeout,
+		slaves:           make(map[string]*RemoteSlave),
+		policies:         make(map[string]SlaveRoutePolicy),
+		vfs:              NewVirtualFileSystem(),
 	}
 }
 
@@ -234,7 +239,7 @@ func (sm *SlaveManager) handleSlaveConnection(conn net.Conn) {
 		return
 	}
 
-	rs := NewRemoteSlave(slaveName, conn, stream)
+	rs := NewRemoteSlave(slaveName, conn, stream, sm.heartbeatTimeout)
 	sm.slaves[slaveName] = rs
 	sm.slavesMu.Unlock()
 

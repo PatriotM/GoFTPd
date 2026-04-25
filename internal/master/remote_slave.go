@@ -13,7 +13,6 @@ import (
 
 const (
 	masterSocketTimeout = 10 * time.Second
-	masterActualTimeout = 60 * time.Second
 )
 
 // RemoteSlave represents a connected slave as seen from the master.
@@ -43,6 +42,7 @@ type RemoteSlave struct {
 	// Timing
 	lastResponseReceived atomic.Int64
 	lastCommandSent      atomic.Int64
+	heartbeatTimeout     time.Duration
 
 	// Properties ()
 	properties map[string]string
@@ -54,14 +54,18 @@ type RemoteSlave struct {
 }
 
 // NewRemoteSlave creates a new remote slave from an accepted connection.
-func NewRemoteSlave(name string, conn net.Conn, stream *protocol.ObjectStream) *RemoteSlave {
+func NewRemoteSlave(name string, conn net.Conn, stream *protocol.ObjectStream, heartbeatTimeout time.Duration) *RemoteSlave {
+	if heartbeatTimeout <= 0 {
+		heartbeatTimeout = 60 * time.Second
+	}
 	rs := &RemoteSlave{
-		name:          name,
-		conn:          conn,
-		stream:        stream,
-		indexPool:     make(chan string, 256),
-		commandNotify: make(chan struct{}, 256),
-		properties:    make(map[string]string),
+		name:             name,
+		conn:             conn,
+		stream:           stream,
+		indexPool:        make(chan string, 256),
+		commandNotify:    make(chan struct{}, 256),
+		properties:       make(map[string]string),
+		heartbeatTimeout: heartbeatTimeout,
 	}
 
 	// Fill index pool ( 00-ff)
@@ -177,7 +181,7 @@ func (rs *RemoteSlave) SendCommand(ac *protocol.AsyncCommand) error {
 // ().
 func (rs *RemoteSlave) FetchResponse(index string, timeout time.Duration) (interface{}, error) {
 	if timeout == 0 {
-		timeout = masterActualTimeout
+		timeout = rs.heartbeatTimeout
 	}
 
 	// Create a channel for this index
@@ -227,7 +231,7 @@ func (rs *RemoteSlave) Run(masterSlaveManager *SlaveManager) {
 				lastResp := rs.lastResponseReceived.Load()
 
 				// Check if we need to ping
-				halfTimeout := masterActualTimeout.Milliseconds() / 2
+				halfTimeout := rs.heartbeatTimeout.Milliseconds() / 2
 				if now-lastResp > halfTimeout {
 					if pingIndex != "" {
 						// Previous ping lost
@@ -245,7 +249,7 @@ func (rs *RemoteSlave) Run(masterSlaveManager *SlaveManager) {
 				}
 
 				// Check actual timeout
-				if now-lastResp > masterActualTimeout.Milliseconds() {
+				if now-lastResp > rs.heartbeatTimeout.Milliseconds() {
 					rs.SetOffline(fmt.Sprintf("no response in %dms", now-lastResp))
 					return
 				}
