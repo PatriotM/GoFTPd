@@ -1857,6 +1857,23 @@ func estimateRaceTimeLeft(dirPath string, totalBytes int64, present, total int, 
 	return fmt.Sprintf("%ds", seconds)
 }
 
+func estimateZipTimeLeft(dirPath string, totalBytes int64, present, total int, bridge MasterBridge) string {
+	if totalBytes <= 0 || present <= 0 || total <= present {
+		return "0s"
+	}
+	speed := currentRaceSpeedMB(dirPath, totalBytes, bridge)
+	if speed <= 0 {
+		return "N/A"
+	}
+	avgBytesPerFile := float64(totalBytes) / float64(present)
+	bytesLeft := avgBytesPerFile * float64(total-present)
+	seconds := int((bytesLeft / 1024.0 / 1024.0) / speed)
+	if seconds < 1 {
+		seconds = 1
+	}
+	return fmt.Sprintf("%ds", seconds)
+}
+
 func dirRaceProgress(bridge MasterBridge, cfg *Config, dirPath string) (totalBytes int64, present int, total int) {
 	if bridge == nil || cfg == nil {
 		return 0, 0, 0
@@ -2450,7 +2467,7 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 			data["t_totalmb"] = fmt.Sprintf("%.1f", float64(totalBytes)/1024.0/1024.0)
 			data["t_avgspeed"] = fmt.Sprintf("%.2fMB/s", currentRaceSpeedMB(dirPath, totalBytes, bridge))
 			if expected > 0 && expected > total {
-				data["t_timeleft"] = "N/A"
+				data["t_timeleft"] = estimateZipTimeLeft(dirPath, totalBytes, total, expected, bridge)
 			} else if expected > 0 {
 				data["t_timeleft"] = "0s"
 			} else {
