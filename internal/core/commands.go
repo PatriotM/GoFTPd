@@ -1860,6 +1860,9 @@ func dirRaceProgress(bridge MasterBridge, cfg *Config, dirPath string) (totalByt
 }
 
 func dirRaceStatusName(bridge MasterBridge, cfg *Config, dirPath, siteName string) string {
+	if !raceStatusEligibleDir(dirPath) {
+		return ""
+	}
 	totalBytes, present, total := dirRaceProgress(bridge, cfg, dirPath)
 	if total <= 0 {
 		return ""
@@ -1870,6 +1873,22 @@ func dirRaceStatusName(bridge MasterBridge, cfg *Config, dirPath, siteName strin
 	}
 	pct := (present * 100) / total
 	return fmt.Sprintf("%s - %3d%% Complete - [%s]", progressBar(present, total, 20), pct, siteName)
+}
+
+func raceStatusEligibleDir(dirPath string) bool {
+	cleaned := path.Clean("/" + strings.TrimSpace(dirPath))
+	if cleaned == "/" || cleaned == "." {
+		return false
+	}
+	parts := strings.Split(strings.TrimPrefix(cleaned, "/"), "/")
+	if len(parts) < 2 {
+		return false
+	}
+	switch strings.ToUpper(strings.TrimSpace(parts[0])) {
+	case "FOREIGN", "PRE", "ARCHIVE":
+		return len(parts) >= 3
+	}
+	return true
 }
 
 func emitRaceEndAfter(s *Session, users []VFSRaceUser, totalBytes int64, total int, xferMs int64, delay time.Duration) {
