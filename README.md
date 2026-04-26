@@ -373,7 +373,10 @@ For FiSH keys, the final config file uses `cbc:<key>`. The interactive
 `setup.sh` prompt expects raw keys only and writes the `cbc:` prefix for you.
 `encryption.keys` are used per channel, while `encryption.private_key` is used
 for encrypted PM/NOTICE replies and encrypted commands sent directly to the
-bot nick.
+bot nick. If `encryption.auto_exchange` is enabled, the sitebot will also do
+DH1080 auto key exchange for private PM/NOTICE traffic with users. That
+auto-exchange is peer-to-peer only; channel and topic FiSH still use the
+static per-channel keys from `encryption.keys`.
 
 Sitebot command plugins can use the same split config layout:
 

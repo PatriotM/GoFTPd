@@ -647,6 +647,53 @@ set_sitebot_scalar() {
     replace_matching_line "${file}" "^  ${key}:" "  ${key}: ${value}"
 }
 
+set_master_section_enabled() {
+    local file="$1"
+    local section_path="$2"
+    local enabled_value="$3"
+    awk -v section_path="${section_path}" -v enabled_value="${enabled_value}" '
+        BEGIN { in_sections = 0; found = 0 }
+        /^sections:$/ {
+            in_sections = 1
+            print
+            next
+        }
+        in_sections {
+            if ($0 ~ /^  - "/) {
+                line = $0
+                gsub(/^  - "/, "", line)
+                gsub(/".*$/, "", line)
+                if (line == section_path) {
+                    found = 1
+                    if (enabled_value == "true") {
+                        print $0
+                    }
+                    next
+                }
+                print
+                next
+            }
+            if ($0 ~ /^[^[:space:]-]/) {
+                if (!found && enabled_value == "true") {
+                    print "  - \"" section_path "\""
+                }
+                in_sections = 0
+                print
+                next
+            }
+            print
+            next
+        }
+        { print }
+        END {
+            if (in_sections && !found && enabled_value == "true") {
+                print "  - \"" section_path "\""
+            }
+        }
+    ' "${file}" > "${file}.tmp"
+    mv "${file}.tmp" "${file}"
+}
+
 configure_sitebot_plugin_channels() {
     local main_channel="$1"
     local chat_channel="$2"
@@ -955,6 +1002,12 @@ configure_daemon() {
         "$(join_by ', ' "${daemon_created[@]}")" \
         "$(join_by ', ' "${daemon_enabled[@]}")" \
         "$(join_by ', ' "${daemon_disabled[@]}")"
+
+    if [ "${daemon_mode}" = "master" ] && [ -f "${daemon_config}" ]; then
+        set_master_section_enabled "${daemon_config}" "/PRE" "$(daemon_plugin_enabled_in_config "${daemon_config}" "pre")"
+        set_master_section_enabled "${daemon_config}" "/REQUESTS" "$(daemon_plugin_enabled_in_config "${daemon_config}" "request")"
+        set_master_section_enabled "${daemon_config}" "/SPEEDTEST" "$(daemon_plugin_enabled_in_config "${daemon_config}" "speedtest")"
+    fi
 }
 
 configure_sitebot() {
