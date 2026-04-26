@@ -249,6 +249,17 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				return false
 			}
 
+			if s.Config.PluginManager != nil {
+				if err := s.Config.PluginManager.ValidateLogin(s.User, remoteIP); err != nil {
+					if s.Config.Debug {
+						log.Printf("[PASS] User %s rejected by plugin login policy: %v", s.User.Name, err)
+					}
+					s.emitLoginFailure(s.User.Name, remoteIP, "plugin_rejected")
+					fmt.Fprintf(s.Conn, "530 %s.\r\n", err.Error())
+					return false
+				}
+			}
+
 			isTLSExempt := false
 			for _, exemptUser := range s.Config.TLSExemptUsers {
 				if exemptUser == s.User.Name {

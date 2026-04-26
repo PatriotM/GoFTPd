@@ -166,6 +166,28 @@ func (pm *PluginManager) ValidateMKDir(u *user.User, targetPath string) error {
 	return nil
 }
 
+func (pm *PluginManager) ValidateLogin(u *user.User, remoteIP string) error {
+	if pm == nil || u == nil {
+		return nil
+	}
+
+	pm.mu.RLock()
+	plugins := make([]plugin.Plugin, len(pm.plugins))
+	copy(plugins, pm.plugins)
+	pm.mu.RUnlock()
+
+	for _, p := range plugins {
+		v, ok := p.(plugin.LoginValidator)
+		if !ok {
+			continue
+		}
+		if err := v.ValidateLogin(u, remoteIP); err != nil {
+			return fmt.Errorf("%s: %w", p.Name(), err)
+		}
+	}
+	return nil
+}
+
 // StopAll calls Stop() on every registered plugin. Called at shutdown.
 func (pm *PluginManager) StopAll() error {
 	pm.mu.RLock()

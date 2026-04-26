@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"goftpd/internal/plugin"
+	"goftpd/internal/user"
 )
 
 type candidate struct {
@@ -21,7 +22,6 @@ type candidate struct {
 
 type Handler struct {
 	svc                   *plugin.Services
-	enabled               bool
 	interval              time.Duration
 	monitorUploads        bool
 	monitorDownloads      bool
@@ -35,11 +35,14 @@ type Handler struct {
 	excludePaths          []string
 	announceWarn          bool
 	announceKick          bool
+	tempbanAfterKick      bool
+	tempbanDuration       time.Duration
 	debug                 bool
 	stopCh                chan struct{}
 	wg                    sync.WaitGroup
 	mu                    sync.Mutex
 	candidates            map[uint64]candidate
+	tempBans              map[string]time.Time
 }
 
 func New() *Handler {
@@ -57,6 +60,7 @@ func New() *Handler {
 		excludePaths:          []string{"/PRE", "/REQUESTS", "/SPEEDTEST"},
 		stopCh:                make(chan struct{}),
 		candidates:            map[uint64]candidate{},
+		tempBans:              map[string]time.Time{},
 	}
 }
 
@@ -64,7 +68,6 @@ func (h *Handler) Name() string { return "slowupkick" }
 
 func (h *Handler) Init(svc *plugin.Services, cfg map[string]interface{}) error {
 	h.svc = svc
-	h.enabled = boolConfig(cfg, "enabled", false)
 	h.interval = durationSecondsConfig(cfg, "interval_seconds", 5)
 	h.monitorUploads = boolConfig(cfg, "monitor_uploads", true)
 	h.monitorDownloads = boolConfig(cfg, "monitor_downloads", true)
@@ -80,6 +83,8 @@ func (h *Handler) Init(svc *plugin.Services, cfg map[string]interface{}) error {
 	}
 	h.announceWarn = boolConfig(cfg, "announce_warn", true)
 	h.announceKick = boolConfig(cfg, "announce_kick", true)
+	h.tempbanAfterKick = boolConfig(cfg, "tempban_after_kick", true)
+	h.tempbanDuration = durationSecondsConfig(cfg, "tempban_seconds", 15)
 	h.debug = boolConfig(cfg, "debug", svc != nil && svc.Debug)
 	if h.uploadVerifyDelay < h.interval {
 		h.uploadVerifyDelay = h.interval
@@ -87,19 +92,14 @@ func (h *Handler) Init(svc *plugin.Services, cfg map[string]interface{}) error {
 	if h.downloadVerifyDelay < h.interval {
 		h.downloadVerifyDelay = h.interval
 	}
-	if !h.enabled {
-		return nil
-	}
 	if svc == nil || svc.ListActiveSessions == nil || svc.DisconnectSession == nil || svc.AbortTransfer == nil {
 		h.logf("disabled: required live session callbacks are not available")
-		h.enabled = false
 		return nil
 	}
 	h.wg.Add(1)
 	go h.loop()
 	h.logf(
-		"initialized enabled=%v uploads=%v downloads=%v up_min=%.1fKB/s down_min=%.1fKB/s up_verify=%s down_verify=%s min_users=%d",
-		h.enabled,
+		"initialized uploads=%v downloads=%v up_min=%.1fKB/s down_min=%.1fKB/s up_verify=%s down_verify=%s min_users=%d tempban=%v tempban_seconds=%d",
 		h.monitorUploads,
 		h.monitorDownloads,
 		h.minUploadSpeedBytes/1024.0,
@@ -107,11 +107,33 @@ func (h *Handler) Init(svc *plugin.Services, cfg map[string]interface{}) error {
 		h.uploadVerifyDelay,
 		h.downloadVerifyDelay,
 		h.minUsersOnline,
+		h.tempbanAfterKick,
+		int(h.tempbanDuration/time.Second),
 	)
 	return nil
 }
 
 func (h *Handler) OnEvent(evt *plugin.Event) error { return nil }
+
+func (h *Handler) ValidateLogin(u *user.User, remoteIP string) error {
+	if u == nil || !h.tempbanAfterKick || h.tempbanDuration <= 0 {
+		return nil
+	}
+	if _, excluded := h.excludeUsers[strings.ToLower(strings.TrimSpace(u.Name))]; excluded {
+		return nil
+	}
+	if _, excluded := h.excludeGroups[strings.ToLower(strings.TrimSpace(u.PrimaryGroup))]; excluded {
+		return nil
+	}
+	if until, ok := h.activeTempBan(u.Name, time.Now()); ok {
+		remaining := int(time.Until(until).Seconds())
+		if remaining < 1 {
+			remaining = 1
+		}
+		return fmt.Errorf("temporarily banned after slow transfer, retry in %ds", remaining)
+	}
+	return nil
+}
 
 func (h *Handler) Stop() error {
 	select {
@@ -139,9 +161,10 @@ func (h *Handler) loop() {
 }
 
 func (h *Handler) evaluate(now time.Time) {
-	if !h.enabled || h.svc == nil || h.svc.ListActiveSessions == nil {
+	if h.svc == nil || h.svc.ListActiveSessions == nil {
 		return
 	}
+	h.pruneExpiredTempBans(now)
 	sessions := h.svc.ListActiveSessions()
 	liveStats := []plugin.LiveTransferStat(nil)
 	if h.svc.GetLiveTransferStats != nil {
@@ -198,6 +221,9 @@ func (h *Handler) evaluate(now time.Time) {
 			h.svc.AbortTransfer(snap.TransferSlaveName, snap.TransferSlaveIdx, reason)
 		}
 		h.svc.DisconnectSession(snap.ID)
+		if h.tempbanAfterKick && h.tempbanDuration > 0 {
+			h.setTempBan(snap.User, now.Add(h.tempbanDuration))
+		}
 		if h.announceKick {
 			h.emitSlowEvent(policy.kickEvent, snap, speed, policy)
 			h.logf("kicked %s for slow %s in %s at %.1fKB/s", snap.User, policy.direction, snap.TransferPath, speed/1024.0)
@@ -324,6 +350,44 @@ func (h *Handler) removeCandidate(id uint64) {
 	delete(h.candidates, id)
 }
 
+func (h *Handler) setTempBan(username string, until time.Time) {
+	username = strings.ToLower(strings.TrimSpace(username))
+	if username == "" {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.tempBans[username] = until
+}
+
+func (h *Handler) activeTempBan(username string, now time.Time) (time.Time, bool) {
+	username = strings.ToLower(strings.TrimSpace(username))
+	if username == "" {
+		return time.Time{}, false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	until, ok := h.tempBans[username]
+	if !ok {
+		return time.Time{}, false
+	}
+	if !until.After(now) {
+		delete(h.tempBans, username)
+		return time.Time{}, false
+	}
+	return until, true
+}
+
+func (h *Handler) pruneExpiredTempBans(now time.Time) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for username, until := range h.tempBans {
+		if !until.After(now) {
+			delete(h.tempBans, username)
+		}
+	}
+}
+
 func (h *Handler) pruneCandidates(active map[uint64]struct{}) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -358,6 +422,9 @@ func (h *Handler) emitSlowEvent(eventType string, snap plugin.ActiveSession, spe
 		"slave_name":       strings.TrimSpace(snap.TransferSlaveName),
 		"transfer_index":   fmt.Sprintf("%d", snap.TransferSlaveIdx),
 		"session_id":       fmt.Sprintf("%d", snap.ID),
+	}
+	if h.tempbanAfterKick && h.tempbanDuration > 0 && strings.Contains(eventType, "KICK") {
+		data["tempban_seconds"] = fmt.Sprintf("%d", int(h.tempbanDuration/time.Second))
 	}
 	h.svc.EmitEvent(eventType, snap.TransferPath, path.Base(strings.TrimSpace(snap.TransferPath)), "", 0, speed/(1024.0*1024.0), data)
 }

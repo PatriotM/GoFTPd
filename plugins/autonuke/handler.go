@@ -29,7 +29,6 @@ type Handler struct {
 }
 
 type config struct {
-	Enabled                  bool
 	ScanIntervalSeconds      int
 	Host                     string
 	Port                     int
@@ -130,9 +129,6 @@ func (h *Handler) Init(svc *pluginpkg.Services, raw map[string]interface{}) erro
 		h.debug = svc.Debug
 	}
 	h.cfg = loadConfig(raw)
-	if !h.cfg.Enabled {
-		return nil
-	}
 	if h.svc == nil || h.svc.Bridge == nil {
 		h.logf("bridge unavailable, plugin idle")
 		return nil
@@ -829,7 +825,6 @@ func loadConfig(raw map[string]interface{}) config {
 	allowedRaw := subMap(raw, "allowed")
 	deleteRaw := subMap(raw, "delete_nukes")
 	cfg := config{
-		Enabled:                  true,
 		ScanIntervalSeconds:      intValue(raw, 600, "scan_interval_seconds", "SLEEPTIME"),
 		Host:                     stringValue(raw, "127.0.0.1", "host"),
 		Port:                     intValue(raw, 21212, "port"),

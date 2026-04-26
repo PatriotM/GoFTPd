@@ -13,19 +13,18 @@ import (
 )
 
 type Handler struct {
-	svc     *plugin.Services
-	enabled bool
-	dir     string
-	files   []int
-	debug   bool
-	once    sync.Once
-	stopCh  chan struct{}
+	svc    *plugin.Services
+	dir    string
+	files  []int
+	debug  bool
+	once   sync.Once
+	stopCh chan struct{}
 }
 
 func New() *Handler {
 	return &Handler{
-		dir:   "/SPEEDTEST",
-		files: []int{100, 500, 1000},
+		dir:    "/SPEEDTEST",
+		files:  []int{100, 500, 1000},
 		stopCh: make(chan struct{}),
 	}
 }
@@ -34,26 +33,23 @@ func (h *Handler) Name() string { return "speedtest" }
 
 func (h *Handler) Init(svc *plugin.Services, cfg map[string]interface{}) error {
 	h.svc = svc
-	h.enabled = boolConfig(cfg, "enabled", false)
 	h.dir = normalizeDir(stringConfig(cfg, "dir", "/SPEEDTEST"))
 	if files := intSliceConfig(cfg, "files_mb"); len(files) > 0 {
 		h.files = files
 	}
 	h.debug = boolConfig(cfg, "debug", svc != nil && svc.Debug)
 
-	if h.enabled {
-		h.once.Do(func() {
-			go h.ensureFiles()
-		})
-	}
+	h.once.Do(func() {
+		go h.ensureFiles()
+	})
 	if h.debug {
-		log.Printf("[SPEEDTEST] initialized enabled=%v dir=%s files=%vMB", h.enabled, h.dir, h.files)
+		log.Printf("[SPEEDTEST] initialized dir=%s files=%vMB", h.dir, h.files)
 	}
 	return nil
 }
 
 func (h *Handler) OnEvent(evt *plugin.Event) error {
-	if !h.enabled || evt == nil || (evt.Type != plugin.EventUpload && evt.Type != plugin.EventDownload) {
+	if evt == nil || (evt.Type != plugin.EventUpload && evt.Type != plugin.EventDownload) {
 		return nil
 	}
 	if !h.inSpeedtestDir(evt.Path) {

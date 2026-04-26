@@ -4,7 +4,8 @@ GoFTPd Changelog
 1.0.6b
 ------
 
-- Unreleased changes go here.
+- Added short post-kick tempbans to `slowupkick` so slow users cannot
+  reconnect immediately and reclaim the same race slot.
 
 1.0.5b
 ------

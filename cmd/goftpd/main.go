@@ -589,6 +589,32 @@ func protectedVFSDirs(cfg *core.Config) []string {
 	return configuredSectionDirs(cfg)
 }
 
+func daemonPluginEnabled(cfg *core.Config, name string) bool {
+	if cfg == nil || cfg.Plugins == nil {
+		return false
+	}
+	pluginCfg := cfg.Plugins[strings.ToLower(strings.TrimSpace(name))]
+	if pluginCfg == nil {
+		return false
+	}
+	enabled, ok := pluginCfg["enabled"].(bool)
+	return ok && enabled
+}
+
+func isDisabledPluginOwnedSection(cfg *core.Config, p string) bool {
+	clean := path.Clean("/" + strings.TrimSpace(p))
+	switch clean {
+	case "/PRE":
+		return !daemonPluginEnabled(cfg, "pre")
+	case "/REQUESTS":
+		return !daemonPluginEnabled(cfg, "request")
+	case "/SPEEDTEST":
+		return !daemonPluginEnabled(cfg, "speedtest")
+	default:
+		return false
+	}
+}
+
 func configuredSectionDirs(cfg *core.Config) []string {
 	if cfg == nil {
 		return nil
@@ -623,14 +649,19 @@ func configuredSectionDirs(cfg *core.Config) []string {
 		}
 	}
 	for _, section := range cfg.Sections {
+		if isDisabledPluginOwnedSection(cfg, section) {
+			continue
+		}
 		add(section)
 	}
-	if datedCfg := cfg.Plugins["dateddirs"]; datedCfg != nil {
+	if daemonPluginEnabled(cfg, "dateddirs") {
+		datedCfg := cfg.Plugins["dateddirs"]
 		for _, section := range stringSliceFromPluginConfig(datedCfg["sections"]) {
 			add(section)
 		}
 	}
-	if preCfg := cfg.Plugins["pre"]; preCfg != nil {
+	if daemonPluginEnabled(cfg, "pre") {
+		preCfg := cfg.Plugins["pre"]
 		for _, section := range stringSliceFromPluginConfig(preCfg["sections"]) {
 			add(section)
 		}
@@ -676,7 +707,8 @@ func configuredSectionDirs(cfg *core.Config) []string {
 			}
 		}
 	}
-	if requestCfg := cfg.Plugins["request"]; requestCfg != nil {
+	if daemonPluginEnabled(cfg, "request") {
+		requestCfg := cfg.Plugins["request"]
 		if dir, ok := requestCfg["dir"].(string); ok && strings.TrimSpace(dir) != "" {
 			add(dir)
 		}

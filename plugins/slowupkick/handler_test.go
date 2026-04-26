@@ -3,10 +3,12 @@ package slowupkick
 import (
 	"log"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"goftpd/internal/plugin"
+	"goftpd/internal/user"
 )
 
 func TestEvaluateKicksVerifiedSlowUpload(t *testing.T) {
@@ -54,13 +56,14 @@ func TestEvaluateKicksVerifiedSlowUpload(t *testing.T) {
 			return true
 		},
 	}
-	h.enabled = true
 	h.interval = time.Second
 	h.monitorUploads = true
 	h.monitorDownloads = true
 	h.uploadVerifyDelay = 5 * time.Second
 	h.minUploadSpeedBytes = 25 * 1024
 	h.minUsersOnline = 2
+	h.tempbanAfterKick = true
+	h.tempbanDuration = 15 * time.Second
 	h.excludeUsers = map[string]struct{}{}
 	h.excludeGroups = map[string]struct{}{}
 	h.excludePaths = normalizePaths([]string{"/PRE", "/REQUESTS", "/SPEEDTEST"})
@@ -84,6 +87,9 @@ func TestEvaluateKicksVerifiedSlowUpload(t *testing.T) {
 	}
 	if _, ok := h.getCandidate(1); ok {
 		t.Fatalf("expected candidate to be removed after kick")
+	}
+	if err := h.ValidateLogin(&user.User{Name: "slowpoke", PrimaryGroup: "USERS"}, "127.0.0.1"); err == nil {
+		t.Fatalf("expected kicked user to be tempbanned")
 	}
 }
 
@@ -128,12 +134,13 @@ func TestEvaluateSkipsExcludedPath(t *testing.T) {
 		},
 		DisconnectSession: func(id uint64) bool { return true },
 	}
-	h.enabled = true
 	h.monitorUploads = true
 	h.monitorDownloads = true
 	h.uploadVerifyDelay = 5 * time.Second
 	h.minUploadSpeedBytes = 25 * 1024
 	h.minUsersOnline = 2
+	h.tempbanAfterKick = true
+	h.tempbanDuration = 15 * time.Second
 	h.excludeUsers = map[string]struct{}{}
 	h.excludeGroups = map[string]struct{}{}
 	h.excludePaths = normalizePaths([]string{"/PRE", "/REQUESTS", "/SPEEDTEST"})
@@ -194,12 +201,13 @@ func TestEvaluateKicksVerifiedSlowDownload(t *testing.T) {
 			return true
 		},
 	}
-	h.enabled = true
 	h.monitorUploads = true
 	h.monitorDownloads = true
 	h.downloadVerifyDelay = 5 * time.Second
 	h.minDownloadSpeedBytes = 50 * 1024
 	h.minUsersOnline = 2
+	h.tempbanAfterKick = true
+	h.tempbanDuration = 15 * time.Second
 	h.excludeUsers = map[string]struct{}{}
 	h.excludeGroups = map[string]struct{}{}
 	h.excludePaths = normalizePaths([]string{"/PRE", "/REQUESTS", "/SPEEDTEST"})
@@ -220,5 +228,42 @@ func TestEvaluateKicksVerifiedSlowDownload(t *testing.T) {
 	}
 	if !disconnected {
 		t.Fatalf("expected download disconnect callback to be called")
+	}
+	if err := h.ValidateLogin(&user.User{Name: "crawler", PrimaryGroup: "USERS"}, "127.0.0.1"); err == nil {
+		t.Fatalf("expected kicked downloader to be tempbanned")
+	}
+}
+
+func TestValidateLoginAllowsUserAfterTempBanExpires(t *testing.T) {
+	h := New()
+	h.tempbanAfterKick = true
+	h.tempbanDuration = 15 * time.Second
+	h.excludeUsers = map[string]struct{}{}
+	h.excludeGroups = map[string]struct{}{}
+	h.tempBans = map[string]time.Time{
+		"slowpoke": time.Now().Add(-time.Second),
+	}
+
+	if err := h.ValidateLogin(&user.User{Name: "slowpoke", PrimaryGroup: "USERS"}, "127.0.0.1"); err != nil {
+		t.Fatalf("expected expired tempban to be ignored, got %v", err)
+	}
+}
+
+func TestValidateLoginReturnsRemainingSeconds(t *testing.T) {
+	h := New()
+	h.tempbanAfterKick = true
+	h.tempbanDuration = 15 * time.Second
+	h.excludeUsers = map[string]struct{}{}
+	h.excludeGroups = map[string]struct{}{}
+	h.tempBans = map[string]time.Time{
+		"slowpoke": time.Now().Add(5 * time.Second),
+	}
+
+	err := h.ValidateLogin(&user.User{Name: "slowpoke", PrimaryGroup: "USERS"}, "127.0.0.1")
+	if err == nil {
+		t.Fatalf("expected active tempban to reject login")
+	}
+	if !strings.Contains(err.Error(), "retry in") {
+		t.Fatalf("expected retry hint in error, got %v", err)
 	}
 }
