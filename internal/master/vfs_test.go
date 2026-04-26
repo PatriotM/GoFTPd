@@ -238,15 +238,13 @@ func TestVFSRelocateFileMovesOwnership(t *testing.T) {
 	}
 }
 
-func TestSetProtectedDirsOnlyKeepsConfiguredRootDirs(t *testing.T) {
+func TestSetProtectedDirsPrunesStaleUnownedRootDirs(t *testing.T) {
 	vfs := NewVirtualFileSystem()
 
-	vfs.AddFile("/X264", VFSFile{IsDir: true, Seen: true, SlaveName: "SLAVE1", LastModified: 100})
-	vfs.AddFile("/X265", VFSFile{IsDir: true, Seen: true, SlaveName: "SLAVE1", LastModified: 100})
+	vfs.files["/X264"] = &VFSFile{Path: "/X264", IsDir: true, Seen: true, SlaveName: "", LastModified: 100}
+	vfs.files["/X265"] = &VFSFile{Path: "/X265", IsDir: true, Seen: true, SlaveName: "", LastModified: 100}
 
 	vfs.SetProtectedDirs([]string{"/X265"})
-	vfs.MarkAllUnseen("SLAVE1")
-	vfs.PurgeUnseen("SLAVE1")
 
 	if stale := vfs.GetFile("/X264"); stale != nil {
 		t.Fatalf("expected stale unconfigured root dir /X264 to be purged, got %+v", stale)
