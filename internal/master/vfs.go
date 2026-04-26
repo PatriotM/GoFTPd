@@ -90,9 +90,6 @@ func (vfs *VirtualFileSystem) AddFile(path string, file VFSFile) {
 	if vfs.protectedDirs == nil {
 		vfs.protectedDirs = make(map[string]bool)
 	}
-	if file.IsDir && filepath.Dir(path) == "/" && path != "/" {
-		vfs.protectedDirs[path] = true
-	}
 	if vfs.protectedDirs[path] {
 		file.IsDir = true
 		file.IsSymlink = false
@@ -115,7 +112,7 @@ func (vfs *VirtualFileSystem) AddFile(path string, file VFSFile) {
 	if file.IsDir {
 		vfs.ensureChildrenBucketLocked(path)
 	}
-	vfs.touchAncestorsLocked(path, time.Now().Unix())
+	vfs.touchAncestorsLocked(path, file.LastModified)
 	vfs.refreshRaceStateForPathLocked(path)
 }
 
@@ -200,11 +197,6 @@ func (vfs *VirtualFileSystem) SetProtectedDirs(paths []string) {
 
 	vfs.protectedDirs = make(map[string]bool, len(paths)+1)
 	vfs.protectedDirs["/"] = true
-	for p, f := range vfs.files {
-		if f != nil && f.IsDir && filepath.Dir(cleanVFSPath(p)) == "/" && cleanVFSPath(p) != "/" {
-			vfs.protectedDirs[cleanVFSPath(p)] = true
-		}
-	}
 	for _, p := range paths {
 		p = cleanVFSPath(p)
 		if p == "" || p == "." {
@@ -752,7 +744,9 @@ func (vfs *VirtualFileSystem) touchAncestorsLocked(path string, ts int64) {
 	current := cleanVFSPath(path)
 	for current != "." && current != "" {
 		if f := vfs.files[current]; f != nil && f.IsDir {
-			f.LastModified = ts
+			if ts > f.LastModified {
+				f.LastModified = ts
+			}
 		}
 		if current == "/" {
 			break

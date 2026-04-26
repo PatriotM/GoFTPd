@@ -195,6 +195,25 @@ func TestParentDirModTimeBubblesOnChanges(t *testing.T) {
 	}
 }
 
+func TestVFSAddFilePreservesRemergeDirectoryModTimes(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+
+	vfs.AddFile("/0DAY", VFSFile{IsDir: true, Seen: true, LastModified: 100})
+	vfs.AddFile("/0DAY/2026-04-27", VFSFile{IsDir: true, Seen: true, LastModified: 200})
+	vfs.AddFile("/0DAY/2026-04-27/Release-GRP", VFSFile{IsDir: true, Seen: true, LastModified: 300})
+	vfs.AddFile("/0DAY/2026-04-27/Release-GRP/file.r00", VFSFile{Seen: true, Size: 123, LastModified: 250})
+
+	if got := vfs.GetFile("/0DAY").LastModified; got != 300 {
+		t.Fatalf("expected section modtime to keep newest seen child 300, got %d", got)
+	}
+	if got := vfs.GetFile("/0DAY/2026-04-27").LastModified; got != 300 {
+		t.Fatalf("expected dated dir modtime to stay 300, got %d", got)
+	}
+	if got := vfs.GetFile("/0DAY/2026-04-27/Release-GRP").LastModified; got != 300 {
+		t.Fatalf("expected release dir modtime to stay 300, got %d", got)
+	}
+}
+
 func TestVFSRelocateFileMovesOwnership(t *testing.T) {
 	vfs := NewVirtualFileSystem()
 	vfs.AddFile("/0DAY/2026-04-26/release", VFSFile{IsDir: true, Seen: true, SlaveName: "SLAVE1"})
@@ -216,5 +235,27 @@ func TestVFSRelocateFileMovesOwnership(t *testing.T) {
 	}
 	if meta := vfs.GetSFVData("/ARCHiVE/0DAY/release"); meta == nil || meta.SFVEntries["file1.zip"] != 1 {
 		t.Fatalf("expected sfv metadata to move with relocate")
+	}
+}
+
+func TestSetProtectedDirsOnlyKeepsConfiguredRootDirs(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+
+	vfs.AddFile("/X264", VFSFile{IsDir: true, Seen: true, SlaveName: "SLAVE1", LastModified: 100})
+	vfs.AddFile("/X265", VFSFile{IsDir: true, Seen: true, SlaveName: "SLAVE1", LastModified: 100})
+
+	vfs.SetProtectedDirs([]string{"/X265"})
+	vfs.MarkAllUnseen("SLAVE1")
+	vfs.PurgeUnseen("SLAVE1")
+
+	if stale := vfs.GetFile("/X264"); stale != nil {
+		t.Fatalf("expected stale unconfigured root dir /X264 to be purged, got %+v", stale)
+	}
+	kept := vfs.GetFile("/X265")
+	if kept == nil {
+		t.Fatalf("expected configured protected dir /X265 to remain")
+	}
+	if kept.SlaveName != "" {
+		t.Fatalf("expected protected dir /X265 to be detached from slave ownership, got %+v", kept)
 	}
 }
