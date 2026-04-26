@@ -195,6 +195,25 @@ func TestParentDirModTimeBubblesOnChanges(t *testing.T) {
 	}
 }
 
+func TestVFSAddFilePreservesRemergeDirectoryModTimes(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+
+	vfs.AddFile("/0DAY", VFSFile{IsDir: true, Seen: true, LastModified: 100})
+	vfs.AddFile("/0DAY/2026-04-27", VFSFile{IsDir: true, Seen: true, LastModified: 200})
+	vfs.AddFile("/0DAY/2026-04-27/Release-GRP", VFSFile{IsDir: true, Seen: true, LastModified: 300})
+	vfs.AddFile("/0DAY/2026-04-27/Release-GRP/file.r00", VFSFile{Seen: true, Size: 123, LastModified: 250})
+
+	if got := vfs.GetFile("/0DAY").LastModified; got != 300 {
+		t.Fatalf("expected section modtime to keep newest seen child 300, got %d", got)
+	}
+	if got := vfs.GetFile("/0DAY/2026-04-27").LastModified; got != 300 {
+		t.Fatalf("expected dated dir modtime to stay 300, got %d", got)
+	}
+	if got := vfs.GetFile("/0DAY/2026-04-27/Release-GRP").LastModified; got != 300 {
+		t.Fatalf("expected release dir modtime to stay 300, got %d", got)
+	}
+}
+
 func TestVFSRelocateFileMovesOwnership(t *testing.T) {
 	vfs := NewVirtualFileSystem()
 	vfs.AddFile("/0DAY/2026-04-26/release", VFSFile{IsDir: true, Seen: true, SlaveName: "SLAVE1"})

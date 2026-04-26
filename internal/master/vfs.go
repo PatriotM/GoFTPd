@@ -115,7 +115,7 @@ func (vfs *VirtualFileSystem) AddFile(path string, file VFSFile) {
 	if file.IsDir {
 		vfs.ensureChildrenBucketLocked(path)
 	}
-	vfs.touchAncestorsLocked(path, time.Now().Unix())
+	vfs.touchAncestorsLocked(path, file.LastModified)
 	vfs.refreshRaceStateForPathLocked(path)
 }
 
@@ -752,7 +752,9 @@ func (vfs *VirtualFileSystem) touchAncestorsLocked(path string, ts int64) {
 	current := cleanVFSPath(path)
 	for current != "." && current != "" {
 		if f := vfs.files[current]; f != nil && f.IsDir {
-			f.LastModified = ts
+			if ts > f.LastModified {
+				f.LastModified = ts
+			}
 		}
 		if current == "/" {
 			break
