@@ -211,6 +211,22 @@ func (vfs *VirtualFileSystem) SetProtectedDirs(paths []string) {
 			f.SlaveName = ""
 		}
 	}
+	for p, f := range vfs.files {
+		p = cleanVFSPath(p)
+		if p == "/" || vfs.protectedDirs[p] {
+			continue
+		}
+		if f == nil || !f.IsDir {
+			continue
+		}
+		if cleanVFSPath(filepath.Dir(p)) != "/" {
+			continue
+		}
+		if strings.TrimSpace(f.SlaveName) != "" {
+			continue
+		}
+		delete(vfs.files, p)
+	}
 	vfs.rebuildChildrenLocked()
 	vfs.rebuildAllRaceStatesLocked()
 }
