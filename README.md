@@ -249,9 +249,9 @@ policy and the daemon checks ownership before allowing the action.
 
 ## Daemon Plugins
 
-Daemon plugins are enabled under `plugins:` in `etc/config.yml`. Plugin-specific
-defaults can live in separate files referenced with `config_file`, and only
-plugins with `enabled: true` are loaded.
+Daemon plugins are enabled under `plugins:` in `etc/config.yml`. That main
+`plugins:` block is the only on/off switch. Plugin-specific files referenced
+with `config_file` hold settings only.
 
 Built-in daemon plugins:
 
@@ -309,7 +309,8 @@ transfer stays below the configured speed floor for the full verify window.
 When it fires, the master tells the slave to abort the transfer first and then
 disconnects the FTP session, so partial uploads are cleaned up on the slave
 side instead of being left behind as junk. Upload and download thresholds can
-be tuned independently.
+be tuned independently, and the plugin can temporarily ban the FTP user after
+a slow kick so they cannot immediately reconnect and grab the slot again.
 
 ### PRE And Affils
 

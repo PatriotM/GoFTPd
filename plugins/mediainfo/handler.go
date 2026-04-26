@@ -14,7 +14,6 @@ import (
 
 type Handler struct {
 	svc             *plugin.Services
-	enabled         bool
 	debug           bool
 	binary          string
 	timeoutSeconds  int
@@ -52,7 +51,6 @@ func (h *Handler) Name() string { return "mediainfo" }
 
 func (h *Handler) Init(svc *plugin.Services, cfg map[string]interface{}) error {
 	h.svc = svc
-	h.enabled = boolConfig(cfg, "enabled", false)
 	h.debug = boolConfig(cfg, "debug", svc != nil && svc.Debug)
 	h.binary = stringConfig(cfg, "binary", "mediainfo")
 	h.timeoutSeconds = intConfig(cfg, "timeout_seconds", 20)
@@ -66,17 +64,15 @@ func (h *Handler) Init(svc *plugin.Services, cfg map[string]interface{}) error {
 	if h.timeoutSeconds > 10 {
 		h.timeoutSeconds = 10
 	}
-	if h.enabled {
-		go h.worker()
-	}
+	go h.worker()
 	if h.debug {
-		log.Printf("[MEDIAINFO] initialized enabled=%v sections=%v", h.enabled, h.sections)
+		log.Printf("[MEDIAINFO] initialized sections=%v", h.sections)
 	}
 	return nil
 }
 
 func (h *Handler) OnEvent(evt *plugin.Event) error {
-	if !h.enabled || evt == nil || evt.Type != plugin.EventUpload {
+	if evt == nil || evt.Type != plugin.EventUpload {
 		return nil
 	}
 	if h.svc == nil || h.svc.Bridge == nil || h.svc.EmitEvent == nil {

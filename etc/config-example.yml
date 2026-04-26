@@ -236,8 +236,8 @@ nukedir_style:       "[NUKED]-%N"   # Renamed dir pattern (%N = release name)
 #    request - handles SITE REQUEST/REQUESTS/REQFILL/REQDEL/REQWIPE
 #    speedtest - creates /SPEEDTEST/100MB, 500MB, 1000MB and
 #                emits SPEEDTEST announces without applying credits
-#    slowupkick - aborts and kicks uploads that stay too slow for too long,
-#                 letting racing slots free up for other users
+#    slowupkick - aborts and kicks slow uploads/downloads, and can tempban
+#                 the FTP user briefly so they cannot instantly re-grab slots
 #
 #  To add your own plugin:
 #    1. Create /plugins/<name>/handler.go implementing plugin.Plugin
@@ -447,6 +447,8 @@ zipscript:
       group: false              # create <group_path>/<Group>/<Release> symlinks
 
 plugins:
+  # `enabled` here controls whether the daemon loads the plugin at all.
+  # The referenced plugin config files only carry plugin-specific settings.
   autonuke:
     enabled: false
     config_file: "plugins/autonuke/config.yml"
@@ -466,10 +468,9 @@ plugins:
     enabled: true
     config_file: "plugins/speedtest/config.yml"
   slowupkick:
-    enabled: false
-    # Kicks uploads that stay below a configured speed floor for too long.
-    # The slave aborts the transfer first, so partial files are cleaned up
-    # instead of being left behind as incomplete junk.
+    enabled: true
+    # Kicks slow uploads/downloads and can tempban the FTP user briefly so
+    # they cannot immediately reconnect and reclaim the slot.
     config_file: "plugins/slowupkick/config.yml"
   request:
     enabled: true

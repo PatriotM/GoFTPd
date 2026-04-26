@@ -14,7 +14,6 @@ import (
 
 type Handler struct {
 	svc                  *plugin.Services
-	enabled              bool
 	sections             []string
 	format               string
 	todaySymlink         bool
@@ -39,7 +38,6 @@ func (h *Handler) Name() string { return "dateddirs" }
 
 func (h *Handler) Init(svc *plugin.Services, cfg map[string]interface{}) error {
 	h.svc = svc
-	h.enabled = boolConfig(cfg, "enabled", false)
 	h.sections = stringSliceConfig(cfg, "sections")
 	h.format = normalizeFormat(stringConfig(cfg, "format", "MMDD"))
 	h.todaySymlink = boolConfig(cfg, "today_symlink", true)
@@ -49,11 +47,9 @@ func (h *Handler) Init(svc *plugin.Services, cfg map[string]interface{}) error {
 	if h.readOnlyAfterMinutes <= 0 {
 		h.readOnlyAfterMinutes = 60
 	}
-	if h.enabled {
-		h.startOnce.Do(func() { go h.loop() })
-	}
+	h.startOnce.Do(func() { go h.loop() })
 	if h.debug {
-		log.Printf("[DATEDDIRS] initialized enabled=%v sections=%v", h.enabled, h.sections)
+		log.Printf("[DATEDDIRS] initialized sections=%v", h.sections)
 	}
 	return nil
 }
@@ -81,7 +77,7 @@ func (h *Handler) loop() {
 }
 
 func (h *Handler) apply(now time.Time) {
-	if h.svc == nil || h.svc.Bridge == nil || !h.enabled {
+	if h.svc == nil || h.svc.Bridge == nil {
 		return
 	}
 	today := formatDateDir(now, h.format)

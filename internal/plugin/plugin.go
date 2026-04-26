@@ -126,6 +126,10 @@ type MKDirValidator interface {
 	ValidateMKDir(u *user.User, targetPath string) error
 }
 
+type LoginValidator interface {
+	ValidateLogin(u *user.User, remoteIP string) error
+}
+
 type RaceUser struct {
 	Name    string
 	Group   string

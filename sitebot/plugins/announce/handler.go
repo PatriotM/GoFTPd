@@ -482,6 +482,9 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 		if message == "" {
 			message = fmt.Sprintf("%s/%s was kicked for slow upload %s at %sKB/s in %s (floor %sKB/s).",
 				vars["username"], vars["group"], vars["filename"], vars["speed_kbps"], vars["path"], vars["min_speed_kbps"])
+			if secs := strings.TrimSpace(vars["tempban_seconds"]); secs != "" && secs != "0" {
+				message += fmt.Sprintf(" Tempbanned for %ss.", secs)
+			}
 		}
 		vars["message"] = message
 		outs = append(outs, plugin.Output{Type: "SLOWKICK", Text: p.render("SLOWUPLOADKICK", vars, "SLOWUP: "+message)})
@@ -498,6 +501,9 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 		if message == "" {
 			message = fmt.Sprintf("%s/%s was kicked for slow download %s at %sKB/s from %s (floor %sKB/s).",
 				vars["username"], vars["group"], vars["filename"], vars["speed_kbps"], vars["path"], vars["min_speed_kbps"])
+			if secs := strings.TrimSpace(vars["tempban_seconds"]); secs != "" && secs != "0" {
+				message += fmt.Sprintf(" Tempbanned for %ss.", secs)
+			}
 		}
 		vars["message"] = message
 		outs = append(outs, plugin.Output{Type: "SLOWKICK", Text: p.render("SLOWDOWNLOADKICK", vars, "SLOWDN: "+message)})

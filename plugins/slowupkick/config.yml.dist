@@ -1,10 +1,11 @@
+# This file holds slowupkick settings only.
+# Enable/disable the daemon plugin from etc/config.yml -> plugins.slowupkick.
+
 # Slow transfer kicker.
 #
 # Watches live uploads and downloads and kicks a user only when the transfer
 # stays below the speed threshold for the full verify window. The slave aborts
 # uploads first, so partial uploads get cleaned up on the slave side.
-enabled: false
-
 # Poll interval for checking live transfers.
 interval_seconds: 5
 
@@ -40,5 +41,10 @@ announce_warn: true
 
 # Log the actual abort/kick when verification expires.
 announce_kick: true
+
+# Temporarily block the same FTP user from logging straight back in after a
+# slow kick and grabbing another slot.
+tempban_after_kick: true
+tempban_seconds: 15
 
 debug: false

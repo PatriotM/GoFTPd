@@ -1,4 +1,5 @@
-enabled: false
+# This file holds autonuke settings only.
+# Enable/disable the daemon plugin from etc/config.yml -> plugins.autonuke.
 
 # Compatibility-first autonuke plugin.
 # It scans release directories on an interval, keeps warning state in state_dir,
