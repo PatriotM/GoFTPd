@@ -36,6 +36,9 @@ irc:
     - "#goftpd-chat"
     - "#goftpd-spam"
     - "#goftpd-staff"
+    - "#goftpd-foreign"
+    - "#goftpd-archive"
+    - "#goftpd-nuke"
 
 # ============================================================================
 # SITE INVITE channel visibility
@@ -50,10 +53,15 @@ invite_channels:
 
 encryption:
   enabled: true
+  # Auto-exchange FiSH keys for PM/NOTICE traffic with users via DH1080.
+  # This is peer-to-peer only; channel/topic FiSH still uses the static keys
+  # below because DH1080 does not negotiate a shared channel key.
+  auto_exchange: true
   # Enter keys in "cbc:<key>" format in the final config file.
   # setup.sh asks for raw keys and writes the cbc: prefix for you.
   # private_key is used for PM/NOTICE replies to users and for decrypting
   # incoming encrypted PM commands sent directly to the bot nick.
+  # Leave this empty if you want to rely on DH1080 auto-exchange instead.
   private_key: "cbc:YourBlowfishKeyHere123456"
   keys:
     "#goftpd": "cbc:YourBlowfishKeyHere123456"
@@ -82,6 +90,20 @@ sections:
   - name: "DEFAULT"
     channels: *chan_staff
     paths: []
+
+#########################
+# #goftpd-chat
+#########################
+
+  - name: "REQUESTS"
+    channels: *chan_chat
+    paths:
+      - "/REQUESTS/*/*"
+
+  - name: "SPEEDTEST"
+    channels: *chan_chat
+    paths:
+      - "/SPEEDTEST/*"
 
 #########################
 # #goftpd-foreign

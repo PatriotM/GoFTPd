@@ -53,9 +53,10 @@ type IRCConfig struct {
 }
 
 type EncConfig struct {
-	Enabled    bool              `yaml:"enabled"`
-	PrivateKey string            `yaml:"private_key"`
-	Keys       map[string]string `yaml:"keys"`
+	Enabled      bool              `yaml:"enabled"`
+	AutoExchange bool              `yaml:"auto_exchange"`
+	PrivateKey   string            `yaml:"private_key"`
+	Keys         map[string]string `yaml:"keys"`
 }
 
 type AnnounceConfig struct {
@@ -101,6 +102,16 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if cfg.Encryption.Keys == nil {
 		cfg.Encryption.Keys = map[string]string{}
+	}
+	if !cfg.Encryption.AutoExchange {
+		raw := map[string]interface{}{}
+		if err := yaml.Unmarshal(data, &raw); err == nil {
+			if encRaw, ok := raw["encryption"].(map[string]interface{}); ok {
+				if _, exists := encRaw["auto_exchange"]; !exists {
+					cfg.Encryption.AutoExchange = true
+				}
+			}
+		}
 	}
 	if cfg.Plugins.Enabled == nil {
 		cfg.Plugins.Enabled = map[string]bool{}

@@ -67,6 +67,7 @@ func (b *Bot) Start() error {
 	for ch, key := range b.Config.Encryption.Keys {
 		_ = b.IRC.SetChannelKey(ch, key)
 	}
+	b.IRC.SetAutoExchange(b.Config.Encryption.AutoExchange)
 	_ = b.IRC.SetPrivateKey(strings.TrimSpace(b.Config.Encryption.PrivateKey))
 	if err := b.initializePlugins(); err != nil {
 		return err
@@ -378,6 +379,9 @@ func (b *Bot) listenIRC() {
 				}
 			}
 		}
+		if handled := b.handleIRCKeyExchange(line); handled {
+			return
+		}
 		if evt := b.commandEventFromPrivmsg(line); evt != nil {
 			select {
 			case b.EventChan <- evt:
@@ -390,14 +394,23 @@ func (b *Bot) listenIRC() {
 	}
 }
 
-func (b *Bot) commandEventFromPrivmsg(line string) *event.Event {
-	if !strings.HasPrefix(line, ":") || !strings.Contains(line, " PRIVMSG ") {
-		return nil
+type ircIncomingMessage struct {
+	Sender  string
+	Host    string
+	Command string
+	Target  string
+	Text    string
+}
+
+func parseIRCIncomingMessage(line, command string) (*ircIncomingMessage, bool) {
+	token := " " + strings.ToUpper(strings.TrimSpace(command)) + " "
+	if !strings.HasPrefix(line, ":") || !strings.Contains(line, token) {
+		return nil, false
 	}
 	withoutPrefix := strings.TrimPrefix(line, ":")
-	prefix, rest, ok := strings.Cut(withoutPrefix, " PRIVMSG ")
+	prefix, rest, ok := strings.Cut(withoutPrefix, token)
 	if !ok {
-		return nil
+		return nil, false
 	}
 	sender := prefix
 	host := ""
@@ -407,25 +420,46 @@ func (b *Bot) commandEventFromPrivmsg(line string) *event.Event {
 	}
 	target, msg, ok := strings.Cut(rest, " :")
 	if !ok {
+		return nil, false
+	}
+	return &ircIncomingMessage{
+		Sender:  sender,
+		Host:    host,
+		Command: strings.ToUpper(strings.TrimSpace(command)),
+		Target:  strings.TrimSpace(target),
+		Text:    strings.TrimSpace(msg),
+	}, true
+}
+
+func (b *Bot) handleIRCKeyExchange(line string) bool {
+	msg, ok := parseIRCIncomingMessage(line, "NOTICE")
+	if !ok {
+		msg, ok = parseIRCIncomingMessage(line, "PRIVMSG")
+		if !ok {
+			return false
+		}
+	}
+	handled, err := b.IRC.HandleKeyExchange(msg.Sender, msg.Target, msg.Text)
+	if err != nil && b.Debug {
+		log.Printf("[Bot] DH1080 exchange with %s failed: %v", msg.Sender, err)
+	}
+	return handled
+}
+
+func (b *Bot) commandEventFromPrivmsg(line string) *event.Event {
+	parsed, ok := parseIRCIncomingMessage(line, "PRIVMSG")
+	if !ok {
 		return nil
 	}
-	target = strings.TrimSpace(target)
-	msg = strings.TrimSpace(msg)
+	sender := parsed.Sender
+	host := parsed.Host
+	target := parsed.Target
+	msg := parsed.Text
 	if strings.HasPrefix(msg, "+OK ") {
-		ciphertext := strings.TrimSpace(strings.TrimPrefix(msg, "+OK "))
-		ciphertext = strings.TrimPrefix(ciphertext, "*")
-		var enc *irc.BlowfishEncryptor
-		if targetEnc, ok := b.IRC.Keys[target]; ok {
-			enc = targetEnc
-		} else if strings.EqualFold(strings.TrimSpace(target), strings.TrimSpace(b.Config.IRC.Nick)) {
-			enc = b.IRC.PrivateKey
-		}
-		if enc != nil {
-			if plain, err := enc.Decrypt(ciphertext); err == nil {
-				msg = cleanIRCText(plain)
-			} else if b.Debug {
-				log.Printf("[Bot] Failed to decrypt command from %s in %s: %v", sender, target, err)
-			}
+		if plain, decrypted := b.IRC.DecryptIncomingMessage(sender, target, msg); decrypted {
+			msg = cleanIRCText(plain)
+		} else if b.Debug {
+			log.Printf("[Bot] Failed to decrypt command from %s in %s", sender, target)
 		}
 	}
 	isChannel := strings.HasPrefix(target, "#")
@@ -902,6 +936,7 @@ func (b *Bot) Reload() error {
 		for ch, key := range b.Config.Encryption.Keys {
 			_ = b.IRC.SetChannelKey(ch, key)
 		}
+		b.IRC.SetAutoExchange(b.Config.Encryption.AutoExchange)
 		_ = b.IRC.SetPrivateKey(strings.TrimSpace(b.Config.Encryption.PrivateKey))
 		for _, ch := range uniqueChannels(b.Config) {
 			_ = b.IRC.Join(ch)
