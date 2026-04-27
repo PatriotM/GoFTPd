@@ -385,6 +385,8 @@ ensure_enabled_plugin_configs() {
     local repaired_any="false"
     local missing_any="false"
 
+    repair_legacy_daemon_plugin_names
+
 local daemon_plugins=(autonuke dateddirs tvmaze imdb mediainfo speedtest request releaseguard pre pretime slowkick spacekeeper)
     if [ -f "${daemon_config}" ]; then
         for plugin_name in "${daemon_plugins[@]}"; do
@@ -536,6 +538,69 @@ set_daemon_plugin_enabled() {
         { print }
     ' "${file}" > "${file}.tmp"
     mv "${file}.tmp" "${file}"
+}
+
+migrate_legacy_daemon_plugin_entry() {
+    local file="$1"
+    local old_plugin_name="$2"
+    local new_plugin_name="$3"
+    local new_config_file new_exists
+    if [ ! -f "${file}" ]; then
+        return 0
+    fi
+    if [ "$(daemon_plugin_present_in_config "${file}" "${old_plugin_name}")" != "true" ]; then
+        return 0
+    fi
+    new_config_file="$(daemon_plugin_config_path "${new_plugin_name}")"
+    new_exists="$(daemon_plugin_present_in_config "${file}" "${new_plugin_name}")"
+    awk -v old_plugin_name="${old_plugin_name}" -v new_plugin_name="${new_plugin_name}" -v new_config_file="${new_config_file}" -v new_exists="${new_exists}" '
+        BEGIN { in_plugins = 0; in_old = 0 }
+        /^plugins:$/ { in_plugins = 1; print; next }
+        in_plugins && $0 ~ ("^  " old_plugin_name ":$") {
+            in_old = 1
+            if (new_exists != "true") {
+                print "  " new_plugin_name ":"
+            }
+            next
+        }
+        in_old && $0 ~ /^  [A-Za-z0-9_-]+:$/ { in_old = 0 }
+        in_old && new_exists == "true" { next }
+        in_old && $0 ~ /^    config_file:[[:space:]]+/ {
+            print "    config_file: \"" new_config_file "\""
+            next
+        }
+        { print }
+    ' "${file}" > "${file}.tmp"
+    mv "${file}.tmp" "${file}"
+}
+
+migrate_legacy_daemon_plugin_config() {
+    local old_plugin_name="$1"
+    local new_plugin_name="$2"
+    local old_config new_config old_dist new_dist
+    old_config="${ROOT_DIR}/plugins/${old_plugin_name}/config.yml"
+    new_config="${ROOT_DIR}/plugins/${new_plugin_name}/config.yml"
+    old_dist="${old_config}.dist"
+    new_dist="${new_config}.dist"
+
+    if [ -f "${old_config}" ] && [ ! -f "${new_config}" ]; then
+        mkdir -p "$(dirname "${new_config}")"
+        mv "${old_config}" "${new_config}"
+        say "Migrated legacy plugin config ${old_config} -> ${new_config}"
+    fi
+    if [ -f "${old_dist}" ] && [ ! -f "${new_dist}" ]; then
+        mkdir -p "$(dirname "${new_dist}")"
+        mv "${old_dist}" "${new_dist}"
+        say "Migrated legacy plugin dist config ${old_dist} -> ${new_dist}"
+    fi
+}
+
+repair_legacy_daemon_plugin_names() {
+    local daemon_config="${ROOT_DIR}/etc/config.yml"
+    if [ -f "${daemon_config}" ]; then
+        migrate_legacy_daemon_plugin_entry "${daemon_config}" "slowupkick" "slowkick"
+    fi
+    migrate_legacy_daemon_plugin_config "slowupkick" "slowkick"
 }
 
 ensure_daemon_plugin_entry() {
@@ -969,6 +1034,7 @@ configure_daemon() {
     say ""
     say "Configuring daemon..."
     copy_if_missing "etc/config-example.yml" "${daemon_config}"
+    repair_legacy_daemon_plugin_names
 
     local daemon_mode long_name short_name site_version cert_name enabled_bool timezone system_timezone
     local listen_port public_ip passthrough_mode master_listen_host master_control_port
@@ -1066,6 +1132,7 @@ daemon_plugins=(autonuke dateddirs tvmaze imdb mediainfo speedtest request relea
     for plugin_name in "${daemon_plugins[@]}"; do
         local plugin_config
         local plugin_created="false"
+        local plugin_entry_missing="false"
         local var_name="SETUP_DAEMON_PLUGIN_$(printf '%s' "${plugin_name}" | tr '[:lower:]-' '[:upper:]_')"
         local default_answer
         plugin_config="$(daemon_plugin_config_path "${plugin_name}")"
@@ -1073,7 +1140,10 @@ daemon_plugins=(autonuke dateddirs tvmaze imdb mediainfo speedtest request relea
             plugin_created="true"
             daemon_created+=("${plugin_name}")
         fi
-        if [ "${daemon_config_exists}" = "true" ] && [ "${plugin_created}" != "true" ]; then
+        if [ "${daemon_config_exists}" = "true" ] && [ "$(daemon_plugin_present_in_config "${daemon_config}" "${plugin_name}")" != "true" ]; then
+            plugin_entry_missing="true"
+        fi
+        if [ "${daemon_config_exists}" = "true" ] && [ "${plugin_created}" != "true" ] && [ "${plugin_entry_missing}" != "true" ]; then
             continue
         fi
         default_answer="$(bool_to_prompt_default "${!var_name:-true}")"
@@ -1319,6 +1389,7 @@ configure_sitebot() {
     for plugin_name in "${sitebot_plugins[@]}"; do
         local var_name="SETUP_SITEBOT_PLUGIN_$(printf '%s' "${plugin_name}" | tr '[:lower:]-' '[:upper:]_')"
         local default_answer
+        local plugin_entry_missing="false"
         if [ "${sitebot_config_exists}" = "true" ]; then
             local should_ask="false"
             local queued_name
@@ -1328,6 +1399,10 @@ configure_sitebot() {
                     break
                 fi
             done
+            if [ "$(sitebot_plugin_present_in_config "${sitebot_config}" "${plugin_name}")" != "true" ]; then
+                plugin_entry_missing="true"
+                should_ask="true"
+            fi
             if [ "${should_ask}" != "true" ]; then
                 continue
             fi
