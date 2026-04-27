@@ -221,6 +221,11 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				fmt.Fprintf(s.Conn, "530 Account expired.\r\n")
 				return false
 			}
+			if s.User.IsDisabled() {
+				s.emitLoginFailure(s.User.Name, remoteIP, "account_disabled")
+				fmt.Fprintf(s.Conn, "530 Account disabled.\r\n")
+				return false
+			}
 
 			pass := ""
 			if len(args) > 0 {

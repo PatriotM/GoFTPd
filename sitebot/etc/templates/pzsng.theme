@@ -397,6 +397,15 @@ announce.BW_ERROR = "%b{%c01{BANDWiDTH:}} %c04{%response}"
 announce.RULESCMD_LINE = "%b{%c01{RULES:}} %c05{%line}"
 
 announce.RULESCMD_ERROR = "%b{%c01{RULES:}} %c04{%response}"
+announce.QUOTACMD_QUOTA_HEADER = "%b{%c02{QUOTA:}} %c05{WEEKLY QUOTA} %c01{[ }%b{%count} %c01{Users - (Min }%b{%quota_gb}%c01{) ]}"
+announce.QUOTACMD_QUOTA_ENTRY = "%c01{[ }%c06{%rank} %c01{]} %b{%user}%c01{/}%c06{%group} %c01{( }%b{%size} %c01{Up ) is currently }%b{%status_plain}%c01{.}"
+announce.QUOTACMD_TRIAL_HEADER = "%b{%c02{QUOTA:}} %c05{TRIAL QUOTA} %c01{[ Trial List - }%b{%count} %c01{Trialing - (Min }%b{%quota_gb}%c01{) ]}"
+announce.QUOTACMD_TRIAL_ENTRY = "%c01{[ }%c06{%rank} %c01{]} %b{%user}%c01{/trial ( }%b{%size} %c01{Up ) is currently }%b{%status_plain}%c01{. (}%b{%days_remaining}%c01{ days left)}"
+announce.QUOTACMD_EMPTY = "%b{%c02{QUOTA:}} %c04{No trial or quota users tracked.}"
+announce.QUOTACMD_OK = "%b{%c02{QUOTA:}} %c05{%response}"
+announce.QUOTACMD_ERROR = "%b{%c02{QUOTA:}} %c04{%response}"
+announce.QUOTACMD_DENIED = "%b{%c02{QUOTA:}} %c04{%response}"
+announce.QUOTACMD_USAGE = "%b{%c02{QUOTA:}} %c05{%response}"
 announce.SELFIPCMD_OK = "%b{%c02{IP:}} %c05{%response}"
 announce.SELFIPCMD_LINE = "%b{%c02{IP:}} %c05{%line}"
 announce.SELFIPCMD_ERROR = "%b{%c02{IP:}} %c04{%response}"
@@ -428,6 +437,11 @@ announce.PREBW = "%b{%c01{PREBW:}} %c01{[}%section_colored%c01{]} %c01{::} %c06{
 announce.PREBWINTERVAL = "%b{%c01{PREBW:}} %c01{[}%section_colored%c01{]} %c01{::} %c03{%b{%b1}}%c01{%u1 @} %c03{%t1}%c01{s ::} %c03{%b{%b2}}%c01{%u2 @} %c03{%t2}%c01{s ::} %c03{%b{%b3}}%c01{%u3 @} %c03{%t3}%c01{s ::} %c03{%b{%b4}}%c01{%u4 @} %c03{%t4}%c01{s ::} %c03{%b{%b5}}%c01{%u5 @} %c03{%t5}%c01{s :: Highest} %c03{%b{%peak_val}}%c01{%peak_unit}"
 
 announce.PREBWUSER = "%b{%c01{PREBW:}} %c01{[}%section_colored%c01{]} %c01{::} %c04{%b{%user}} %c01{::} %c03{%b{%size_val}}%c01{%size_unit}%c01{/}%c03{%b{%cnt_files}}%c01{F @} %c03{%b{%avg_val_user}}%c01{%avg_unit_user} %c01{:: Highest} %c03{%b{%peak_val_user}}%c01{%peak_unit_user}"
+
+announce.NEWPRETIME = "%b{%c09{PRETiME:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{::} %c09{OK} %c01{:: released} %c09{%preage}%c01{ ago}"
+announce.OLDPRETIME = "%b{%c04{PRETiME:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{::} %c04{BAD} %c01{:: released} %c04{%preage}%c01{ ago}"
+announce.NEWPRETIMEINLINE = "%b{%c01{NEW:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{by} %c%sec_c4{%u_name} %c01{:: released} %c09{%preage}%c01{ ago}"
+announce.OLDPRETIMEINLINE = "%b{%c01{NEW:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{by} %c%sec_c4{%u_name} %c01{:: released} %c04{%preage}%c01{ ago}"
 
 announce.DF_SLAVE = "%b{%c02{DF:}} %c06{%b{%slave}} %c01{-} %c03{%free} %c01{free /} %c05{%total} %c01{total (}%c03{%{free_pct}%}%c01{ free) [}%c04{%state}%c01{]}"
 

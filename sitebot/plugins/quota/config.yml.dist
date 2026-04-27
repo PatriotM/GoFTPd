@@ -1,0 +1,45 @@
+# Trial/quota tracker inspired by the old fin-bot, without the !df/free bits.
+# It watches GoFTPd user files directly, tracks trial/quota state in a small
+# YAML state file, and can disable users with flag 6 when they fail.
+users_dir: "../etc/users"
+bye_dir: "../etc/byefiles"
+state_file: "plugins/quota/state.yml"
+
+# Public status command(s). If you want old-school !top behavior here, set
+# status_commands: ["top"] and disable the built-in Top plugin to avoid double replies.
+status_commands: ["quota"]
+
+# Staff command surface:
+#   !quotactl trial <user> [days]
+#   !quotactl quota <user>
+#   !quotactl extend <user> <days>
+#   !quotactl delete <user> [reason]
+staff_command: "quotactl"
+
+reply_target: "channel"
+channels: ["#goftpd-chat"]
+staff_channels: ["#goftpd-staff"]
+staff_hosts: []
+staff_users: []
+
+# Only manage these groups. Leave empty to manage every user not in skip_users.
+included_groups: []
+skip_users: ["default.user", "glftpd", "goftpd", "NUKEBOT"]
+
+scan_interval_seconds: 300
+
+trial_enabled: true
+trial_days_default: 7
+trial_quota_gb: 150
+
+quota_enabled: true
+quota_gb: 250
+quota_fail_back_to_trial: true
+
+# Flag(s) added when a user is disabled. GoFTPd now rejects flag 6 at login.
+disabled_flag: "6"
+
+# If a user has linked their IRC nick with SITE INVITE, the bot can kick them
+# from these channels after auto-disable. Leave empty to use all joined channels.
+kick_on_disable: true
+kick_channels: []

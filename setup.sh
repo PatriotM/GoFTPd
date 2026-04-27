@@ -285,6 +285,7 @@ sitebot_plugin_config_path() {
         Free) printf 'sitebot/plugins/free/config.yml' ;;
         IMDB) printf 'sitebot/plugins/imdb/config.yml' ;;
         News) printf 'sitebot/plugins/news/config.yml' ;;
+        Quota) printf 'sitebot/plugins/quota/config.yml' ;;
         Request) printf 'sitebot/plugins/request/config.yml' ;;
         Rules) printf 'sitebot/plugins/rules/config.yml' ;;
         SelfIP) printf 'sitebot/plugins/selfip/config.yml' ;;
@@ -328,6 +329,22 @@ daemon_plugin_enabled_in_config() {
     ' "${file}"
 }
 
+daemon_plugin_present_in_config() {
+    local file="$1"
+    local plugin_name="$2"
+    awk -v plugin_name="${plugin_name}" '
+        BEGIN { in_plugins = 0 }
+        /^plugins:$/ { in_plugins = 1; next }
+        in_plugins && $0 ~ ("^  " plugin_name ":$") { found = 1; exit }
+        in_plugins && /^[^[:space:]#]/ { exit }
+        END {
+            if (found) {
+                print "true"
+            }
+        }
+    ' "${file}"
+}
+
 sitebot_plugin_enabled_in_config() {
     local file="$1"
     local plugin_name="$2"
@@ -345,6 +362,23 @@ sitebot_plugin_enabled_in_config() {
     ' "${file}"
 }
 
+sitebot_plugin_present_in_config() {
+    local file="$1"
+    local plugin_name="$2"
+    awk -v plugin_name="${plugin_name}" '
+        BEGIN { in_plugins = 0; in_enabled = 0 }
+        /^plugins:$/ { in_plugins = 1; next }
+        in_plugins && /^  enabled:$/ { in_enabled = 1; next }
+        in_enabled && $0 ~ ("^    " plugin_name ":[[:space:]]+") { found = 1; exit }
+        in_enabled && /^  config:$/ { exit }
+        END {
+            if (found) {
+                print "true"
+            }
+        }
+    ' "${file}"
+}
+
 ensure_enabled_plugin_configs() {
     local daemon_config="${ROOT_DIR}/etc/config.yml"
     local sitebot_config="${ROOT_DIR}/sitebot/etc/config.yml"
@@ -352,7 +386,9 @@ ensure_enabled_plugin_configs() {
     local repaired_any="false"
     local missing_any="false"
 
-local daemon_plugins=(autonuke dateddirs tvmaze imdb mediainfo speedtest request releaseguard pre slowkick spacekeeper)
+    repair_legacy_daemon_plugin_names
+
+local daemon_plugins=(autonuke dateddirs tvmaze imdb mediainfo speedtest request releaseguard pre pretime slowkick spacekeeper)
     if [ -f "${daemon_config}" ]; then
         for plugin_name in "${daemon_plugins[@]}"; do
             enabled_value="$(daemon_plugin_enabled_in_config "${daemon_config}" "${plugin_name}")"
@@ -373,7 +409,7 @@ local daemon_plugins=(autonuke dateddirs tvmaze imdb mediainfo speedtest request
         done
     fi
 
-    local sitebot_plugins=(Announce TVMaze IMDB News Free Affils Request BNC Control Banned SelfIP Top BW Rules Topic AdminCommander)
+    local sitebot_plugins=(Announce TVMaze IMDB News Free Affils Request BNC Control Banned SelfIP Quota Top BW Rules Topic AdminCommander)
     if [ -f "${sitebot_config}" ]; then
         for plugin_name in "${sitebot_plugins[@]}"; do
             enabled_value="$(sitebot_plugin_enabled_in_config "${sitebot_config}" "${plugin_name}")"
@@ -505,6 +541,102 @@ set_daemon_plugin_enabled() {
     mv "${file}.tmp" "${file}"
 }
 
+migrate_legacy_daemon_plugin_entry() {
+    local file="$1"
+    local old_plugin_name="$2"
+    local new_plugin_name="$3"
+    local new_config_file new_exists
+    if [ ! -f "${file}" ]; then
+        return 0
+    fi
+    if [ "$(daemon_plugin_present_in_config "${file}" "${old_plugin_name}")" != "true" ]; then
+        return 0
+    fi
+    new_config_file="$(daemon_plugin_config_path "${new_plugin_name}")"
+    new_exists="$(daemon_plugin_present_in_config "${file}" "${new_plugin_name}")"
+    awk -v old_plugin_name="${old_plugin_name}" -v new_plugin_name="${new_plugin_name}" -v new_config_file="${new_config_file}" -v new_exists="${new_exists}" '
+        BEGIN { in_plugins = 0; in_old = 0 }
+        /^plugins:$/ { in_plugins = 1; print; next }
+        in_plugins && $0 ~ ("^  " old_plugin_name ":$") {
+            in_old = 1
+            if (new_exists != "true") {
+                print "  " new_plugin_name ":"
+            }
+            next
+        }
+        in_old && $0 ~ /^  [A-Za-z0-9_-]+:$/ { in_old = 0 }
+        in_old && new_exists == "true" { next }
+        in_old && $0 ~ /^    config_file:[[:space:]]+/ {
+            print "    config_file: \"" new_config_file "\""
+            next
+        }
+        { print }
+    ' "${file}" > "${file}.tmp"
+    mv "${file}.tmp" "${file}"
+}
+
+migrate_legacy_daemon_plugin_config() {
+    local old_plugin_name="$1"
+    local new_plugin_name="$2"
+    local old_config new_config old_dist new_dist
+    old_config="${ROOT_DIR}/plugins/${old_plugin_name}/config.yml"
+    new_config="${ROOT_DIR}/plugins/${new_plugin_name}/config.yml"
+    old_dist="${old_config}.dist"
+    new_dist="${new_config}.dist"
+
+    if [ -f "${old_config}" ] && [ ! -f "${new_config}" ]; then
+        mkdir -p "$(dirname "${new_config}")"
+        mv "${old_config}" "${new_config}"
+        say "Migrated legacy plugin config ${old_config} -> ${new_config}"
+    fi
+    if [ -f "${old_dist}" ] && [ ! -f "${new_dist}" ]; then
+        mkdir -p "$(dirname "${new_dist}")"
+        mv "${old_dist}" "${new_dist}"
+        say "Migrated legacy plugin dist config ${old_dist} -> ${new_dist}"
+    fi
+}
+
+repair_legacy_daemon_plugin_names() {
+    local daemon_config="${ROOT_DIR}/etc/config.yml"
+    if [ -f "${daemon_config}" ]; then
+        migrate_legacy_daemon_plugin_entry "${daemon_config}" "slowupkick" "slowkick"
+    fi
+    migrate_legacy_daemon_plugin_config "slowupkick" "slowkick"
+}
+
+ensure_daemon_plugin_entry() {
+    local file="$1"
+    local plugin_name="$2"
+    local config_file="$3"
+    if [ "$(daemon_plugin_present_in_config "${file}" "${plugin_name}")" = "true" ]; then
+        return 0
+    fi
+    awk -v plugin_name="${plugin_name}" -v config_file="${config_file}" '
+        BEGIN { in_plugins = 0; inserted = 0 }
+        /^plugins:$/ {
+            in_plugins = 1
+            print
+            next
+        }
+        in_plugins && /^[^[:space:]#]/ && !inserted {
+            print "  " plugin_name ":"
+            print "    enabled: false"
+            print "    config_file: \"" config_file "\""
+            inserted = 1
+            in_plugins = 0
+        }
+        { print }
+        END {
+            if (in_plugins && !inserted) {
+                print "  " plugin_name ":"
+                print "    enabled: false"
+                print "    config_file: \"" config_file "\""
+            }
+        }
+    ' "${file}" > "${file}.tmp"
+    mv "${file}.tmp" "${file}"
+}
+
 set_sitebot_plugin_enabled() {
     local file="$1"
     local plugin_name="$2"
@@ -519,6 +651,41 @@ set_sitebot_plugin_enabled() {
             next
         }
         { print }
+    ' "${file}" > "${file}.tmp"
+    mv "${file}.tmp" "${file}"
+}
+
+ensure_sitebot_plugin_enabled_entry() {
+    local file="$1"
+    local plugin_name="$2"
+    if [ "$(sitebot_plugin_present_in_config "${file}" "${plugin_name}")" = "true" ]; then
+        return 0
+    fi
+    awk -v plugin_name="${plugin_name}" '
+        BEGIN { in_plugins = 0; in_enabled = 0; inserted = 0 }
+        /^plugins:$/ {
+            in_plugins = 1
+            print
+            next
+        }
+        in_plugins && /^  enabled:$/ {
+            in_enabled = 1
+            print
+            next
+        }
+        in_enabled && /^  config:$/ && !inserted {
+            print "    " plugin_name ": false"
+            inserted = 1
+            in_enabled = 0
+            print
+            next
+        }
+        { print }
+        END {
+            if (in_enabled && !inserted) {
+                print "    " plugin_name ": false"
+            }
+        }
     ' "${file}" > "${file}.tmp"
     mv "${file}.tmp" "${file}"
 }
@@ -728,6 +895,11 @@ EOF
         set_yaml_array_line "sitebot/plugins/request/config.yml" '^staff_channels:' "staff_channels: [\"${staff_channel}\"]"
     fi
 
+    if [ -f "sitebot/plugins/quota/config.yml" ]; then
+        set_yaml_array_line "sitebot/plugins/quota/config.yml" '^channels:' "channels: [\"${chat_channel}\"]"
+        set_yaml_array_line "sitebot/plugins/quota/config.yml" '^staff_channels:' "staff_channels: [\"${staff_channel}\"]"
+    fi
+
     if [ -f "sitebot/plugins/bnc/config.yml" ]; then
         set_yaml_array_line "sitebot/plugins/bnc/config.yml" '^channels:' "channels: [\"${chat_channel}\"]"
     fi
@@ -868,6 +1040,7 @@ configure_daemon() {
     say ""
     say "Configuring daemon..."
     copy_if_missing "etc/config-example.yml" "${daemon_config}"
+    repair_legacy_daemon_plugin_names
 
     local daemon_mode long_name short_name site_version cert_name enabled_bool timezone system_timezone
     local listen_port public_ip passthrough_mode master_listen_host master_control_port
@@ -958,13 +1131,14 @@ configure_daemon() {
     local daemon_enabled=()
     local daemon_disabled=()
     if [ "${daemon_mode}" = "master" ]; then
-daemon_plugins=(autonuke dateddirs tvmaze imdb mediainfo speedtest request releaseguard pre slowkick spacekeeper)
+daemon_plugins=(autonuke dateddirs tvmaze imdb mediainfo speedtest request releaseguard pre pretime slowkick spacekeeper)
     fi
 
     local plugin_name
     for plugin_name in "${daemon_plugins[@]}"; do
         local plugin_config
         local plugin_created="false"
+        local plugin_entry_missing="false"
         local var_name="SETUP_DAEMON_PLUGIN_$(printf '%s' "${plugin_name}" | tr '[:lower:]-' '[:upper:]_')"
         local default_answer
         plugin_config="$(daemon_plugin_config_path "${plugin_name}")"
@@ -972,7 +1146,10 @@ daemon_plugins=(autonuke dateddirs tvmaze imdb mediainfo speedtest request relea
             plugin_created="true"
             daemon_created+=("${plugin_name}")
         fi
-        if [ "${daemon_config_exists}" = "true" ] && [ "${plugin_created}" != "true" ]; then
+        if [ "${daemon_config_exists}" = "true" ] && [ "$(daemon_plugin_present_in_config "${daemon_config}" "${plugin_name}")" != "true" ]; then
+            plugin_entry_missing="true"
+        fi
+        if [ "${daemon_config_exists}" = "true" ] && [ "${plugin_created}" != "true" ] && [ "${plugin_entry_missing}" != "true" ]; then
             continue
         fi
         default_answer="$(bool_to_prompt_default "${!var_name:-true}")"
@@ -982,6 +1159,7 @@ daemon_plugins=(autonuke dateddirs tvmaze imdb mediainfo speedtest request relea
             enabled_bool="false"
         fi
         printf -v "${var_name}" '%s' "${enabled_bool}"
+        ensure_daemon_plugin_entry "${daemon_config}" "${plugin_name}" "$(daemon_plugin_config_path "${plugin_name}")"
         set_daemon_plugin_enabled "${daemon_config}" "${plugin_name}" "${enabled_bool}"
         if [ "${enabled_bool}" = "true" ]; then
             daemon_enabled+=("${plugin_name}")
@@ -1183,7 +1361,7 @@ configure_sitebot() {
         rewrite_sitebot_encryption_keys "${sitebot_config}" "${main_channel}" "${chat_channel}" "${spam_channel}" "${staff_channel}" "${foreign_channel}" "${archive_channel}" "${nuke_channel}" "${main_key}" "${chat_key}" "${spam_key}" "${staff_key}" "${foreign_key}" "${archive_key}" "${nuke_key}" "${private_key}"
     fi
 
-    local sitebot_plugins=(Announce TVMaze IMDB News Free Affils Request BNC Control Banned SelfIP Top BW Rules Topic AdminCommander)
+    local sitebot_plugins=(Announce TVMaze IMDB News Free Affils Request BNC Control Banned SelfIP Quota Top BW Rules Topic AdminCommander)
     local plugin_name
     local sitebot_enable_queue=()
     local sitebot_created=()
@@ -1217,6 +1395,7 @@ configure_sitebot() {
     for plugin_name in "${sitebot_plugins[@]}"; do
         local var_name="SETUP_SITEBOT_PLUGIN_$(printf '%s' "${plugin_name}" | tr '[:lower:]-' '[:upper:]_')"
         local default_answer
+        local plugin_entry_missing="false"
         if [ "${sitebot_config_exists}" = "true" ]; then
             local should_ask="false"
             local queued_name
@@ -1226,6 +1405,10 @@ configure_sitebot() {
                     break
                 fi
             done
+            if [ "$(sitebot_plugin_present_in_config "${sitebot_config}" "${plugin_name}")" != "true" ]; then
+                plugin_entry_missing="true"
+                should_ask="true"
+            fi
             if [ "${should_ask}" != "true" ]; then
                 continue
             fi
@@ -1237,6 +1420,7 @@ configure_sitebot() {
             enabled_bool="false"
         fi
         printf -v "${var_name}" '%s' "${enabled_bool}"
+        ensure_sitebot_plugin_enabled_entry "${sitebot_config}" "${plugin_name}"
         set_sitebot_plugin_enabled "${sitebot_config}" "${plugin_name}" "${enabled_bool}"
         if [ "${enabled_bool}" = "true" ]; then
             sitebot_enabled+=("${plugin_name}")
@@ -1352,6 +1536,7 @@ save_state_file() {
     write_state_var SETUP_DAEMON_PLUGIN_REQUEST "${SETUP_DAEMON_PLUGIN_REQUEST:-true}"
     write_state_var SETUP_DAEMON_PLUGIN_RELEASEGUARD "${SETUP_DAEMON_PLUGIN_RELEASEGUARD:-false}"
     write_state_var SETUP_DAEMON_PLUGIN_PRE "${SETUP_DAEMON_PLUGIN_PRE:-true}"
+    write_state_var SETUP_DAEMON_PLUGIN_PRETIME "${SETUP_DAEMON_PLUGIN_PRETIME:-false}"
     write_state_var SETUP_CONFIGURE_SITEBOT_ON_SLAVE "${SETUP_CONFIGURE_SITEBOT_ON_SLAVE:-false}"
     write_state_var SETUP_SITEBOT_PLUGIN_ANNOUNCE "${SETUP_SITEBOT_PLUGIN_ANNOUNCE:-true}"
     write_state_var SETUP_SITEBOT_PLUGIN_TVMAZE "${SETUP_SITEBOT_PLUGIN_TVMAZE:-true}"
@@ -1364,6 +1549,7 @@ save_state_file() {
     write_state_var SETUP_SITEBOT_PLUGIN_CONTROL "${SETUP_SITEBOT_PLUGIN_CONTROL:-true}"
     write_state_var SETUP_SITEBOT_PLUGIN_BANNED "${SETUP_SITEBOT_PLUGIN_BANNED:-true}"
     write_state_var SETUP_SITEBOT_PLUGIN_SELFIP "${SETUP_SITEBOT_PLUGIN_SELFIP:-true}"
+    write_state_var SETUP_SITEBOT_PLUGIN_QUOTA "${SETUP_SITEBOT_PLUGIN_QUOTA:-false}"
     write_state_var SETUP_SITEBOT_PLUGIN_TOP "${SETUP_SITEBOT_PLUGIN_TOP:-true}"
     write_state_var SETUP_SITEBOT_PLUGIN_BW "${SETUP_SITEBOT_PLUGIN_BW:-true}"
     write_state_var SETUP_SITEBOT_PLUGIN_RULES "${SETUP_SITEBOT_PLUGIN_RULES:-true}"

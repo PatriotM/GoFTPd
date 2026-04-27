@@ -36,6 +36,8 @@ const (
 	EventPreBW            EventType = "PREBW"
 	EventPreBWUser        EventType = "PREBWUSER"
 	EventPreBWInterval    EventType = "PREBWINTERVAL"
+	EventNewPreTime       EventType = "NEWPRETIME"
+	EventOldPreTime       EventType = "OLDPRETIME"
 )
 
 type Event struct {

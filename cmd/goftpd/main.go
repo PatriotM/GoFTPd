@@ -27,6 +27,7 @@ import (
 	"goftpd/plugins/imdb"
 	"goftpd/plugins/mediainfo"
 	"goftpd/plugins/pre"
+	"goftpd/plugins/pretime"
 	"goftpd/plugins/releaseguard"
 	"goftpd/plugins/request"
 	"goftpd/plugins/slowkick"
@@ -365,6 +366,8 @@ func main() {
 			p = mediainfo.New()
 		case "pre":
 			p = pre.New()
+		case "pretime":
+			p = pretime.New()
 		case "releaseguard":
 			p = releaseguard.New()
 		case "request":

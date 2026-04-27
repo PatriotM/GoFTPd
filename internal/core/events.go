@@ -46,6 +46,8 @@ const (
 	EventPreBW            EventType = "PREBW"         // race-bw totals after pre
 	EventPreBWUser        EventType = "PREBWUSER"     // per-user race-bw after pre
 	EventPreBWInterval    EventType = "PREBWINTERVAL" // interval snapshots after pre
+	EventNewPreTime       EventType = "NEWPRETIME"
+	EventOldPreTime       EventType = "OLDPRETIME"
 )
 
 // Event is the daemon-side event payload written to the event FIFO as JSON lines.

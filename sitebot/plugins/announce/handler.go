@@ -25,6 +25,13 @@ type releaseState struct {
 	LastSeen      time.Time
 }
 
+type pendingPretime struct {
+	section string
+	relpath string
+	vars    map[string]string
+	timer   *time.Timer
+}
+
 type AnnouncePlugin struct {
 	debug               bool
 	theme               *tmpl.Theme
@@ -32,11 +39,22 @@ type AnnouncePlugin struct {
 	slowUploadKickChans []string
 	slowDnWarnChans     []string
 	slowDnKickChans     []string
+	pretimeMode         string
+	pretimeInlineWait   time.Duration
+	asyncEmit           func(outType, text, section, relpath string)
 	mu                  sync.Mutex
 	state               map[string]*releaseState
+	pendingPretime      map[string]*pendingPretime
 }
 
-func New() *AnnouncePlugin             { return &AnnouncePlugin{state: map[string]*releaseState{}} }
+func New() *AnnouncePlugin {
+	return &AnnouncePlugin{
+		state:             map[string]*releaseState{},
+		pretimeMode:       "newline",
+		pretimeInlineWait: 1500 * time.Millisecond,
+		pendingPretime:    map[string]*pendingPretime{},
+	}
+}
 func (p *AnnouncePlugin) Name() string { return "Announce" }
 func (p *AnnouncePlugin) Initialize(config map[string]interface{}) error {
 	if debug, ok := config["debug"].(bool); ok {
@@ -46,6 +64,24 @@ func (p *AnnouncePlugin) Initialize(config map[string]interface{}) error {
 	p.slowUploadKickChans = p.routeTargets(config, "SLOWUPLOADKICK", "SLOWKICK", "SLAVEAUTH", "LOGIN")
 	p.slowDnWarnChans = p.routeTargets(config, "SLOWDOWNLOADWARN", "SLOWKICK", "SLAVEAUTH", "LOGIN")
 	p.slowDnKickChans = p.routeTargets(config, "SLOWDOWNLOADKICK", "SLOWKICK", "SLAVEAUTH", "LOGIN")
+	pretimeCfg := plugin.ConfigSection(config, "pretime")
+	if mode, ok := pretimeCfg["mode"].(string); ok && strings.TrimSpace(mode) != "" {
+		p.pretimeMode = strings.ToLower(strings.TrimSpace(mode))
+	}
+	switch v := pretimeCfg["inline_wait_ms"].(type) {
+	case int:
+		if v > 0 {
+			p.pretimeInlineWait = time.Duration(v) * time.Millisecond
+		}
+	case int64:
+		if v > 0 {
+			p.pretimeInlineWait = time.Duration(v) * time.Millisecond
+		}
+	case float64:
+		if v > 0 {
+			p.pretimeInlineWait = time.Duration(int(v)) * time.Millisecond
+		}
+	}
 	if themeFile, ok := config["theme_file"].(string); ok && strings.TrimSpace(themeFile) != "" {
 		th, err := tmpl.LoadTheme(themeFile)
 		if err == nil {
@@ -60,6 +96,10 @@ func (p *AnnouncePlugin) Initialize(config map[string]interface{}) error {
 	return nil
 }
 func (p *AnnouncePlugin) Close() error { return nil }
+
+func (p *AnnouncePlugin) SetAsyncEmitter(fn func(outType, text, section, relpath string)) {
+	p.asyncEmit = fn
+}
 
 func (p *AnnouncePlugin) routeTargets(config map[string]interface{}, routeKeys ...string) []string {
 	for _, key := range routeKeys {
@@ -247,6 +287,108 @@ func (p *AnnouncePlugin) render(key string, vars map[string]string, fallback str
 	return fallback
 }
 
+func (p *AnnouncePlugin) shouldInlinePretime() bool {
+	return strings.EqualFold(strings.TrimSpace(p.pretimeMode), "inline")
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func pretimeKey(relpath string) string {
+	return strings.ToLower(path.Clean("/" + strings.TrimSpace(relpath)))
+}
+
+func syntheticNewRelPath(evt *event.Event, section string) string {
+	if evt == nil {
+		return ""
+	}
+	if evt.Type == event.EventMKDir {
+		return path.Clean("/" + strings.TrimSpace(evt.Path))
+	}
+	if evt.Type == event.EventUpload && shouldEmitSyntheticNew(evt, section) {
+		return path.Dir(path.Clean("/" + strings.TrimSpace(evt.Path)))
+	}
+	return ""
+}
+
+func (p *AnnouncePlugin) renderNewLine(section, rel string, vars map[string]string) string {
+	return p.render("NEWDIR", vars, fmt.Sprintf("NEW : [%s] %s%s by %s", section, vars["subdir_prefix"], rel, vars["u_name"]))
+}
+
+func (p *AnnouncePlugin) renderInlinePretime(evt *event.Event, section, rel string, vars map[string]string) string {
+	key := "NEWPRETIMEINLINE"
+	fallback := fmt.Sprintf("NEW : [%s] %s by %s :: released %s ago", section, rel, vars["u_name"], vars["preage"])
+	if evt != nil && evt.Type == event.EventOldPreTime {
+		key = "OLDPRETIMEINLINE"
+	}
+	return p.render(key, vars, fallback)
+}
+
+func (p *AnnouncePlugin) queueInlinePretime(relpath, section string, vars map[string]string) {
+	if p.asyncEmit == nil || relpath == "" {
+		return
+	}
+	key := pretimeKey(relpath)
+	if existing := p.pendingPretime[key]; existing != nil {
+		if existing.timer != nil {
+			existing.timer.Stop()
+		}
+		delete(p.pendingPretime, key)
+	}
+	pending := &pendingPretime{
+		section: section,
+		relpath: relpath,
+		vars:    cloneStringMap(vars),
+	}
+	pending.timer = time.AfterFunc(p.pretimeInlineWait, func() {
+		p.flushInlinePretimeFallback(key)
+	})
+	p.pendingPretime[key] = pending
+}
+
+func (p *AnnouncePlugin) flushInlinePretimeFallback(key string) {
+	var pending *pendingPretime
+	p.mu.Lock()
+	pending = p.pendingPretime[key]
+	if pending != nil {
+		delete(p.pendingPretime, key)
+	}
+	p.mu.Unlock()
+	if pending == nil || p.asyncEmit == nil {
+		return
+	}
+	rel := pending.vars["relname"]
+	text := p.renderNewLine(pending.section, rel, pending.vars)
+	p.asyncEmit("NEW", text, pending.section, pending.relpath)
+}
+
+func (p *AnnouncePlugin) emitInlinePretime(evt *event.Event, section, rel string, vars map[string]string) bool {
+	key := pretimeKey(evt.Path)
+	pending := p.pendingPretime[key]
+	if pending == nil {
+		return false
+	}
+	if pending.timer != nil {
+		pending.timer.Stop()
+	}
+	delete(p.pendingPretime, key)
+	if p.asyncEmit == nil {
+		return false
+	}
+	mergedVars := cloneStringMap(pending.vars)
+	for k, v := range vars {
+		mergedVars[k] = v
+	}
+	text := p.renderInlinePretime(evt, section, rel, mergedVars)
+	go p.asyncEmit("NEW", text, section, pending.relpath)
+	return true
+}
+
 func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -312,7 +454,11 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 		if isReleaseDir(evt.Path, section) {
 			if !st.Created {
 				st.Created = true
-				outs = append(outs, plugin.Output{Type: "NEW", Text: p.render("NEWDIR", vars, fmt.Sprintf("NEW : [%s] %s%s by %s", section, vars["subdir_prefix"], rel, evt.User))})
+				if p.shouldInlinePretime() && p.asyncEmit != nil {
+					p.queueInlinePretime(syntheticNewRelPath(evt, section), section, vars)
+				} else {
+					outs = append(outs, plugin.Output{Type: "NEW", Text: p.renderNewLine(section, rel, vars)})
+				}
 			}
 		}
 	case event.EventUpload:
@@ -321,7 +467,11 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 		}
 		if !st.Created && shouldEmitSyntheticNew(evt, section) {
 			st.Created = true
-			outs = append(outs, plugin.Output{Type: "NEW", Text: p.render("NEWDIR", vars, fmt.Sprintf("NEW : [%s] %s%s by %s", section, vars["subdir_prefix"], rel, evt.User))})
+			if p.shouldInlinePretime() && p.asyncEmit != nil {
+				p.queueInlinePretime(syntheticNewRelPath(evt, section), section, vars)
+			} else {
+				outs = append(outs, plugin.Output{Type: "NEW", Text: p.renderNewLine(section, rel, vars)})
+			}
 		}
 		switch fileType {
 		case "nfo", "sample":
@@ -457,6 +607,8 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 			switch strings.TrimSpace(vars["reason"]) {
 			case "user_deleted":
 				message = fmt.Sprintf("%s could not log in, user deleted.", vars["username"])
+			case "account_disabled":
+				message = fmt.Sprintf("%s could not log in, account disabled.", vars["username"])
 			case "bad_password":
 				message = fmt.Sprintf("%s could not log in, bad password.", vars["username"])
 			case "ip_not_allowed":
@@ -589,6 +741,20 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 			vars["avg_val_user"], vars["avg_unit_user"],
 			vars["peak_val_user"], vars["peak_unit_user"])
 		outs = append(outs, plugin.Output{Type: "PREBW", Text: p.render("PREBWUSER", vars, fallback)})
+	case event.EventNewPreTime:
+		if p.shouldInlinePretime() {
+			p.emitInlinePretime(evt, section, rel, vars)
+			return nil, nil
+		}
+		fallback := fmt.Sprintf("PRETiME: [%s] %s :: OK :: released %s ago", section, rel, vars["preage"])
+		outs = append(outs, plugin.Output{Type: "NEWPRETIME", Text: p.render("NEWPRETIME", vars, fallback)})
+	case event.EventOldPreTime:
+		if p.shouldInlinePretime() {
+			p.emitInlinePretime(evt, section, rel, vars)
+			return nil, nil
+		}
+		fallback := fmt.Sprintf("PRETiME: [%s] %s :: BAD :: released %s ago", section, rel, vars["preage"])
+		outs = append(outs, plugin.Output{Type: "OLDPRETIME", Text: p.render("OLDPRETIME", vars, fallback)})
 	}
 	return outs, nil
 }
