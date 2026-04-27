@@ -235,6 +235,8 @@ nukedir_style:       "[NUKED]-%N"   # Renamed dir pattern (%N = release name)
 #    tvmaze  — looks up TV shows on TVMaze when a release dir is created,
 #              writes .tvmaze into the dir (shown via show_diz above)
 #    imdb    — same for movies via imdbapi.dev, writes .imdb
+#    pretime - looks up release pre times from SQLite, MySQL, or HTTP APIs
+#              and emits NEWPRETIME / OLDPRETIME append announces
 #    mediainfo - runs mediainfo on uploaded audio/sample files and emits
 #                AUDIOINFO / MEDIAINFO events for the sitebot
 #    pre     - handles SITE PRE for affil staging dirs and PREBW announces
@@ -470,6 +472,12 @@ plugins:
   imdb:
     enabled: true
     config_file: "plugins/imdb/config.yml"
+  pretime:
+    enabled: false
+    # Appends a pretime announce after NEW when a lookup succeeds.
+    # SQLite, MySQL, and HTTP/JSON providers are configured in the plugin
+    # dist file without touching the main daemon config.
+    config_file: "plugins/pretime/config.yml"
   mediainfo:
     enabled: true
     config_file: "plugins/mediainfo/config.yml"

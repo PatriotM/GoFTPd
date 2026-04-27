@@ -1,0 +1,65 @@
+# Announce pretime lookups for new release dirs. This appends a NEWPRETIME or
+# OLDPRETIME line after the normal NEW line when a lookup succeeds.
+#
+# Lookups run on MKDIR release dirs only. Helper subdirs like Sample/Proof/Subs
+# are ignored automatically.
+#
+# Provider order is configurable. SQLite, MySQL, and HTTP/JSON API backends can
+# all be enabled; the first one that returns a unix timestamp wins.
+#
+# Note: this is append-only on purpose. The daemon emits MKDIR before plugins
+# run, so replacing the built-in NEW line would be racy and ugly.
+
+late_minutes: 10
+debug: false
+
+# Optional section substring matches, same style as tvmaze/imdb. If both
+# sections and paths are empty, every release dir is eligible.
+sections: ["0DAY", "APPS", "EBOOKS", "TV", "X264", "X265", "BLURAY", "DVDR", "MP3", "FLAC"]
+
+# Optional stricter path filters.
+paths: []
+
+# Conventional helper dirs that should never trigger pretime lookups.
+ignore_dirs:
+  - "cd[0-9]*"
+  - "disc[0-9]*"
+  - "disk[0-9]*"
+  - "dvd[0-9]*"
+  - "cover"
+  - "covers"
+  - "extra"
+  - "extras"
+  - "proof"
+  - "sample"
+  - "samples"
+  - "sub"
+  - "subs"
+  - "subtitles"
+
+provider_order: ["sqlite", "mysql", "api"]
+
+sqlite:
+  enabled: true
+  path: "plugins/pretime/releases.db"
+  table: "releases"
+  release_field: "release"
+  unixtime_field: "timestamp_unix"
+
+mysql:
+  enabled: false
+  dsn: "user:password@tcp(127.0.0.1:3306)/predb?charset=utf8mb4&parseTime=true"
+  table: "releases"
+  release_field: "release"
+  unixtime_field: "timestamp_unix"
+
+api:
+  enabled: true
+  timeout_seconds: 5
+  providers:
+    - name: "predb.club"
+      url: "https://predb.club/api/v1/?q=%22{release}%22"
+      unix_time_path: "data.rows.0.preAt"
+    - name: "predb.net"
+      url: "https://api.predb.net/?release={release}"
+      unix_time_path: "data.0.pretime"

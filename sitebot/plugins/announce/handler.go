@@ -589,6 +589,12 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 			vars["avg_val_user"], vars["avg_unit_user"],
 			vars["peak_val_user"], vars["peak_unit_user"])
 		outs = append(outs, plugin.Output{Type: "PREBW", Text: p.render("PREBWUSER", vars, fallback)})
+	case event.EventNewPreTime:
+		fallback := fmt.Sprintf("NEW : [%s] %s by %s :: released %s ago", section, rel, vars["u_name"], vars["preage"])
+		outs = append(outs, plugin.Output{Type: "NEWPRETIME", Text: p.render("NEWPRETIME", vars, fallback)})
+	case event.EventOldPreTime:
+		fallback := fmt.Sprintf("NEW : [%s] %s by %s :: released %s ago", section, rel, vars["u_name"], vars["preage"])
+		outs = append(outs, plugin.Output{Type: "OLDPRETIME", Text: p.render("OLDPRETIME", vars, fallback)})
 	}
 	return outs, nil
 }

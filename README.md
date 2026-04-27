@@ -261,6 +261,7 @@ Built-in daemon plugins:
 | `dateddirs` | Creates date-based section folders and today symlinks |
 | `tvmaze` | Writes `.tvmaze` metadata for configured TV sections |
 | `imdb` | Writes `.imdb` metadata for configured movie sections |
+| `pretime` | Looks up known pre times for new release dirs and emits appended `NEWPRETIME` / `OLDPRETIME` announces |
 | `mediainfo` | Emits audio/video metadata events after uploads |
 | `pre` | Provides SITE PRE and affil management commands |
 | `releaseguard` | Blocks bad release dir names before MKD creates them and provides `SITE BANNED` |
@@ -312,6 +313,20 @@ disconnects the FTP session, so partial uploads are cleaned up on the slave
 side instead of being left behind as junk. Upload and download thresholds can
 be tuned independently, and the plugin can temporarily ban the FTP user after
 a slow kick so they cannot immediately reconnect and grab the slot again.
+
+### Pretime
+
+The pretime plugin watches release-root `MKDIR` events and looks up the
+release in one or more configurable backends:
+
+- SQLite
+- MySQL
+- HTTP/JSON API providers such as `predb.club` or `predb.net`
+
+When a unix pre timestamp is found, it emits either `NEWPRETIME` or
+`OLDPRETIME` with a formatted release age string for the sitebot. This is
+append-only on purpose: the normal `NEW` line is already emitted by the daemon
+before plugins run, so trying to replace it here would be racy.
 
 ### Spacekeeper
 

@@ -321,18 +321,27 @@ func (s *Slave) handleDelete(ac *protocol.AsyncCommand) interface{} {
 		return &protocol.AsyncResponseError{Index: ac.Index, Message: "delete: missing path"}
 	}
 	path := ac.Args[0]
+	deletedAny := false
 
 	for _, root := range s.roots {
 		fullPath := filepath.Join(root, path)
 		if info, err := os.Stat(fullPath); err == nil {
 			if info.IsDir() {
-				os.RemoveAll(fullPath)
+				if err := os.RemoveAll(fullPath); err != nil {
+					return &protocol.AsyncResponseError{Index: ac.Index, Message: fmt.Sprintf("delete failed: %v", err)}
+				}
 			} else {
-				os.Remove(fullPath)
+				if err := os.Remove(fullPath); err != nil {
+					return &protocol.AsyncResponseError{Index: ac.Index, Message: fmt.Sprintf("delete failed: %v", err)}
+				}
 			}
+			deletedAny = true
 			// Clean up empty parent dirs ()
 			s.cleanEmptyParents(fullPath, root)
 		}
+	}
+	if !deletedAny {
+		return &protocol.AsyncResponseError{Index: ac.Index, Message: "delete failed: path not found on slave"}
 	}
 
 	// Report updated disk status

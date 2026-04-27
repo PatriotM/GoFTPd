@@ -352,7 +352,7 @@ ensure_enabled_plugin_configs() {
     local repaired_any="false"
     local missing_any="false"
 
-local daemon_plugins=(autonuke dateddirs tvmaze imdb mediainfo speedtest request releaseguard pre slowkick spacekeeper)
+local daemon_plugins=(autonuke dateddirs tvmaze imdb mediainfo speedtest request releaseguard pre pretime slowkick spacekeeper)
     if [ -f "${daemon_config}" ]; then
         for plugin_name in "${daemon_plugins[@]}"; do
             enabled_value="$(daemon_plugin_enabled_in_config "${daemon_config}" "${plugin_name}")"
@@ -958,7 +958,7 @@ configure_daemon() {
     local daemon_enabled=()
     local daemon_disabled=()
     if [ "${daemon_mode}" = "master" ]; then
-daemon_plugins=(autonuke dateddirs tvmaze imdb mediainfo speedtest request releaseguard pre slowkick spacekeeper)
+daemon_plugins=(autonuke dateddirs tvmaze imdb mediainfo speedtest request releaseguard pre pretime slowkick spacekeeper)
     fi
 
     local plugin_name
@@ -1352,6 +1352,7 @@ save_state_file() {
     write_state_var SETUP_DAEMON_PLUGIN_REQUEST "${SETUP_DAEMON_PLUGIN_REQUEST:-true}"
     write_state_var SETUP_DAEMON_PLUGIN_RELEASEGUARD "${SETUP_DAEMON_PLUGIN_RELEASEGUARD:-false}"
     write_state_var SETUP_DAEMON_PLUGIN_PRE "${SETUP_DAEMON_PLUGIN_PRE:-true}"
+    write_state_var SETUP_DAEMON_PLUGIN_PRETIME "${SETUP_DAEMON_PLUGIN_PRETIME:-false}"
     write_state_var SETUP_CONFIGURE_SITEBOT_ON_SLAVE "${SETUP_CONFIGURE_SITEBOT_ON_SLAVE:-false}"
     write_state_var SETUP_SITEBOT_PLUGIN_ANNOUNCE "${SETUP_SITEBOT_PLUGIN_ANNOUNCE:-true}"
     write_state_var SETUP_SITEBOT_PLUGIN_TVMAZE "${SETUP_SITEBOT_PLUGIN_TVMAZE:-true}"
