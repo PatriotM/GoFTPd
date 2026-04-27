@@ -744,14 +744,14 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 			p.emitInlinePretime(evt, section, rel, vars)
 			return nil, nil
 		}
-		fallback := fmt.Sprintf("PRETiME: [%s] %s OK :: released %s ago", section, rel, vars["preage"])
+		fallback := fmt.Sprintf("PRETiME: [%s] %s :: OK :: released %s ago", section, rel, vars["preage"])
 		outs = append(outs, plugin.Output{Type: "NEWPRETIME", Text: p.render("NEWPRETIME", vars, fallback)})
 	case event.EventOldPreTime:
 		if p.shouldInlinePretime() {
 			p.emitInlinePretime(evt, section, rel, vars)
 			return nil, nil
 		}
-		fallback := fmt.Sprintf("PRETiME: [%s] %s BAD :: released %s ago", section, rel, vars["preage"])
+		fallback := fmt.Sprintf("PRETiME: [%s] %s :: BAD :: released %s ago", section, rel, vars["preage"])
 		outs = append(outs, plugin.Output{Type: "OLDPRETIME", Text: p.render("OLDPRETIME", vars, fallback)})
 	}
 	return outs, nil
