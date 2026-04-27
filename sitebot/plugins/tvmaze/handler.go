@@ -118,7 +118,7 @@ func (p *TVMazePlugin) Close() error { return nil }
 // release rather than a subfolder (Sample, Proof, Subs, etc). A real release
 // has dots, a -GROUP suffix, and a season/year tag.
 func isReleaseDirName(rel string) bool {
-	// Scene releases always contain dots and a group suffix.
+	// Release names here usually contain dots and a group suffix.
 	if !strings.Contains(rel, ".") {
 		return false
 	}
@@ -130,7 +130,7 @@ func isReleaseDirName(rel string) bool {
 	return re.MatchString(rel)
 }
 
-// extractShowName parses a scene-style release name and returns a query title.
+// extractShowName parses a release name and returns a query title.
 // e.g. "Fire.Country.S04E15.1080p.WEB.h264-ETHEL" -> "Fire Country"
 func extractShowName(rel string) string {
 	if idx := strings.LastIndex(rel, "-"); idx > 0 {
@@ -330,3 +330,5 @@ func (p *TVMazePlugin) sectionColor(section string, slot int) string {
 	}
 	return fallback
 }
+
+
