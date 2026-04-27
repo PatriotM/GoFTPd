@@ -285,6 +285,7 @@ sitebot_plugin_config_path() {
         Free) printf 'sitebot/plugins/free/config.yml' ;;
         IMDB) printf 'sitebot/plugins/imdb/config.yml' ;;
         News) printf 'sitebot/plugins/news/config.yml' ;;
+        Quota) printf 'sitebot/plugins/quota/config.yml' ;;
         Request) printf 'sitebot/plugins/request/config.yml' ;;
         Rules) printf 'sitebot/plugins/rules/config.yml' ;;
         SelfIP) printf 'sitebot/plugins/selfip/config.yml' ;;
@@ -408,7 +409,7 @@ local daemon_plugins=(autonuke dateddirs tvmaze imdb mediainfo speedtest request
         done
     fi
 
-    local sitebot_plugins=(Announce TVMaze IMDB News Free Affils Request BNC Control Banned SelfIP Top BW Rules Topic AdminCommander)
+    local sitebot_plugins=(Announce TVMaze IMDB News Free Affils Request BNC Control Banned SelfIP Quota Top BW Rules Topic AdminCommander)
     if [ -f "${sitebot_config}" ]; then
         for plugin_name in "${sitebot_plugins[@]}"; do
             enabled_value="$(sitebot_plugin_enabled_in_config "${sitebot_config}" "${plugin_name}")"
@@ -894,6 +895,11 @@ EOF
         set_yaml_array_line "sitebot/plugins/request/config.yml" '^staff_channels:' "staff_channels: [\"${staff_channel}\"]"
     fi
 
+    if [ -f "sitebot/plugins/quota/config.yml" ]; then
+        set_yaml_array_line "sitebot/plugins/quota/config.yml" '^channels:' "channels: [\"${chat_channel}\"]"
+        set_yaml_array_line "sitebot/plugins/quota/config.yml" '^staff_channels:' "staff_channels: [\"${staff_channel}\"]"
+    fi
+
     if [ -f "sitebot/plugins/bnc/config.yml" ]; then
         set_yaml_array_line "sitebot/plugins/bnc/config.yml" '^channels:' "channels: [\"${chat_channel}\"]"
     fi
@@ -1355,7 +1361,7 @@ configure_sitebot() {
         rewrite_sitebot_encryption_keys "${sitebot_config}" "${main_channel}" "${chat_channel}" "${spam_channel}" "${staff_channel}" "${foreign_channel}" "${archive_channel}" "${nuke_channel}" "${main_key}" "${chat_key}" "${spam_key}" "${staff_key}" "${foreign_key}" "${archive_key}" "${nuke_key}" "${private_key}"
     fi
 
-    local sitebot_plugins=(Announce TVMaze IMDB News Free Affils Request BNC Control Banned SelfIP Top BW Rules Topic AdminCommander)
+    local sitebot_plugins=(Announce TVMaze IMDB News Free Affils Request BNC Control Banned SelfIP Quota Top BW Rules Topic AdminCommander)
     local plugin_name
     local sitebot_enable_queue=()
     local sitebot_created=()
@@ -1543,6 +1549,7 @@ save_state_file() {
     write_state_var SETUP_SITEBOT_PLUGIN_CONTROL "${SETUP_SITEBOT_PLUGIN_CONTROL:-true}"
     write_state_var SETUP_SITEBOT_PLUGIN_BANNED "${SETUP_SITEBOT_PLUGIN_BANNED:-true}"
     write_state_var SETUP_SITEBOT_PLUGIN_SELFIP "${SETUP_SITEBOT_PLUGIN_SELFIP:-true}"
+    write_state_var SETUP_SITEBOT_PLUGIN_QUOTA "${SETUP_SITEBOT_PLUGIN_QUOTA:-false}"
     write_state_var SETUP_SITEBOT_PLUGIN_TOP "${SETUP_SITEBOT_PLUGIN_TOP:-true}"
     write_state_var SETUP_SITEBOT_PLUGIN_BW "${SETUP_SITEBOT_PLUGIN_BW:-true}"
     write_state_var SETUP_SITEBOT_PLUGIN_RULES "${SETUP_SITEBOT_PLUGIN_RULES:-true}"

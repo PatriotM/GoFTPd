@@ -18,6 +18,7 @@ NOTICE) that the bot sends to channels.
 - **admincommander** - staff bridge for `!site`, `!nuke`, `!unnuke` and other allowed SITE commands
 - **banned** - handles `!banned` by querying `SITE BANNED`
 - **selfip** - handles `!ip`, `!ips`, `!addip`, `!delip`, `!chgip` through `SITE SELFIP`
+- **quota** - tracks trial/quota users from GoFTPd user files and handles `!quota` plus staff `!quotactl ...`
 - **top** - handles `!top`, reading daily upload stats from goftpd user files and optionally auto-announcing the leaderboard
 - **rules** - handles `!rules`, reading a configured rules file or falling back to `SITE RULES`
 - **topic** - handles staff-only `!topic #channel topic text`, using FiSH topic encryption when a channel key exists
@@ -171,7 +172,7 @@ func (p *MyPlugin) SetAsyncEmitter(fn func(outType, text, section, relpath strin
 | `EventRaceFooter`     | STATS_END line                                          |
 | `EventNewUser`        | New user added via SITE ADDUSER                         |
 | `EventLoginFail`      | Login denied (unknown user, deleted user, bad password, IP issue, etc.) |
-| `EventInvite`         | SITE INVITE - handled by bot directly, plugins skipped  |
+| `EventInvite`         | SITE INVITE - bot sends the IRC invite and plugins can observe it too |
 | `EventCommand`        | IRC `!cmd` from a user (news, free, etc.)               |
 | `EventDiskStatus`     | Slave disk status report                                |
 | `EventNewDay`         | Dated dir rollover announcement                         |

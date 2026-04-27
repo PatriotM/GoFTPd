@@ -406,6 +406,10 @@ func (u *User) IsExpired() bool {
 	return u.Expires < time.Now().Unix()
 }
 
+func (u *User) IsDisabled() bool {
+	return u.HasFlag("6")
+}
+
 func (u *User) IPAllowed(remoteIP string) bool {
 	if len(u.IPs) == 0 {
 		return false

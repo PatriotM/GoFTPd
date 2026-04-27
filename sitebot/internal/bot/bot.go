@@ -24,6 +24,7 @@ import (
 	freeplugin "goftpd/sitebot/plugins/free"
 	imdbplugin "goftpd/sitebot/plugins/imdb"
 	newsplugin "goftpd/sitebot/plugins/news"
+	quotaplugin "goftpd/sitebot/plugins/quota"
 	requestplugin "goftpd/sitebot/plugins/request"
 	rulesplugin "goftpd/sitebot/plugins/rules"
 	selfipplugin "goftpd/sitebot/plugins/selfip"
@@ -212,6 +213,37 @@ func (b *Bot) initializePlugins() error {
 			return err
 		}
 		if err := b.registerPlugin("Request", requests); err != nil {
+			return err
+		}
+	}
+	if enabled, ok := b.Config.Plugins.Enabled["Quota"]; ok && enabled {
+		quota := quotaplugin.New()
+		quota.SetKicker(func(channel, nick, reason string) {
+			channel = strings.TrimSpace(channel)
+			nick = strings.TrimSpace(nick)
+			reason = strings.TrimSpace(reason)
+			if channel == "" || nick == "" {
+				return
+			}
+			if reason == "" {
+				reason = "Account disabled."
+			}
+			if err := b.IRC.SendRaw(fmt.Sprintf("KICK %s %s :%s", channel, nick, reason)); err != nil {
+				log.Printf("[Bot] KICK %s %s failed: %v", channel, nick, err)
+			}
+		})
+		cfg := map[string]interface{}{
+			"debug":        b.Debug,
+			"theme_file":   b.Config.Announce.ThemeFile,
+			"irc_channels": b.Config.IRC.Channels,
+		}
+		for k, v := range b.Config.Plugins.Config {
+			cfg[k] = v
+		}
+		if err := quota.Initialize(cfg); err != nil {
+			return err
+		}
+		if err := b.registerPlugin("Quota", quota); err != nil {
 			return err
 		}
 	}
@@ -714,11 +746,10 @@ func nonEmptyChannels(channels []string) []string {
 	return out
 }
 func (b *Bot) handleEvent(evt *event.Event) {
-	// Special case: INVITE events don't go to plugins â€” we send an IRC
-	// INVITE command directly for each channel the user is allowed into.
+	// INVITE events still send IRC invites directly, but plugins may observe
+	// them too for side effects such as FTP-user to IRC-nick mapping.
 	if evt.Type == event.EventInvite {
 		b.handleInviteEvent(evt)
-		return
 	}
 	if handled, outs := b.handleHelpCommand(evt); handled {
 		b.sendOutputs(evt, outs)
@@ -884,6 +915,9 @@ func (b *Bot) defaultHelpLines() []string {
 	enabled := b.Config.Plugins.Enabled
 	if enabled["Rules"] {
 		lines = append(lines, "!rules - show site rules in PM")
+	}
+	if enabled["Quota"] {
+		lines = append(lines, "!quota - show trial/quota standings")
 	}
 	if enabled["Top"] {
 		lines = append(lines, "!top [5|10|25] - show daily top uploaders")

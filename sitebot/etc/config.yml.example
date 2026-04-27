@@ -375,6 +375,7 @@ plugins:
     Control: true
     Banned: true
     SelfIP: true
+    Quota: false
     Top: true
     BW: true
     Rules: true
@@ -402,6 +403,8 @@ plugins:
       config_file: "plugins/control/config.yml"
     banned:
       config_file: "plugins/banned/config.yml"
+    quota:
+      config_file: "plugins/quota/config.yml"
     top:
       config_file: "plugins/top/config.yml"
     bandwidth:

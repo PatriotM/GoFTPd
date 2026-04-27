@@ -438,6 +438,7 @@ Built-in sitebot plugins:
 | `BNC` | `!bnc` FTP login checks across configured targets |
 | `BW` | `!bw` bandwidth summary |
 | `Affils` | `!affils` |
+| `Quota` | `!quota` plus staff `!quotactl trial|quota|extend|delete`, tracking trial/quota users from GoFTPd user files |
 | `Request` | `!request`, `!requests`, `!reqfill`, `!reqdel`, staff `!reqwipe` |
 | `Banned` | `!banned`, `!banned <filter>`, `!banned allow [filter]` |
 | `SelfIP` | `/msg BotNick !ip`, `!ips`, `!addip`, `!delip`, `!chgip` for PM-only self-service IP management |
@@ -473,6 +474,9 @@ plugins:
 ```
 
 The repo ships matching `sitebot/plugins/<name>/config.yml.dist` files.
+The `quota` sitebot plugin keeps its own small YAML state file, so it can
+remember trial starts and IRC nick mappings without needing SQLite just for
+bot-side bookkeeping.
 
 ### Theme Output
 

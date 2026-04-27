@@ -607,6 +607,8 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 			switch strings.TrimSpace(vars["reason"]) {
 			case "user_deleted":
 				message = fmt.Sprintf("%s could not log in, user deleted.", vars["username"])
+			case "account_disabled":
+				message = fmt.Sprintf("%s could not log in, account disabled.", vars["username"])
 			case "bad_password":
 				message = fmt.Sprintf("%s could not log in, bad password.", vars["username"])
 			case "ip_not_allowed":
