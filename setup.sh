@@ -2092,6 +2092,53 @@ backup_glftpd_import_target() {
     [ -d "${ROOT_DIR}/etc/groups" ] && cp -a "${ROOT_DIR}/etc/groups" "${backup_dir}/etc/groups"
 }
 
+merge_colon_records_by_name() {
+    local incoming_file="$1"
+    local target_file="$2"
+    local tmp_file
+
+    if [ ! -f "${target_file}" ]; then
+        cp -a "${incoming_file}" "${target_file}"
+        return 0
+    fi
+
+    tmp_file="$(mktemp)"
+    awk -F: '
+        NR == FNR {
+            sub(/\r$/, "", $0)
+            if ($0 == "" || $1 == "") {
+                next
+            }
+            incoming[$1] = $0
+            order[++incomingCount] = $1
+            next
+        }
+        {
+            sub(/\r$/, "", $0)
+            if ($0 == "" || $0 ~ /^[[:space:]]*#/) {
+                print $0
+                next
+            }
+            key = $1
+            if (key in incoming) {
+                print incoming[key]
+                seen[key] = 1
+            } else {
+                print $0
+            }
+        }
+        END {
+            for (i = 1; i <= incomingCount; i++) {
+                key = order[i]
+                if (!(key in seen)) {
+                    print incoming[key]
+                }
+            }
+        }
+    ' "${incoming_file}" "${target_file}" > "${tmp_file}"
+    mv "${tmp_file}" "${target_file}"
+}
+
 import_glftpd_accounts() {
     local gl_root="${2:-}"
     local staged_root stage_users stage_groups stage_passwd stage_group
@@ -2154,9 +2201,6 @@ import_glftpd_accounts() {
     target_groups_dir="${ROOT_DIR}/etc/groups"
     mkdir -p "${target_users_dir}" "${target_groups_dir}"
 
-    find "${target_users_dir}" -mindepth 1 -maxdepth 1 -type f ! -name 'default.user' -exec rm -f {} +
-    find "${target_groups_dir}" -mindepth 1 -maxdepth 1 -type f ! -name 'default.group' -exec rm -f {} +
-
     passwd_src_tmp="$(mktemp)"
     passwd_out_tmp="$(mktemp)"
     group_tmp="$(mktemp)"
@@ -2212,11 +2256,11 @@ import_glftpd_accounts() {
         printf 'user:%s uid:%s gid:%s primary:%s userfile:%s\n' "${username}" "${uid}" "${gid}" "${primary_group}" "${user_source}" >> "${import_log}"
     done < "${passwd_src_tmp}"
 
-    mv "${group_tmp}" "${target_group}"
-    mv "${passwd_out_tmp}" "${target_passwd}"
+    merge_colon_records_by_name "${group_tmp}" "${target_group}"
+    merge_colon_records_by_name "${passwd_out_tmp}" "${target_passwd}"
     chmod 0644 "${target_group}" || true
     chmod 0600 "${target_passwd}" || true
-    rm -f "${passwd_src_tmp}"
+    rm -f "${passwd_src_tmp}" "${passwd_out_tmp}" "${group_tmp}"
 
     say ""
     say "glFTPD import complete."
