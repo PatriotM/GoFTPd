@@ -17,6 +17,7 @@ type Handler struct {
 	debug           bool
 	binary          string
 	timeoutSeconds  int
+	workerCount     int
 	sections        []string
 	audioExtensions map[string]bool
 	videoExtensions map[string]bool
@@ -54,6 +55,7 @@ func (h *Handler) Init(svc *plugin.Services, cfg map[string]interface{}) error {
 	h.debug = boolConfig(cfg, "debug", svc != nil && svc.Debug)
 	h.binary = stringConfig(cfg, "binary", "mediainfo")
 	h.timeoutSeconds = intConfig(cfg, "timeout_seconds", 20)
+	h.workerCount = intConfig(cfg, "worker_count", 10)
 	h.sections = stringSliceConfig(cfg, "sections")
 	h.sampleOnly = boolConfig(cfg, "sample_only", true)
 	h.audioExtensions = extensionSet(stringSliceConfigDefault(cfg, "audio_extensions", []string{"flac", "mp3", "m4a", "wav"}))
@@ -64,9 +66,17 @@ func (h *Handler) Init(svc *plugin.Services, cfg map[string]interface{}) error {
 	if h.timeoutSeconds > 10 {
 		h.timeoutSeconds = 10
 	}
-	go h.worker()
+	if h.workerCount <= 0 {
+		h.workerCount = 1
+	}
+	if h.workerCount > 16 {
+		h.workerCount = 16
+	}
+	for i := 0; i < h.workerCount; i++ {
+		go h.worker()
+	}
 	if h.debug {
-		log.Printf("[MEDIAINFO] initialized sections=%v", h.sections)
+		log.Printf("[MEDIAINFO] initialized sections=%v workers=%d", h.sections, h.workerCount)
 	}
 	return nil
 }
@@ -147,12 +157,15 @@ func (h *Handler) worker() {
 		select {
 		case <-h.stopCh:
 			return
-		case j := <-h.jobs:
+		case j, ok := <-h.jobs:
+			if !ok {
+				return
+			}
 			done := make(chan struct{})
-			go func() {
-				h.probe(j)
+			go func(job job) {
+				h.probe(job)
 				close(done)
-			}()
+			}(j)
 			select {
 			case <-h.stopCh:
 				return
