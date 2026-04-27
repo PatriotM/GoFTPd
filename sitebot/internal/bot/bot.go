@@ -101,6 +101,10 @@ func (b *Bot) initializePlugins() error {
 		if err := announce.Initialize(cfg); err != nil {
 			return err
 		}
+		announce.SetAsyncEmitter(func(outType, text, section, relpath string) {
+			fakeEvt := &event.Event{Type: event.EventMKDir, Section: section, Path: relpath}
+			b.sendOutputs(fakeEvt, []plugin.Output{{Type: outType, Text: text}})
+		})
 		if err := b.registerPlugin("Announce", announce); err != nil {
 			return err
 		}

@@ -429,8 +429,10 @@ announce.PREBWINTERVAL = "%b{%c01{PREBW:}} %c01{[}%section_colored%c01{]} %c01{:
 
 announce.PREBWUSER = "%b{%c01{PREBW:}} %c01{[}%section_colored%c01{]} %c01{::} %c04{%b{%user}} %c01{::} %c03{%b{%size_val}}%c01{%size_unit}%c01{/}%c03{%b{%cnt_files}}%c01{F @} %c03{%b{%avg_val_user}}%c01{%avg_unit_user} %c01{:: Highest} %c03{%b{%peak_val_user}}%c01{%peak_unit_user}"
 
-announce.NEWPRETIME = "%b{%c01{NEW:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{by} %c%sec_c4{%u_name} %c01{:: released} %c09{%preage}%c01{ ago}"
-announce.OLDPRETIME = "%b{%c01{NEW:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{by} %c%sec_c4{%u_name} %c01{:: released} %c04{%preage}%c01{ ago}"
+announce.NEWPRETIME = "%b{%c09{PRETiME:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c09{OK} %c01{:: released} %c09{%preage}%c01{ ago}"
+announce.OLDPRETIME = "%b{%c04{PRETiME:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c04{BAD} %c01{:: released} %c04{%preage}%c01{ ago}"
+announce.NEWPRETIMEINLINE = "%b{%c01{NEW:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{by} %c%sec_c4{%u_name} %c01{:: released} %c09{%preage}%c01{ ago}"
+announce.OLDPRETIMEINLINE = "%b{%c01{NEW:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{by} %c%sec_c4{%u_name} %c01{:: released} %c04{%preage}%c01{ ago}"
 
 announce.DF_SLAVE = "%b{%c02{DF:}} %c06{%b{%slave}} %c01{-} %c03{%free} %c01{free /} %c05{%total} %c01{total (}%c03{%{free_pct}%}%c01{ free) [}%c04{%state}%c01{]}"
 

@@ -9,6 +9,8 @@
 #
 # Note: this is append-only on purpose. The daemon emits MKDIR before plugins
 # run, so replacing the built-in NEW line would be racy and ugly.
+# The IRC rendering mode for PRETiME vs inline NEW lives in:
+#   sitebot/plugins/announce/config.yml
 
 late_minutes: 10
 debug: false
