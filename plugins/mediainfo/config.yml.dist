@@ -4,6 +4,10 @@ binary: "mediainfo"
 # Per-file mediainfo timeout.
 timeout_seconds: 20
 
+# Number of concurrent mediainfo workers. Higher values reduce announce lag
+# when several samples land at once.
+worker_count: 10
+
 # Sections where sample/audio mediainfo should be announced.
 sections: ["FLAC", "MP3", "TV", "X264-HD-1080P", "X264-HD-720P", "X264-SD", "X265", "BLURAY"]
 
