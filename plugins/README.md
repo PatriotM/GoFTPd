@@ -148,7 +148,7 @@ type MasterBridge interface {
 3. **Section matching** is up to you. Use `plugin.Event.Section` (first path
    component) and do case-insensitive substring matches - "TV" should match
    both `TV-1080P` and `TV-720P`.
-4. **Release-name detection** - scene releases always have dots, a dash
+4. **Release-name detection** - release names usually have dots, a group suffix dash
    (group suffix), and a year or `SxxEyy` tag. Anything else is a subfolder
    (`Sample`, `Proof`, `Subs`, `CD1`...) and should be ignored.
 5. **Slave mode.** If `svc.Bridge == nil` your plugin is running on a slave
@@ -179,3 +179,4 @@ func (h *Handler) OnEvent(evt *plugin.Event) error {
     return h.svc.Bridge.WriteFile(evt.Path+"/.completed", []byte(tag))
 }
 ```
+
