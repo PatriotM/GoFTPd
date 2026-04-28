@@ -471,6 +471,10 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 
 		if s.Config.Mode == "master" && s.MasterManager != nil {
 			if bridge, ok := s.MasterManager.(MasterBridge); ok {
+				if bridge.FileExists(targetPath) {
+					fmt.Fprintf(s.Conn, "550 %s: directory already exists.\r\n", dirName)
+					return false
+				}
 				bridge.MakeDir(targetPath, s.User.Name, s.User.PrimaryGroup)
 			}
 		}
@@ -1094,12 +1098,24 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			fileExists := false
 			if s.Config.Mode == "master" && s.MasterManager != nil {
 				if bridge, ok := s.MasterManager.(MasterBridge); ok {
+					if err := ensureUploadDirsForEvent(s, bridge, uploadDir); err != nil {
+						fmt.Fprintf(s.Conn, "550 Upload prepare failed: %v\r\n", err)
+						return false
+					}
 					fileExists = bridge.FileExists(uploadPath)
 				}
 			}
 			if fileExists && restOffset == 0 {
 				fmt.Fprintf(s.Conn, "553 %s: file already exists (X-DUPE)\r\n", fileName)
 				return false
+			}
+		}
+		if !s.Config.XdupeEnabled && s.Config.Mode == "master" && s.MasterManager != nil {
+			if bridge, ok := s.MasterManager.(MasterBridge); ok {
+				if err := ensureUploadDirsForEvent(s, bridge, uploadDir); err != nil {
+					fmt.Fprintf(s.Conn, "550 Upload prepare failed: %v\r\n", err)
+					return false
+				}
 			}
 		}
 		if restOffset > 0 {
@@ -2130,7 +2146,7 @@ func ensureAudioSortLinks(bridge MasterBridge, links []zipscript.AudioSortLink) 
 	return nil
 }
 
-func ensureDirPath(bridge MasterBridge, dirPath string) error {
+func ensureDirPathOwned(bridge MasterBridge, dirPath, owner, group string) error {
 	dirPath = path.Clean("/" + strings.TrimSpace(dirPath))
 	if dirPath == "/" || dirPath == "." {
 		return nil
@@ -2143,8 +2159,43 @@ func ensureDirPath(bridge MasterBridge, dirPath string) error {
 		}
 		current = path.Join(current, "/"+part)
 		if !bridge.FileExists(current) {
-			bridge.MakeDir(current, "GoFTPd", "GoFTPd")
+			bridge.MakeDir(current, owner, group)
 		}
+	}
+	return nil
+}
+
+func ensureDirPath(bridge MasterBridge, dirPath string) error {
+	return ensureDirPathOwned(bridge, dirPath, "GoFTPd", "GoFTPd")
+}
+
+func ensureUploadDirsForEvent(s *Session, bridge MasterBridge, uploadDir string) error {
+	if s == nil || s.Config == nil || bridge == nil {
+		return nil
+	}
+	releaseDir := path.Clean("/" + strings.TrimSpace(uploadDir))
+	if releaseDir == "/" || releaseDir == "." {
+		return nil
+	}
+	if subdir := zipscript.ReleaseSubdirLabel(s.Config.Zipscript, releaseDir); subdir != "" {
+		releaseDir = path.Dir(releaseDir)
+	}
+	needNew := !bridge.FileExists(releaseDir)
+	owner := "GoFTPd"
+	group := "GoFTPd"
+	if s.User != nil {
+		if strings.TrimSpace(s.User.Name) != "" {
+			owner = s.User.Name
+		}
+		if strings.TrimSpace(s.User.PrimaryGroup) != "" {
+			group = s.User.PrimaryGroup
+		}
+	}
+	if err := ensureDirPathOwned(bridge, uploadDir, owner, group); err != nil {
+		return err
+	}
+	if needNew {
+		s.emitEvent(EventMKDir, releaseDir, path.Base(releaseDir), 0, 0, nil)
 	}
 	return nil
 }
