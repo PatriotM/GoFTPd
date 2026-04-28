@@ -588,13 +588,39 @@ func (r *RaceDB) GetRaceWallClockMilliseconds(dirPath string) int64 {
 	var startMs, endMs sql.NullInt64
 	err := r.db.QueryRow(`
         SELECT
-            COALESCE(MIN(CASE
-                WHEN f.duration_ms > 0 THEN (f.updated_at * 1000) - f.duration_ms
-                ELSE rel.created_at * 1000
-            END), rel.created_at * 1000),
-            COALESCE(MAX(f.updated_at * 1000), rel.created_at * 1000)
+            COALESCE(
+                (
+                    SELECT MIN(CASE
+                        WHEN f.duration_ms > 0 THEN (f.updated_at * 1000) - f.duration_ms
+                        ELSE rel.created_at * 1000
+                    END)
+                    FROM release_files f
+                    WHERE f.release_id = rel.id AND f.is_present = 1 AND f.is_expected = 1
+                ),
+                (
+                    SELECT MIN(CASE
+                        WHEN f.duration_ms > 0 THEN (f.updated_at * 1000) - f.duration_ms
+                        ELSE rel.created_at * 1000
+                    END)
+                    FROM release_files f
+                    WHERE f.release_id = rel.id AND f.is_present = 1
+                ),
+                rel.created_at * 1000
+            ),
+            COALESCE(
+                (
+                    SELECT MAX(f.updated_at * 1000)
+                    FROM release_files f
+                    WHERE f.release_id = rel.id AND f.is_present = 1 AND f.is_expected = 1
+                ),
+                (
+                    SELECT MAX(f.updated_at * 1000)
+                    FROM release_files f
+                    WHERE f.release_id = rel.id AND f.is_present = 1
+                ),
+                rel.created_at * 1000
+            )
         FROM releases rel
-        LEFT JOIN release_files f ON f.release_id = rel.id AND f.is_present = 1
         WHERE rel.path = ?
     `, dirPath).Scan(&startMs, &endMs)
 	if err != nil || !startMs.Valid || !endMs.Valid {

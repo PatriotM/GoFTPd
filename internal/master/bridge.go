@@ -1499,59 +1499,40 @@ func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group strin
 		return 0, 0, 0, fmt.Errorf("receive ack: %w", err)
 	}
 
-	// Wait for transfer to complete
-	rt, ok := slave.GetTransfer(transferResp.Info.TransferIndex)
-	if !ok {
-		for i := 0; i < 600; i++ {
-			time.Sleep(500 * time.Millisecond)
-			rt, ok = slave.GetTransfer(transferResp.Info.TransferIndex)
-			if ok && rt.IsFinished() {
-				break
-			}
-			if !ok {
-				break
-			}
+	status, err := slave.WaitTransferStatus(transferResp.Info.TransferIndex, 2*time.Hour)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+
+	finalSize := status.Transferred
+	finalChecksum := status.Checksum
+	if position > 0 {
+		finalSize += position
+		if checksum, err := b.ChecksumFile(filePath); err == nil {
+			finalChecksum = checksum
 		}
 	}
 
-	if rt != nil {
-		for !rt.IsFinished() {
-			time.Sleep(100 * time.Millisecond)
+	b.sm.GetVFS().AddFile(filePath, VFSFile{
+		Path:         filePath,
+		Size:         finalSize,
+		IsDir:        false,
+		LastModified: time.Now().Unix(),
+		SlaveName:    slave.Name(),
+		Owner:        owner,
+		Group:        group,
+		XferTime:     status.Elapsed,
+		Checksum:     finalChecksum,
+	})
+
+	log.Printf("[Passthrough-PORT] Upload %s on %s (%d bytes, %dms, CRC=%08X)",
+		filePath, slave.Name(), finalSize, status.Elapsed, finalChecksum)
+
+	if b.raceDB != nil {
+		if err := b.raceDB.RecordUpload(filePath, owner, group, finalSize, status.Elapsed, finalChecksum); err != nil {
+			log.Printf("[Passthrough-PORT] RaceDB record failed: %v", err)
 		}
-		status := rt.GetStatus()
-
-		finalSize := status.Transferred
-		finalChecksum := status.Checksum
-		if position > 0 {
-			finalSize += position
-			if checksum, err := b.ChecksumFile(filePath); err == nil {
-				finalChecksum = checksum
-			}
-		}
-
-		b.sm.GetVFS().AddFile(filePath, VFSFile{
-			Path:         filePath,
-			Size:         finalSize,
-			IsDir:        false,
-			LastModified: time.Now().Unix(),
-			SlaveName:    slave.Name(),
-			Owner:        owner,
-			Group:        group,
-			XferTime:     status.Elapsed,
-			Checksum:     finalChecksum,
-		})
-
-		log.Printf("[Passthrough-PORT] Upload %s on %s (%d bytes, %dms, CRC=%08X)",
-			filePath, slave.Name(), finalSize, status.Elapsed, finalChecksum)
-
-		if b.raceDB != nil {
-			if err := b.raceDB.RecordUpload(filePath, owner, group, finalSize, status.Elapsed, finalChecksum); err != nil {
-				log.Printf("[Passthrough-PORT] RaceDB record failed: %v", err)
-			}
-		}
-
-		return finalSize, finalChecksum, status.Elapsed, nil
 	}
 
-	return 0, 0, 0, fmt.Errorf("transfer status not available")
+	return finalSize, finalChecksum, status.Elapsed, nil
 }

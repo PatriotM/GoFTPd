@@ -521,13 +521,13 @@ func formatRaceDuration(ms int64) string {
 	if ms < 1 {
 		ms = 1
 	}
+	totalSeconds := ms / 1000
 	if ms < 1000 {
 		return fmt.Sprintf("%.4fs", float64(ms)/1000.0)
 	}
-	if ms%1000 != 0 {
+	if totalSeconds < 60 && ms%1000 != 0 {
 		return fmt.Sprintf("%.4fs", float64(ms)/1000.0)
 	}
-	totalSeconds := ms / 1000
 	if totalSeconds < 60 {
 		return fmt.Sprintf("%ds", totalSeconds)
 	}
