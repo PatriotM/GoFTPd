@@ -182,6 +182,13 @@ func (h *Handler) worker() {
 func (h *Handler) probe(j job) {
 	fields, err := h.svc.Bridge.ProbeMediaInfo(j.filePath, h.binary, h.timeoutSeconds)
 	if err != nil {
+		h.unmarkReleaseQueued(j.eventType, j.relPath)
+		if isMissingMediaInfoPath(err) {
+			if h.debug {
+				log.Printf("[MEDIAINFO] skipped missing file %s: %v", j.filePath, err)
+			}
+			return
+		}
 		log.Printf("[MEDIAINFO] %s failed: %v", j.filePath, err)
 		return
 	}
@@ -196,6 +203,14 @@ func (h *Handler) probe(j job) {
 		log.Printf("[MEDIAINFO] emitting %s for %s (%d fields)", j.eventType, j.filePath, len(fields))
 	}
 	h.svc.EmitEvent(j.eventType, j.relPath, j.relName, j.section, j.size, j.speed, fields)
+}
+
+func isMissingMediaInfoPath(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(lower, "file not found")
 }
 
 func (h *Handler) markReleaseQueued(eventType, relPath string) bool {

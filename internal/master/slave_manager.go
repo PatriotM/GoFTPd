@@ -1062,21 +1062,44 @@ func (sm *SlaveManager) SelectSlaveForDownload(path string) *RemoteSlave {
 
 // DeleteOnAllSlaves deletes a path on all slaves ().
 func (sm *SlaveManager) DeleteOnAllSlaves(path string) {
-	for _, rs := range sm.GetWritableAvailableSlaves() {
+	targets := sm.deleteTargetsForPath(path)
+	for _, rs := range targets {
 		go func(slave *RemoteSlave) {
 			index, err := IssueDelete(slave, path)
 			if err != nil {
-				log.Printf("[SlaveManager] Delete issue error on %s: %v", slave.name, err)
+				log.Printf("[SlaveManager] Delete issue error on %s for %s: %v", slave.name, path, err)
 				return
 			}
 			_, err = slave.FetchResponse(index, 5*time.Minute)
 			if err != nil {
-				log.Printf("[SlaveManager] Delete response error on %s: %v", slave.name, err)
+				if isIgnorableDeleteError(err) {
+					return
+				}
+				log.Printf("[SlaveManager] Delete response error on %s for %s: %v", slave.name, path, err)
 			}
 		}(rs)
 	}
 
 	sm.vfs.DeleteFile(path)
+}
+
+func (sm *SlaveManager) deleteTargetsForPath(path string) []*RemoteSlave {
+	file := sm.vfs.GetFile(path)
+	if file != nil && strings.TrimSpace(file.SlaveName) != "" && !file.IsSymlink {
+		if rs := sm.GetSlave(file.SlaveName); rs != nil && rs.IsAvailable() && !sm.IsSlaveReadOnly(rs.Name()) {
+			return []*RemoteSlave{rs}
+		}
+	}
+	return sm.GetWritableAvailableSlaves()
+}
+
+func isIgnorableDeleteError(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(lower, "delete failed: path not found on slave") ||
+		strings.Contains(lower, "file not found")
 }
 
 // RenameOnAllSlaves renames on all slaves ().
