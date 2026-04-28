@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"goftpd/internal/plugin"
-	"goftpd/internal/zipscript"
 
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/lib/pq"
@@ -337,9 +336,12 @@ func (h *Handler) processJob(j job) {
 		"u_name":         j.user,
 		"g_name":         j.group,
 	}
-	section, _ := zipscript.SectionInfoFromPath(j.path)
-	if strings.TrimSpace(section) == "" || strings.EqualFold(section, "DEFAULT") {
-		section = j.section
+	section := strings.TrimSpace(j.section)
+	if section == "" || strings.EqualFold(section, "DEFAULT") {
+		section = strings.TrimSpace(path.Base(path.Dir("/" + strings.TrimSpace(j.path))))
+		if dateDirRE.MatchString(section) {
+			section = strings.TrimSpace(path.Base(path.Dir(path.Dir("/" + strings.TrimSpace(j.path)))))
+		}
 	}
 	h.svc.EmitEvent(eventType, j.path, j.relname, section, 0, 0, data)
 	h.logf("found pretime for %s via %s -> %s ago", j.relname, provider, data["preage"])
