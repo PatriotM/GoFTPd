@@ -1,6 +1,8 @@
 package bot
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"goftpd/sitebot/internal/irc"
@@ -52,5 +54,31 @@ func TestCommandEventFromPrivmsgDecryptsNegotiatedPMKey(t *testing.T) {
 	}
 	if got := evt.User; got != "Alice" {
 		t.Fatalf("user = %q, want %q", got, "Alice")
+	}
+}
+
+func TestLoadConfigPreservesAnnouncePretimeConfig(t *testing.T) {
+	tmp := t.TempDir()
+	announceCfg := filepath.Join(tmp, "announce.yml")
+	mainCfg := filepath.Join(tmp, "sitebot.yml")
+
+	if err := os.WriteFile(announceCfg, []byte("default_channel: \"#goftpd\"\npretime:\n  mode: \"inline\"\n  inline_wait_ms: 2500\n"), 0o644); err != nil {
+		t.Fatalf("write announce config: %v", err)
+	}
+	if err := os.WriteFile(mainCfg, []byte("irc:\n  host: \"irc.example.net\"\n  port: 6697\n  nick: \"GoSitebot\"\n  user: \"sitebot\"\n  realname: \"GoSitebot\"\nannounce:\n  config_file: \""+filepath.Base(announceCfg)+"\"\nplugins:\n  enabled:\n    Announce: true\n  config: {}\n"), 0o644); err != nil {
+		t.Fatalf("write main config: %v", err)
+	}
+
+	cfg, err := LoadConfig(mainCfg)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	pretime, ok := cfg.Announce.Pretime["mode"].(string)
+	if !ok || pretime != "inline" {
+		t.Fatalf("announce.pretime.mode = %#v, want inline", cfg.Announce.Pretime["mode"])
+	}
+	wait, ok := cfg.Announce.Pretime["inline_wait_ms"].(int)
+	if !ok || wait != 2500 {
+		t.Fatalf("announce.pretime.inline_wait_ms = %#v, want 2500", cfg.Announce.Pretime["inline_wait_ms"])
 	}
 }
