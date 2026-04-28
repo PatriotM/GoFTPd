@@ -430,7 +430,7 @@ announce.NUKE_NUKEES = "%b{%c04{NUKED:}} %c01{[nukees]} %c14{-->} %c07{%nukees}"
 
 announce.UNNUKE = "%b{%c01{UNNUKE:}} %c01{[}%section_colored%c01{]} %c06{%b{%relname}} %c01{by} %c04{%u_name}"
 
-announce.PRE = "%b{%c01{PRE:}} %c01{[}%section_colored%c01{]} %c06{%b{%relname}} %c01{by} %c04{%b{%group}} %c01{(}%c04{%user}%c01{)} %c01{-} %c05{%t_mbytes}%c01{/}%c05{%t_files}"
+announce.PRE = "%b{%c01{PRE:}} %c01{[}%section_colored%c01{]} %c06{%b{%relname}} %c01{by} %c04{%b{%group}} %c01{(}%c04{%user}%c01{)} %c01{-} %c05{%t_mbytes}%c01{/}%c05{%t_files}%pre_suffix"
 
 announce.PREBW = "%b{%c01{PREBW:}} %c01{[}%section_colored%c01{]} %c01{::} %c06{%b{%relname}} %c01{::} %c03{%b{%traffic_val}}%c01{%traffic_unit} %c01{@} %c03{%b{%avg_val}}%c01{%avg_unit} %c01{:: Highest} %c03{%b{%peak_val}}%c01{%peak_unit}"
 

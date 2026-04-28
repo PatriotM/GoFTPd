@@ -5,6 +5,7 @@ permissions_file: "etc/permissions.yml"
 group_file: "etc/group"
 acl_base_path: "/"
 admin_flags: "1"
+dateddirs_config_file: "plugins/dateddirs/config.yml"
 
 # Base PRE root used for affil predirs.
 base: "/PRE"
@@ -13,7 +14,8 @@ base: "/PRE"
 bw_duration: 30
 bw_interval_ms: 500
 
-# Sections where SITE PRE is allowed.
+# Sections where SITE PRE is allowed. These are the canonical destination
+# paths, so typing "mp3" still resolves to "/MP3" when MP3 is listed here.
 sections:
   - TV-1080P
   - TV-720P

@@ -47,6 +47,7 @@ type Handler struct {
 	sections      []string
 	paths         []string
 	ignoreDirs    []string
+	proxy         string
 	providerOrder []string
 
 	sqlite   sqliteConfig
@@ -174,6 +175,7 @@ func (h *Handler) Init(svc *plugin.Services, cfg map[string]interface{}) error {
 	if order := toStringSlice(cfg["provider_order"]); len(order) > 0 {
 		h.providerOrder = order
 	}
+	h.proxy = stringConfig(cfg["proxy"], "")
 
 	sqliteCfg := configSection(cfg, "sqlite")
 	h.sqlite.Enabled = boolConfig(sqliteCfg["enabled"], true)
@@ -228,12 +230,18 @@ func (h *Handler) Init(svc *plugin.Services, cfg map[string]interface{}) error {
 	if providers := decodeAPIProviders(apiCfg["providers"]); len(providers) > 0 {
 		h.api.Providers = providers
 	}
+	timeout := 5 * time.Second
 	if h.api.TimeoutSeconds > 0 {
-		h.client.Timeout = time.Duration(h.api.TimeoutSeconds) * time.Second
+		timeout = time.Duration(h.api.TimeoutSeconds) * time.Second
 	}
+	client, err := newHTTPClient(timeout, h.proxy)
+	if err != nil {
+		return err
+	}
+	h.client = client
 
 	go h.worker()
-	h.logf("initialized sections=%v paths=%v providers=%v", h.sections, h.paths, h.providerOrder)
+	h.logf("initialized sections=%v paths=%v providers=%v proxy=%q", h.sections, h.paths, h.providerOrder, h.proxy)
 	return nil
 }
 
@@ -737,6 +745,22 @@ func boolConfig(raw interface{}, fallback bool) bool {
 		}
 	}
 	return fallback
+}
+
+func newHTTPClient(timeout time.Duration, proxyValue string) (*http.Client, error) {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	proxyValue = strings.TrimSpace(proxyValue)
+	if proxyValue != "" {
+		proxyURL, err := url.Parse(proxyValue)
+		if err != nil {
+			return nil, fmt.Errorf("pretime proxy %q is invalid: %w", proxyValue, err)
+		}
+		transport.Proxy = http.ProxyURL(proxyURL)
+	}
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: transport,
+	}, nil
 }
 
 func validFieldIdentifier(name string) bool {

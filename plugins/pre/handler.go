@@ -14,6 +14,7 @@ import (
 
 	"goftpd/internal/plugin"
 	"goftpd/internal/timeutil"
+	"goftpd/internal/user"
 	"gopkg.in/yaml.v3"
 )
 
@@ -22,6 +23,7 @@ type Plugin struct {
 	base            string
 	sections        []string
 	datedSections   []string
+	dateddirsConfig string
 	bwDuration      int
 	bwIntervalMs    int
 	affils          []AffilRule
@@ -34,9 +36,12 @@ type Plugin struct {
 }
 
 type AffilRule struct {
-	Group       string                 `yaml:"group"`
-	Predir      string                 `yaml:"predir"`
-	Permissions map[string]interface{} `yaml:"permissions"`
+	Group           string                 `yaml:"group"`
+	Predir          string                 `yaml:"predir"`
+	Predirs         []string               `yaml:"predirs"`
+	AllowedSections []string               `yaml:"allowed_sections"`
+	CreditRatio     int                    `yaml:"credit_ratio"`
+	Permissions     map[string]interface{} `yaml:"permissions"`
 }
 
 type affilsFileConfig struct {
@@ -59,9 +64,22 @@ type userSnapshot struct {
 	Files int
 }
 
+type affilMatch struct {
+	rule   AffilRule
+	predir string
+}
+
+type dateddirsConfig struct {
+	Sections      []string `yaml:"sections"`
+	Format        string   `yaml:"format"`
+	TodaySymlink  bool     `yaml:"today_symlink"`
+	SymlinkPrefix string   `yaml:"symlink_prefix"`
+}
+
 func New() *Plugin {
 	return &Plugin{
 		base:            "/PRE",
+		dateddirsConfig: "plugins/dateddirs/config.yml",
 		bwDuration:      30,
 		bwIntervalMs:    500,
 		affilsFile:      "etc/affils.yml",
@@ -87,6 +105,9 @@ func (p *Plugin) Init(svc *plugin.Services, cfg map[string]interface{}) error {
 	}
 	if s := stringConfig(cfg, "group_file", ""); strings.TrimSpace(s) != "" {
 		p.groupFile = strings.TrimSpace(s)
+	}
+	if s := stringConfig(cfg, "dateddirs_config_file", ""); strings.TrimSpace(s) != "" {
+		p.dateddirsConfig = strings.TrimSpace(s)
 	}
 	if s := stringConfig(cfg, "acl_base_path", ""); strings.TrimSpace(s) != "" {
 		p.aclBase = cleanAbs(s)
@@ -119,49 +140,81 @@ func (p *Plugin) Stop() error { return nil }
 func (p *Plugin) SiteCommands() []string { return []string{"PRE", "ADDAFFIL", "DELAFFIL", "AFFILS"} }
 
 func (p *Plugin) HandleSiteCommand(ctx plugin.SiteContext, command string, args []string) bool {
-	if p.svc == nil || p.svc.Bridge == nil {
-		ctx.Reply("451 Master bridge unavailable.\r\n")
-		return true
-	}
 	switch strings.ToUpper(strings.TrimSpace(command)) {
 	case "ADDAFFIL":
+		if p.svc == nil || p.svc.Bridge == nil {
+			ctx.Reply("451 Master bridge unavailable.\r\n")
+			return true
+		}
 		return p.handleAddAffil(ctx, args)
 	case "DELAFFIL":
+		if p.svc == nil || p.svc.Bridge == nil {
+			ctx.Reply("451 Master bridge unavailable.\r\n")
+			return true
+		}
 		return p.handleDelAffil(ctx, args)
 	case "AFFILS":
 		return p.handleAffils(ctx)
 	}
-	if len(args) < 2 {
-		ctx.Reply("501 Usage: SITE PRE <releasename> <section>\r\n")
+	if len(args) == 0 {
+		return p.handlePreHelp(ctx)
+	}
+	if p.svc == nil || p.svc.Bridge == nil {
+		ctx.Reply("451 Master bridge unavailable.\r\n")
+		return true
+	}
+	if len(args) < 1 {
+		ctx.Reply("501 Usage: SITE PRE <releasename> [section]\r\n")
 		return true
 	}
 
 	relname := strings.TrimSpace(args[0])
-	section := strings.TrimSpace(args[1])
+	section := ""
+	if len(args) > 1 {
+		section = strings.TrimSpace(args[1])
+	}
 	if relname == "" || strings.ContainsAny(relname, "/\\") {
 		ctx.Reply("501 Invalid release name.\r\n")
 		return true
 	}
-	if !sectionAllowed(p.sections, section) {
+
+	match, errText := p.findUserAffilForRelease(ctx.UserGroups(), relname)
+	if match == nil {
+		if errText != "" {
+			ctx.Reply("%s\r\n", errText)
+		} else {
+			ctx.Reply("550 You are not in any affil group.\r\n")
+		}
+		return true
+	}
+	if section == "" {
+		candidates := match.rule.AllowedSections
+		if len(candidates) == 0 {
+			candidates = append([]string(nil), p.sections...)
+		}
+		if len(candidates) == 1 {
+			section = strings.TrimSpace(candidates[0])
+		} else {
+			ctx.Reply("501 Usage: SITE PRE <releasename> [section]\r\n")
+			return true
+		}
+	}
+	canonicalSection, sectionRoot, ok := p.resolveSection(section)
+	if !ok {
 		ctx.Reply("501 Section %q is not a valid pre section.\r\n", section)
 		return true
 	}
-
-	affil := p.findUserAffil(ctx.UserGroups())
-	if affil == nil {
-		ctx.Reply("550 You are not in any affil group.\r\n")
+	if !sectionAllowed(match.rule.AllowedSections, canonicalSection) {
+		ctx.Reply("550 Group %s is not allowed to pre into %s.\r\n", match.rule.Group, canonicalSection)
 		return true
 	}
+	destSection := p.resolvePreDestinationDir(canonicalSection, sectionRoot)
 
-	src := path.Join(affil.Predir, relname)
-	destSection := cleanAbs(section)
-	if sectionIsDated(p.datedSections, section) {
-		destSection = path.Join(destSection, timeutil.Now().Format("0102"))
-	}
+	src := path.Join(match.predir, relname)
 	dst := path.Join(destSection, relname)
 
-	if !p.childDirExists(affil.Predir, relname) {
-		ctx.Reply("550 Release %q not found in %s.\r\n", relname, affil.Predir)
+	if !p.childDirExists(match.predir, relname) {
+		ctx.Reply("550 Release %q not found in %s.\r\n", relname, match.predir)
 		return true
 	}
 	if !p.dirExists(destSection) {
@@ -173,24 +226,36 @@ func (p *Plugin) HandleSiteCommand(ctx plugin.SiteContext, command string, args 
 		return true
 	}
 
-	_, _, totalBytes, present, _ := p.svc.Bridge.PluginGetVFSRaceStats(src)
+	users, _, totalBytes, present, _ := p.svc.Bridge.PluginGetVFSRaceStats(src)
 	mbytes := float64(totalBytes) / 1024.0 / 1024.0
+	metaVars := p.preMetadataVars(src, canonicalSection, relname)
 
 	p.svc.Bridge.RenameFile(src, destSection, relname)
 	p.logf("%s pre'd %s to %s (%d files, %.0f MB)", ctx.UserName(), relname, dst, present, mbytes)
+	creditAwarded := p.applyPreCredits(users, match.rule.CreditRatio)
 
-	p.emit("PRE", dst, relname, section, totalBytes, 0, map[string]string{
-		"relname":  relname,
-		"section":  section,
-		"group":    affil.Group,
-		"user":     ctx.UserName(),
-		"t_files":  fmt.Sprintf("%d", present),
-		"t_mbytes": fmt.Sprintf("%.0fMB", mbytes),
-	})
+	eventData := map[string]string{
+		"relname":     relname,
+		"section":     canonicalSection,
+		"group":       match.rule.Group,
+		"user":        ctx.UserName(),
+		"t_files":     fmt.Sprintf("%d", present),
+		"t_mbytes":    fmt.Sprintf("%.0fMB", mbytes),
+		"pre_ratio":   fmt.Sprintf("%d", match.rule.CreditRatio),
+		"pre_credits": fmt.Sprintf("%d", creditAwarded),
+	}
+	for k, v := range metaVars {
+		eventData[k] = v
+	}
+	p.emit("PRE", dst, relname, canonicalSection, totalBytes, 0, eventData)
 
-	go p.runBWSampler(dst, relname, section, affil.Group)
+	go p.runBWSampler(dst, relname, canonicalSection, match.rule.Group)
 
-	ctx.Reply("200 %s pre'd to %s successfully.\r\n", relname, dst)
+	if creditAwarded > 0 {
+		ctx.Reply("200 %s pre'd to %s successfully. Rewarded %d credits.\r\n", relname, dst, creditAwarded)
+	} else {
+		ctx.Reply("200 %s pre'd to %s successfully.\r\n", relname, dst)
+	}
 	return true
 }
 
@@ -209,13 +274,42 @@ func (p *Plugin) handleAffils(ctx plugin.SiteContext) bool {
 	return true
 }
 
+func (p *Plugin) handlePreHelp(ctx plugin.SiteContext) bool {
+	affils := p.currentAffils()
+	if len(affils) == 0 {
+		ctx.Reply("200-  * Syntax: SITE PRE <RELEASEDIR> [SECTION]\r\n")
+		ctx.Reply("200 No affils configured.\r\n")
+		return true
+	}
+	visible := p.filterAffilsForUser(affils, ctx.UserGroups())
+	if len(visible) == 0 {
+		visible = affils
+	}
+	ctx.Reply("200-  * Syntax: SITE PRE <RELEASEDIR> [SECTION]\r\n")
+	ctx.Reply("200- Group           Predirs                                  Allowed sections          Reward\r\n")
+	ctx.Reply("200- --------------- ---------------------------------------- ------------------------- ------\r\n")
+	for _, affil := range visible {
+		predirs := affilPredirs(affil)
+		if len(predirs) == 0 {
+			predirs = []string{"-"}
+		}
+		sections := affil.AllowedSections
+		if len(sections) == 0 {
+			sections = append([]string(nil), p.sections...)
+		}
+		p.printPreHelpRow(ctx, affil.Group, predirs, sections, affil.CreditRatio)
+	}
+	ctx.Reply("200 End of PRE configuration.\r\n")
+	return true
+}
+
 func (p *Plugin) handleAddAffil(ctx plugin.SiteContext, args []string) bool {
 	if !p.canAdmin(ctx) {
 		ctx.Reply("550 Permission denied.\r\n")
 		return true
 	}
 	if len(args) < 1 || strings.TrimSpace(args[0]) == "" {
-		ctx.Reply("501 Usage: SITE ADDAFFIL <group> [predir]\r\n")
+		ctx.Reply("501 Usage: SITE ADDAFFIL <group> [predir[,predir...]] [section[,section...]] [credit_ratio]\r\n")
 		return true
 	}
 	group := strings.TrimSpace(args[0])
@@ -236,6 +330,28 @@ func (p *Plugin) handleAddAffil(ctx plugin.SiteContext, args []string) bool {
 		predir = cleanAbs(args[1])
 	} else {
 		predir = path.Join(base, group)
+	}
+	predirs := stringSliceConfig(predir)
+	if len(args) > 1 && strings.TrimSpace(args[1]) != "" {
+		predirs = stringSliceConfig(args[1])
+	}
+	for i := range predirs {
+		predirs[i] = cleanAbs(predirs[i])
+	}
+	if len(predirs) == 0 {
+		predirs = []string{predir}
+	}
+	predir = predirs[0]
+	allowedSections := []string(nil)
+	if len(args) > 2 && strings.TrimSpace(args[2]) != "" {
+		allowedSections = stringSliceConfig(args[2])
+	}
+	creditRatio := 0
+	if len(args) > 3 {
+		creditRatio = intConfig(args[3], 0)
+		if creditRatio < 0 {
+			creditRatio = 0
+		}
 	}
 
 	for _, affil := range cfg.Groups {
@@ -258,8 +374,11 @@ func (p *Plugin) handleAddAffil(ctx plugin.SiteContext, args []string) bool {
 	}
 
 	cfg.Groups = append(cfg.Groups, AffilRule{
-		Group:  group,
-		Predir: predir,
+		Group:           group,
+		Predir:          predir,
+		Predirs:         predirs,
+		AllowedSections: allowedSections,
+		CreditRatio:     creditRatio,
 		Permissions: map[string]interface{}{
 			"acl_path":        p.aclPath(predir),
 			"privpath":        true,
@@ -279,27 +398,29 @@ func (p *Plugin) handleAddAffil(ctx plugin.SiteContext, args []string) bool {
 		return true
 	}
 
-	parent := path.Dir(predir)
-	if !p.dirExists(parent) {
-		p.svc.Bridge.MakeDir(parent, ctx.UserName(), ctx.UserPrimaryGroup())
+	for _, dir := range predirs {
+		parent := path.Dir(dir)
+		if !p.dirExists(parent) {
+			p.svc.Bridge.MakeDir(parent, ctx.UserName(), ctx.UserPrimaryGroup())
+		}
+		p.svc.Bridge.MakeDir(dir, ctx.UserName(), group)
+		_ = p.svc.Bridge.Chmod(dir, 0777)
 	}
-	p.svc.Bridge.MakeDir(predir, ctx.UserName(), group)
-	_ = p.svc.Bridge.Chmod(predir, 0777)
 
 	if err := ensureGroupFile(p.groupFile, group); err != nil {
-		ctx.Reply("200- Affil %s added with predir %s\r\n", group, predir)
+		ctx.Reply("200- Affil %s added with predir %s\r\n", group, strings.Join(predirs, ", "))
 		ctx.Reply("200- WARNING: could not update %s: %v\r\n", p.groupFile, err)
 		ctx.Reply("200 Continue checking permissions update.\r\n")
 	}
 
 	if err := syncAffilPermissions(p.permissionsFile, p.aclBase, normalizeAffils(cfg.Groups, base)); err != nil {
-		ctx.Reply("200- Affil %s added with predir %s\r\n", group, predir)
+		ctx.Reply("200- Affil %s added with predir %s\r\n", group, strings.Join(predirs, ", "))
 		ctx.Reply("200- WARNING: could not update %s: %v\r\n", p.permissionsFile, err)
 		ctx.Reply("200 Run SITE REHASH or restart sessions that need new ACL state.\r\n")
 		return true
 	}
 
-	ctx.Reply("200- Affil %s added with predir %s\r\n", group, predir)
+	ctx.Reply("200- Affil %s added with predir %s\r\n", group, strings.Join(predirs, ", "))
 	ctx.Reply("200 Updated %s, %s, and %s. Run SITE REHASH or restart sessions that need new ACL state.\r\n", p.affilsFile, p.permissionsFile, p.groupFile)
 	return true
 }
@@ -388,6 +509,47 @@ func (p *Plugin) findUserAffil(userGroups []string) *AffilRule {
 		}
 	}
 	return nil
+}
+
+func (p *Plugin) findUserAffilForRelease(userGroups []string, relname string) (*affilMatch, string) {
+	if len(userGroups) == 0 {
+		return nil, "550 You are not in any affil group."
+	}
+	groupSet := map[string]bool{}
+	for _, group := range userGroups {
+		groupSet[strings.ToLower(strings.TrimSpace(group))] = true
+	}
+	matches := make([]affilMatch, 0, 2)
+	for _, affil := range p.currentAffils() {
+		if affil.Group == "" || !groupSet[strings.ToLower(affil.Group)] {
+			continue
+		}
+		for _, predir := range affilPredirs(affil) {
+			if p.childDirExists(predir, relname) {
+				matches = append(matches, affilMatch{rule: affil, predir: predir})
+			}
+		}
+	}
+	switch len(matches) {
+	case 0:
+		if affil := p.findUserAffil(userGroups); affil != nil {
+			predirs := affilPredirs(*affil)
+			if len(predirs) == 0 {
+				predirs = []string{path.Join(p.base, affil.Group)}
+			}
+			return &affilMatch{rule: *affil, predir: predirs[0]}, ""
+		}
+		return nil, "550 You are not in any affil group."
+	case 1:
+		return &matches[0], ""
+	default:
+		names := make([]string, 0, len(matches))
+		for _, match := range matches {
+			names = append(names, match.rule.Group)
+		}
+		sort.Strings(names)
+		return nil, fmt.Sprintf("550 Release %q exists in multiple affil predirs (%s).", relname, strings.Join(names, ", "))
+	}
 }
 
 func (p *Plugin) currentAffils() []AffilRule {
@@ -664,6 +826,439 @@ func cleanAbs(p string) string {
 	return path.Clean(p)
 }
 
+func (p *Plugin) resolveSection(section string) (string, string, bool) {
+	section = strings.TrimSpace(section)
+	if section == "" {
+		return "", "", false
+	}
+	for _, configured := range p.sections {
+		cfg := strings.TrimSpace(configured)
+		if cfg == "" {
+			continue
+		}
+		canonical := strings.TrimPrefix(cleanAbs(cfg), "/")
+		if strings.EqualFold(canonical, section) || strings.EqualFold(cfg, section) || strings.EqualFold("/"+section, cfg) {
+			return canonical, cleanAbs(cfg), true
+		}
+	}
+	if len(p.sections) == 0 {
+		clean := strings.TrimPrefix(cleanAbs(section), "/")
+		return clean, cleanAbs(section), true
+	}
+	return "", "", false
+}
+
+func (p *Plugin) resolvePreDestinationDir(canonicalSection, sectionRoot string) string {
+	if linkTarget := p.resolveTodaySymlinkTarget(canonicalSection); linkTarget != "" {
+		return linkTarget
+	}
+	if datedPath := p.resolveDatedDestinationFallback(canonicalSection, sectionRoot); datedPath != "" {
+		return datedPath
+	}
+	return sectionRoot
+}
+
+func (p *Plugin) resolveTodaySymlinkTarget(canonicalSection string) string {
+	if p.svc == nil || p.svc.Bridge == nil {
+		return ""
+	}
+	cfg := p.loadDateddirsConfig()
+	prefix := "!Today_"
+	if strings.TrimSpace(cfg.SymlinkPrefix) != "" {
+		prefix = strings.TrimSpace(cfg.SymlinkPrefix)
+	}
+	linkName := prefix + canonicalSection
+	for _, entry := range p.svc.Bridge.PluginListDir("/") {
+		if entry.Name == linkName && entry.IsSymlink && strings.TrimSpace(entry.LinkTarget) != "" {
+			return cleanAbs(entry.LinkTarget)
+		}
+	}
+	return ""
+}
+
+func (p *Plugin) resolveDatedDestinationFallback(canonicalSection, sectionRoot string) string {
+	cfg := p.loadDateddirsConfig()
+	if sectionIsDated(cfg.Sections, canonicalSection) {
+		return path.Join(sectionRoot, formatDateDirForPre(timeutil.Now(), cfg.Format))
+	}
+	if sectionIsDated(p.datedSections, canonicalSection) {
+		return path.Join(sectionRoot, formatDateDirForPre(timeutil.Now(), cfg.Format))
+	}
+	return ""
+}
+
+func (p *Plugin) loadDateddirsConfig() dateddirsConfig {
+	cfg := dateddirsConfig{
+		Format:        "MMDD",
+		TodaySymlink:  true,
+		SymlinkPrefix: "!Today_",
+	}
+	filePath := strings.TrimSpace(p.dateddirsConfig)
+	if filePath == "" {
+		return cfg
+	}
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return cfg
+	}
+	_ = yaml.Unmarshal(data, &cfg)
+	cfg.Format = normalizePreDateFormat(cfg.Format)
+	if strings.TrimSpace(cfg.SymlinkPrefix) == "" {
+		cfg.SymlinkPrefix = "!Today_"
+	}
+	return cfg
+}
+
+func normalizePreDateFormat(format string) string {
+	if strings.TrimSpace(format) == "" {
+		return "MMDD"
+	}
+	return strings.TrimSpace(format)
+}
+
+func formatDateDirForPre(t time.Time, format string) string {
+	format = normalizePreDateFormat(format)
+	replacer := strings.NewReplacer(
+		"WW-YYYY", "{WEEK2}-{ISOYEAR4}",
+		"YYYY-WW", "{ISOYEAR4}-{WEEK2}",
+		"YYYY", "{YEAR4}",
+		"YY", "{YEAR2}",
+		"MM", "{MONTH2}",
+		"DD", "{DAY2}",
+		"WW", "{WEEK2}",
+	)
+	tokenized := replacer.Replace(format)
+	if tokenized == format {
+		tokenized = "{MONTH2}{DAY2}"
+	}
+	isoYear, isoWeek := t.ISOWeek()
+	return strings.NewReplacer(
+		"{YEAR4}", t.Format("2006"),
+		"{YEAR2}", t.Format("06"),
+		"{MONTH2}", t.Format("01"),
+		"{DAY2}", t.Format("02"),
+		"{WEEK2}", fmt.Sprintf("%02d", isoWeek),
+		"{ISOYEAR4}", fmt.Sprintf("%04d", isoYear),
+	).Replace(tokenized)
+}
+
+func (p *Plugin) filterAffilsForUser(affils []AffilRule, userGroups []string) []AffilRule {
+	if len(userGroups) == 0 {
+		return nil
+	}
+	groupSet := map[string]bool{}
+	for _, group := range userGroups {
+		groupSet[strings.ToLower(strings.TrimSpace(group))] = true
+	}
+	out := make([]AffilRule, 0, len(affils))
+	for _, affil := range affils {
+		if groupSet[strings.ToLower(strings.TrimSpace(affil.Group))] {
+			out = append(out, affil)
+		}
+	}
+	return out
+}
+
+func (p *Plugin) printPreHelpRow(ctx plugin.SiteContext, group string, predirs, sections []string, creditRatio int) {
+	reward := "-"
+	if creditRatio > 0 {
+		reward = fmt.Sprintf("x%d", creditRatio)
+	}
+	maxLines := len(predirs)
+	if len(sections) > maxLines {
+		maxLines = len(sections)
+	}
+	if maxLines == 0 {
+		maxLines = 1
+	}
+	for i := 0; i < maxLines; i++ {
+		groupCol := ""
+		predirCol := ""
+		sectionCol := ""
+		rewardCol := ""
+		if i == 0 {
+			groupCol = group
+			rewardCol = reward
+		}
+		if i < len(predirs) {
+			predirCol = predirs[i]
+		}
+		if i < len(sections) {
+			sectionCol = strings.ToLower(strings.TrimSpace(sections[i]))
+		}
+		ctx.Reply("200- %-15s %-40s %-25s %-6s\r\n", groupCol, predirCol, sectionCol, rewardCol)
+	}
+}
+
+func affilPredirs(affil AffilRule) []string {
+	out := make([]string, 0, len(affil.Predirs)+1)
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		value = cleanAbs(value)
+		for _, existing := range out {
+			if strings.EqualFold(existing, value) {
+				return
+			}
+		}
+		out = append(out, value)
+	}
+	add(affil.Predir)
+	for _, predir := range affil.Predirs {
+		add(predir)
+	}
+	return out
+}
+
+func (p *Plugin) applyPreCredits(users []plugin.RaceUser, creditRatio int) int64 {
+	if creditRatio <= 0 || len(users) == 0 {
+		return 0
+	}
+	groupMap := loadGroupMap(p.groupFile)
+	if len(groupMap) == 0 {
+		groupMap = loadGroupMap("etc/group")
+	}
+	totalAwarded := int64(0)
+	for _, racer := range users {
+		if strings.TrimSpace(racer.Name) == "" || racer.Bytes <= 0 {
+			continue
+		}
+		u, err := user.LoadUser(racer.Name, groupMap)
+		if err != nil {
+			p.logf("could not load user %s for PRE reward: %v", racer.Name, err)
+			continue
+		}
+		award := racer.Bytes * int64(creditRatio)
+		u.Credits += award
+		if err := u.Save(); err != nil {
+			p.logf("could not save PRE reward for %s: %v", racer.Name, err)
+			continue
+		}
+		totalAwarded += award
+	}
+	return totalAwarded
+}
+
+func (p *Plugin) preMetadataVars(srcDir, section, relname string) map[string]string {
+	vars := map[string]string{}
+	sectionUpper := strings.ToUpper(strings.TrimSpace(section))
+	switch {
+	case sectionUpper == "MP3" || sectionUpper == "FLAC":
+		if info := p.svc.Bridge.GetDirMediaInfo(srcDir); len(info) > 0 {
+			genre := firstNonEmpty(info, "genre", "g_genre")
+			year := normalizeYearForPre(firstNonEmpty(info, "year", "g_recordeddate", "g_recorded_date", "g_originalreleaseddate", "g_original_released_date"))
+			vars["genre"] = genreOrNA(genre)
+			vars["year"] = valueOrNA(year)
+			vars["pre_suffix"] = buildMusicPreSuffix(genre, year)
+		}
+	default:
+		if tv := p.readTaggedInfoFile(path.Join(srcDir, ".tvmaze")); len(tv) > 0 {
+			for k, v := range tv {
+				vars[k] = v
+			}
+			vars["pre_suffix"] = buildTVPreSuffix(tv)
+			return vars
+		}
+		if movie := p.readTaggedInfoFile(path.Join(srcDir, ".imdb")); len(movie) > 0 {
+			for k, v := range movie {
+				vars[k] = v
+			}
+			vars["pre_suffix"] = buildMoviePreSuffix(movie, relname)
+		}
+	}
+	return vars
+}
+
+func (p *Plugin) readTaggedInfoFile(filePath string) map[string]string {
+	if p.svc == nil || p.svc.Bridge == nil {
+		return nil
+	}
+	data, err := p.svc.Bridge.ReadFile(filePath)
+	if err != nil || len(data) == 0 {
+		return nil
+	}
+	out := map[string]string{}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || !strings.Contains(line, ":") {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 2)
+		key := normalizeTaggedInfoKey(parts[0])
+		value := strings.TrimSpace(parts[1])
+		if key == "" || value == "" || strings.EqualFold(value, "NA") || strings.EqualFold(value, "-") {
+			continue
+		}
+		out[key] = value
+	}
+	return out
+}
+
+func normalizeTaggedInfoKey(key string) string {
+	key = strings.ToLower(strings.TrimSpace(key))
+	key = strings.Trim(key, ".")
+	key = strings.ReplaceAll(key, " ", "_")
+	switch key {
+	case "title":
+		return "title"
+	case "original":
+		return "original_title"
+	case "year", "premiered":
+		return "year"
+	case "imdb_link":
+		return "link"
+	case "tvmaze_link":
+		return "tvmaze_link"
+	case "genre":
+		return "genre"
+	case "rating", "user_rating":
+		return "rating"
+	case "metacritic":
+		return "metacritic"
+	case "runtime":
+		return "runtime"
+	case "director":
+		return "director"
+	case "stars":
+		return "stars"
+	case "type":
+		return "type"
+	case "network":
+		return "network"
+	case "language":
+		return "language"
+	case "episode":
+		return "episode"
+	default:
+		return key
+	}
+}
+
+func buildMusicPreSuffix(genre, year string) string {
+	genre = strings.TrimSpace(genre)
+	year = normalizeYearForPre(year)
+	switch {
+	case genre != "" && year != "":
+		return " :: " + genre + " " + year
+	case genre != "":
+		return " :: " + genre
+	case year != "":
+		return " :: " + year
+	default:
+		return ""
+	}
+}
+
+func buildMoviePreSuffix(fields map[string]string, relname string) string {
+	title := strings.TrimSpace(fields["title"])
+	year := normalizeYearForPre(fields["year"])
+	genre := strings.TrimSpace(fields["genre"])
+	rating := strings.TrimSpace(fields["rating"])
+	if title == "" {
+		title = relname
+	}
+	parts := []string{title}
+	if year != "" {
+		parts[0] = title + " (" + year + ")"
+	}
+	if genre != "" {
+		parts = append(parts, genre)
+	}
+	if rating != "" {
+		parts = append(parts, rating)
+	}
+	return " :: " + strings.Join(parts, " :: ")
+}
+
+func buildTVPreSuffix(fields map[string]string) string {
+	parts := []string{}
+	if episode := strings.TrimSpace(fields["episode"]); episode != "" {
+		parts = append(parts, episode)
+	}
+	if genre := strings.TrimSpace(fields["genre"]); genre != "" {
+		parts = append(parts, genre)
+	}
+	if tvType := strings.TrimSpace(fields["type"]); tvType != "" {
+		parts = append(parts, tvType)
+	}
+	if network := strings.TrimSpace(fields["network"]); network != "" {
+		parts = append(parts, network)
+	}
+	if language := strings.TrimSpace(fields["language"]); language != "" {
+		parts = append(parts, language)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " :: " + strings.Join(parts, " :: ")
+}
+
+func normalizeYearForPre(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) >= 4 {
+		prefix := value[:4]
+		if _, err := strconv.Atoi(prefix); err == nil {
+			return prefix
+		}
+	}
+	return value
+}
+
+func firstNonEmpty(values map[string]string, keys ...string) string {
+	for _, key := range keys {
+		if s := strings.TrimSpace(values[key]); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+func valueOrNA(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "NA"
+	}
+	return value
+}
+
+func genreOrNA(value string) string {
+	return valueOrNA(value)
+}
+
+func loadGroupMap(filePath string) map[string]int {
+	groupMap := make(map[string]int)
+	filePath = strings.TrimSpace(filePath)
+	if filePath == "" {
+		return groupMap
+	}
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return groupMap
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.Split(line, ":")
+		if len(parts) < 3 {
+			continue
+		}
+		group := strings.TrimSpace(parts[0])
+		if group == "" {
+			continue
+		}
+		gid, err := strconv.Atoi(strings.TrimSpace(parts[2]))
+		if err != nil {
+			continue
+		}
+		groupMap[group] = gid
+	}
+	return groupMap
+}
+
 func fmtSize(b int64) (string, string) {
 	if b >= 1<<30 {
 		return fmt.Sprintf("%.2f", float64(b)/float64(1<<30)), "GB"
@@ -743,12 +1338,20 @@ func affilRulesConfig(raw interface{}) []AffilRule {
 		}
 		group, _ := m["group"].(string)
 		predir, _ := m["predir"].(string)
+		predirs := stringSliceConfig(m["predirs"])
+		allowedSections := stringSliceConfig(m["allowed_sections"])
 		group = strings.TrimSpace(group)
 		predir = strings.TrimSpace(predir)
 		if group == "" {
 			continue
 		}
-		out = append(out, AffilRule{Group: group, Predir: predir})
+		out = append(out, AffilRule{
+			Group:           group,
+			Predir:          predir,
+			Predirs:         predirs,
+			AllowedSections: allowedSections,
+			CreditRatio:     intConfig(m["credit_ratio"], 0),
+		})
 	}
 	return out
 }
@@ -758,13 +1361,19 @@ func normalizeAffils(in []AffilRule, base string) []AffilRule {
 	for _, affil := range in {
 		affil.Group = strings.TrimSpace(affil.Group)
 		affil.Predir = strings.TrimSpace(affil.Predir)
+		affil.AllowedSections = stringSliceConfig(affil.AllowedSections)
 		if affil.Group == "" {
 			continue
 		}
-		if affil.Predir == "" {
+		if affil.Predir == "" && len(affil.Predirs) == 0 {
 			affil.Predir = path.Join(base, affil.Group)
 		}
-		affil.Predir = cleanAbs(affil.Predir)
+		predirs := affilPredirs(affil)
+		if len(predirs) == 0 {
+			predirs = []string{cleanAbs(path.Join(base, affil.Group))}
+		}
+		affil.Predir = predirs[0]
+		affil.Predirs = predirs
 		out = append(out, affil)
 	}
 	return out
@@ -897,15 +1506,16 @@ func buildAffilPermissionNodes(aclBase string, affils []AffilRule) map[string][]
 		if group == "" {
 			continue
 		}
-		aclPath := affilACLPath(affil, aclBase)
-		if aclPath == "" {
-			continue
+		for _, aclPath := range affilACLPaths(affil, aclBase) {
+			if aclPath == "" {
+				continue
+			}
+			keyed = append(keyed, keyedAffil{
+				group: strings.ToLower(group),
+				path:  aclPath,
+				rule:  affil,
+			})
 		}
-		keyed = append(keyed, keyedAffil{
-			group: strings.ToLower(group),
-			path:  aclPath,
-			rule:  affil,
-		})
 	}
 	sort.Slice(keyed, func(i, j int) bool {
 		if keyed[i].path != keyed[j].path {
@@ -933,25 +1543,47 @@ func buildAffilPermissionNodes(aclBase string, affils []AffilRule) map[string][]
 	return out
 }
 
-func affilACLPath(affil AffilRule, aclBase string) string {
+func affilACLPaths(affil AffilRule, aclBase string) []string {
 	if affil.Permissions != nil {
-		for _, key := range []string{"acl_path", "privpath"} {
-			if raw, ok := affil.Permissions[key]; ok {
-				if s, ok := raw.(string); ok && strings.HasPrefix(strings.TrimSpace(s), "/") {
-					return cleanAbs(s)
+		if raw, ok := affil.Permissions["acl_paths"]; ok {
+			if paths := stringSliceConfig(raw); len(paths) > 0 {
+				out := make([]string, 0, len(paths))
+				for _, candidate := range paths {
+					if strings.HasPrefix(strings.TrimSpace(candidate), "/") {
+						out = append(out, cleanAbs(candidate))
+					}
+				}
+				if len(out) > 0 {
+					return out
 				}
 			}
 		}
 	}
-	predir := cleanAbs(affil.Predir)
+	if affil.Permissions != nil {
+		for _, key := range []string{"acl_path", "privpath"} {
+			if raw, ok := affil.Permissions[key]; ok {
+				if s, ok := raw.(string); ok && strings.HasPrefix(strings.TrimSpace(s), "/") {
+					return []string{cleanAbs(s)}
+				}
+			}
+		}
+	}
+	predirs := affilPredirs(affil)
+	out := make([]string, 0, len(predirs))
 	base := cleanAbs(aclBase)
-	if strings.EqualFold(base, "/") {
-		return predir
+	for _, predir := range predirs {
+		predir = cleanAbs(predir)
+		if strings.EqualFold(base, "/") {
+			out = append(out, predir)
+			continue
+		}
+		if strings.HasPrefix(strings.ToLower(predir), strings.ToLower(base)+"/") || strings.EqualFold(predir, base) {
+			out = append(out, predir)
+			continue
+		}
+		out = append(out, path.Join(base, predir))
 	}
-	if strings.HasPrefix(strings.ToLower(predir), strings.ToLower(base)+"/") || strings.EqualFold(predir, base) {
-		return predir
-	}
-	return path.Join(base, predir)
+	return out
 }
 
 func affilPermissionEnabled(affil AffilRule, key string, fallback bool) bool {

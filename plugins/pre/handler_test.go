@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -82,7 +83,7 @@ rules:
 
 func TestSyncAffilPermissionsRemovesStaleGeneratedRules(t *testing.T) {
 	filePath := filepath.Join(t.TempDir(), "permissions.yml")
-input := `rules:
+	input := `rules:
   privpath: []
   list:
     - path: /PRE/*
@@ -118,6 +119,88 @@ input := `rules:
 	}
 	if !strings.Contains(text, "/PRE/iND") {
 		t.Fatalf("expected iND rules to remain after sync")
+	}
+}
+
+func TestNormalizeAffilsSupportsPredirsSectionsAndReward(t *testing.T) {
+	in := []AffilRule{
+		{
+			Group:           "GRP1",
+			Predir:          "/groups/GRP1",
+			Predirs:         []string{"/groups/GRP1", "/groups/GRP1ALT"},
+			AllowedSections: []string{"MP3", "FLAC"},
+			CreditRatio:     3,
+		},
+	}
+	got := normalizeAffils(in, "/PRE")
+	if len(got) != 1 {
+		t.Fatalf("expected 1 affil, got %d", len(got))
+	}
+	if got[0].Predir != "/groups/GRP1" {
+		t.Fatalf("expected primary predir /groups/GRP1, got %q", got[0].Predir)
+	}
+	if len(got[0].Predirs) != 2 || got[0].Predirs[1] != "/groups/GRP1ALT" {
+		t.Fatalf("expected normalized predirs, got %#v", got[0].Predirs)
+	}
+	if len(got[0].AllowedSections) != 2 || got[0].AllowedSections[0] != "MP3" {
+		t.Fatalf("expected allowed sections to survive normalization, got %#v", got[0].AllowedSections)
+	}
+	if got[0].CreditRatio != 3 {
+		t.Fatalf("expected credit ratio 3, got %d", got[0].CreditRatio)
+	}
+}
+
+func TestResolveSectionCanonicalizesConfiguredCase(t *testing.T) {
+	p := &Plugin{sections: []string{"TV-1080P", "/MP3", "/0DAY"}}
+	section, dir, ok := p.resolveSection("mp3")
+	if !ok {
+		t.Fatalf("expected MP3 section to resolve")
+	}
+	if section != "MP3" || dir != "/MP3" {
+		t.Fatalf("expected canonical MP3 -> /MP3, got section=%q dir=%q", section, dir)
+	}
+}
+
+func TestAffilACLPathsIncludesAllPredirs(t *testing.T) {
+	affil := AffilRule{
+		Group:   "GRP1",
+		Predir:  "/groups/GRP1",
+		Predirs: []string{"/groups/GRP1", "/groups/GRP1ALT"},
+	}
+	got := affilACLPaths(affil, "/")
+	if len(got) != 2 {
+		t.Fatalf("expected 2 ACL paths, got %#v", got)
+	}
+	if got[0] != "/groups/GRP1" || got[1] != "/groups/GRP1ALT" {
+		t.Fatalf("unexpected ACL paths: %#v", got)
+	}
+}
+
+func TestFormatDateDirForPreMatchesDateddirsTokens(t *testing.T) {
+	when := time.Date(2026, time.April, 28, 12, 0, 0, 0, time.UTC)
+	if got := formatDateDirForPre(when, "MMDD"); got != "0428" {
+		t.Fatalf("MMDD = %q, want 0428", got)
+	}
+	if got := formatDateDirForPre(when, "YYYY-MM-DD"); got != "2026-04-28" {
+		t.Fatalf("YYYY-MM-DD = %q, want 2026-04-28", got)
+	}
+}
+
+func TestBuildMusicPreSuffix(t *testing.T) {
+	if got := buildMusicPreSuffix("House", "2026"); got != " :: House 2026" {
+		t.Fatalf("buildMusicPreSuffix = %q", got)
+	}
+}
+
+func TestBuildMoviePreSuffix(t *testing.T) {
+	fields := map[string]string{
+		"title":  "The Boxer",
+		"year":   "2009",
+		"genre":  "Action, Drama, Sport",
+		"rating": "4.9/10 (613 votes)",
+	}
+	if got := buildMoviePreSuffix(fields, "The.Boxer.2009.MULTi.COMPLETE.BLURAY-PRAWN"); got != " :: The Boxer (2009) :: Action, Drama, Sport :: 4.9/10 (613 votes)" {
+		t.Fatalf("buildMoviePreSuffix = %q", got)
 	}
 }
 
