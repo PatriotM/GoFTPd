@@ -15,6 +15,12 @@
 late_minutes: 10
 debug: false
 
+# Optional outbound proxy for HTTP API lookups.
+# Examples:
+# proxy: "socks5h://127.0.0.1:9050"
+# proxy: "http://127.0.0.1:8080"
+proxy: ""
+
 # Optional section substring matches, same style as tvmaze/imdb. If both
 # sections and paths are empty, every release dir is eligible.
 sections: ["0DAY", "APPS", "EBOOKS", "TV", "X264", "X265", "BLURAY", "DVDR", "MP3", "FLAC"]

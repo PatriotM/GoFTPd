@@ -545,11 +545,14 @@ func raceEntryKey(fileName string) string {
 }
 
 func musicCompleteExtra(dirPath string, media MediaInfoProvider) string {
-	if media == nil || !isMusicSection(dirPath) {
+	if media == nil {
 		return ""
 	}
 	info := media.GetDirMediaInfo(dirPath)
 	if len(info) == 0 {
+		return ""
+	}
+	if !isMusicSection(dirPath) && !looksLikeMusicReleaseInfo(info) {
 		return ""
 	}
 	genre := firstNonEmpty(info, "genre", "g_genre")
@@ -563,6 +566,20 @@ func musicCompleteExtra(dirPath string, media MediaInfoProvider) string {
 	default:
 		return year
 	}
+}
+
+func looksLikeMusicReleaseInfo(info map[string]string) bool {
+	for _, key := range []string{"filename", "filepath", "path"} {
+		name := strings.ToLower(strings.TrimSpace(info[key]))
+		switch {
+		case strings.HasSuffix(name, ".mp3"),
+			strings.HasSuffix(name, ".flac"),
+			strings.HasSuffix(name, ".m4a"),
+			strings.HasSuffix(name, ".wav"):
+			return true
+		}
+	}
+	return false
 }
 
 func isMusicSection(dirPath string) bool {

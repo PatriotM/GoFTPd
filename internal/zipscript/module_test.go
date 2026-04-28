@@ -2,6 +2,14 @@ package zipscript
 
 import "testing"
 
+type testMediaInfoProvider struct {
+	data map[string]map[string]string
+}
+
+func (p testMediaInfoProvider) GetDirMediaInfo(dirPath string) map[string]string {
+	return p.data[dirPath]
+}
+
 func TestUsesReleaseCheckEntryRequiresExactReleaseDepth(t *testing.T) {
 	cfg := Config{
 		Enabled: true,
@@ -90,5 +98,30 @@ func TestAudioSortLinksCanDisableSectionBuckets(t *testing.T) {
 	}
 	if got, want := links[0].LinkPath, "/music.by.genre/House/Artist-Album-2026-GRP"; got != want {
 		t.Fatalf("LinkPath = %q, want %q", got, want)
+	}
+}
+
+func TestCompleteStatusNameUsesMusicMetadataForAffilPredir(t *testing.T) {
+	cfg := Config{
+		Enabled: true,
+		Race: RaceConfig{
+			CompleteBanner:     true,
+			MusicCompleteGenre: true,
+		},
+	}
+	media := testMediaInfoProvider{
+		data: map[string]map[string]string{
+			"/groups/GRP1/Artist-Album-2026-GRP": {
+				"filename": "01-track.mp3",
+				"genre":    "DANCE",
+				"year":     "2026-04-28",
+			},
+		},
+	}
+
+	got := CompleteStatusName(cfg, "GoFTPd", "/groups/GRP1/Artist-Album-2026-GRP", 123, 12, media)
+	want := "[GoFTPd] - ( 123M 12F - COMPLETE - DANCE 2026 ) - [GoFTPd]"
+	if got != want {
+		t.Fatalf("CompleteStatusName = %q, want %q", got, want)
 	}
 }

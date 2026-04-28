@@ -33,6 +33,7 @@ type Handler struct {
 	debug    bool
 	sections []string
 	version  string
+	proxy    string
 
 	client   *http.Client
 	jobs     chan job
@@ -78,9 +79,15 @@ func (h *Handler) Init(svc *plugin.Services, cfg map[string]interface{}) error {
 	} else {
 		h.version = "1.0"
 	}
+	h.proxy = stringConfig(cfg, "proxy", "")
+	client, err := newHTTPClient(10*time.Second, h.proxy)
+	if err != nil {
+		return err
+	}
+	h.client = client
 	go h.worker()
 	if h.debug {
-		log.Printf("[TVMAZE] initialized, sections=%v", h.sections)
+		log.Printf("[TVMAZE] initialized, sections=%v proxy=%q", h.sections, h.proxy)
 	}
 	return nil
 }
@@ -459,4 +466,30 @@ func toStringSlice(v interface{}) []string {
 		return parts
 	}
 	return nil
+}
+
+func stringConfig(cfg map[string]interface{}, key, fallback string) string {
+	if cfg == nil {
+		return fallback
+	}
+	if s, ok := cfg[key].(string); ok {
+		return strings.TrimSpace(s)
+	}
+	return fallback
+}
+
+func newHTTPClient(timeout time.Duration, proxyValue string) (*http.Client, error) {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	proxyValue = strings.TrimSpace(proxyValue)
+	if proxyValue != "" {
+		proxyURL, err := url.Parse(proxyValue)
+		if err != nil {
+			return nil, fmt.Errorf("tvmaze proxy %q is invalid: %w", proxyValue, err)
+		}
+		transport.Proxy = http.ProxyURL(proxyURL)
+	}
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: transport,
+	}, nil
 }

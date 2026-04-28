@@ -740,7 +740,7 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 		if user == "" {
 			user = evt.User
 		}
-		fallback := fmt.Sprintf("PRE: [%s] %s by %s (%s) - %s/%s", section, rel, group, user, vars["t_mbytes"], vars["t_files"])
+		fallback := fmt.Sprintf("PRE: [%s] %s by %s (%s) - %s/%s%s", section, rel, group, user, vars["t_mbytes"], vars["t_files"], vars["pre_suffix"])
 		outs = append(outs, plugin.Output{Type: "PRE", Text: p.render("PRE", vars, fallback)})
 	case event.EventPreBW:
 		fallback := fmt.Sprintf("PREBW: [%s] %s :: %s%s @ %s%s :: Highest %s%s",

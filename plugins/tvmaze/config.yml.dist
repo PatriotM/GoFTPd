@@ -1,4 +1,10 @@
 # Sections where the daemon-side TVMaze helper should run.
 sections: ["TV"]
 
+# Optional outbound proxy for lookups.
+# Examples:
+# proxy: "socks5h://127.0.0.1:9050"
+# proxy: "http://127.0.0.1:8080"
+proxy: ""
+
 debug: false

@@ -14,11 +14,19 @@
 #   siteop_override  true/false to keep SiteOP/flag-1 access alongside group
 #   owner_group      metadata for the created predir
 #   mode             mode for the created predir
+#
+# group entry extras:
+#   predirs           optional list of source predirs for the group
+#   allowed_sections  optional list of destination sections this group may pre into
+#   credit_ratio      optional reward multiplier. A value of 3 grants
+#                     uploaded_bytes * 3 credits to racers from the affil dir.
 base: "/PRE"
 
 groups:
   - group: "GoFTPd"
     predir: "/PRE/GoFTPd"
+    allowed_sections: ["0DAY", "TV-1080P"]
+    credit_ratio: 0
     permissions:
       acl_path: "/PRE/GoFTPd"
       privpath: true
@@ -30,6 +38,8 @@ groups:
 
   - group: "GRPTST"
     predir: "/PRE/GRPTST"
+    allowed_sections: ["MP3", "FLAC"]
+    credit_ratio: 3
     permissions:
       acl_path: "/PRE/GRPTST"
       privpath: true
