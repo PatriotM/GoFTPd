@@ -67,3 +67,6 @@ vendor/
 .gocache/
 .gomodcache/
 .tmp_*.test
+.tmp_drftpd/
+.tmp_drftpd3_case/
+.tmp_drftpd3_import_test.py
