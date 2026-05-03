@@ -324,37 +324,37 @@ announce.NEWDIR = "%b{%c15{NEW}} %c01{in }%section_colored%c01{: -> }%b{%path}%b
 
 announce.NEWDAY = "%b{%c01{NEW DAY:}} %c01{-}%section_colored%c01{- A new day has come!} %c%sec_c5{%date} %c01{has been created along with its symlink.}"
 
-announce.AUDIOINFO = "%b{%c15{AUDIO}} %c01{in }%section_colored%c01{: -> }%b{%path}%b %c01{[}%b{%genre}%b %c01{from }%b{%year}%b %c01{at }%b{%bitrate}%b %b{%channels}%b%c01{]}"
+announce.AUDIOINFO = "%b{%c15{FLAC}} %c01{-> }%b{%relname}%b %c01{[}%b{%genre}%b %c01{from }%b{%year}%b %c01{at sample rate }%b{%sample_rate}%b %c01{Hz, channels }%b{%channels}%b%c01{]}"
 
 announce.MEDIAINFO = "%b{[SAMPLE]} %b{%path}%b %c01{::} %b{%video_format}%b %c01{: }%widthx%height %c01{: }%b{%audio_format}%b %c01{: }%b{%channels}%b %c01{: }%b{%duration}%b"
 
 announce.SPEEDTEST = "%b{%c01{SPEEDTEST:}} %c04{%nick} %c01{%action} %c01{a} %c05{%{size_mb}MB} %c01{file with} %c06{%speed_mbs}"
 
-announce.SFV_RAR = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%b{%path}%b %c01{by }%b{%user}%b%c14{/}%b{%group}%b %c01{@ }%b{%speed}%b%c01{. Expecting }%b{%size}%b %c01{in }%b{%files}%b %c01{files.}"
+announce.SFV_RAR = "%b{%c15{RACE:}} %c01{[}%section_colored%c01{]} %c01{Got SFV for }%c%sec_c3{%b{%relname}} %c01{uploaded by }%c%sec_c4{%u_name}%c01{. Now expecting }%c%sec_c5{%b{%t_filecount}} %c01{%t_file_label.}"
 
-announce.UPDATE_RAR = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%b{%path}%b %c01{by }%b{%user}%b%c14{/}%b{%group}%b %c01{@ }%b{%speed}%b%c01{. Expecting }%b{%size}%b %c01{in }%b{%files}%b %c01{files.}"
+announce.UPDATE_RAR = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%b{%relname}%b %c01{by }%b{%user}%b %c01{at }%b{%speed}%b%c01{. Expecting }%b{%size}%b %c01{in }%b{%files}%b %c01{files.}"
 
-announce.UPDATE_RAR_UNKNOWN = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%b{%path}%b %c01{by }%b{%user}%b%c14{/}%b{%group}%b %c01{@ }%b{%speed}%b."
+announce.UPDATE_RAR_UNKNOWN = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%b{%relname}%b %c01{by }%b{%user}%b %c01{at }%b{%speed}%b."
 
-announce.UPDATE_ZIP = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%b{%path}%b %c01{by }%b{%user}%b%c14{/}%b{%group}%b %c01{@ }%b{%speed}%b%c01{. Expecting }%b{%size}%b %c01{in }%b{%files}%b %c01{files.}"
+announce.UPDATE_ZIP = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%b{%relname}%b %c01{by }%b{%user}%b %c01{at }%b{%speed}%b%c01{. Expecting }%b{%size}%b %c01{in }%b{%files}%b %c01{files.}"
 
-announce.UPDATE_ZIP_UNKNOWN = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%b{%path}%b %c01{by }%b{%user}%b%c14{/}%b{%group}%b %c01{@ }%b{%speed}%b."
+announce.UPDATE_ZIP_UNKNOWN = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%b{%relname}%b %c01{by }%b{%user}%b %c01{at }%b{%speed}%b."
 
-announce.UPDATE_TRACK = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%b{%path}%b %c01{by }%b{%user}%b%c14{/}%b{%group}%b %c01{@ }%b{%speed}%b."
+announce.UPDATE_TRACK = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%b{%relname}%b %c01{by }%b{%user}%b %c01{at }%b{%speed}%b."
 
-announce.RACE_RAR = "%b{%c15{RACE}} %c01{in }%section_colored%c01{: -> }%b{%user}%b%c14{/}%b{%group}%b %c01{is joining on }%b{%path}%b %c14{@ }%b{%speed}%b %c01{and }%b{%filesleft}%b %c01{files left.}"
+announce.RACE_RAR = "%b{%c15{RACE:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{- }%c%sec_c4{%u_name} %c01{joined the race at }%c%sec_c5{%u_speed}%c01{.}"
 
-announce.NEWLEADER = "%b{%c15{NEW RACE LEADER}} %c01{in }%section_colored%c01{: -> }%b{%path}%b %c01{: }%b{%leaduser}%b %c01{is now leading [}%b{%leadsize}%b%c01{/}%b{%leadfiles}F%b%c01{/}%b{%leadpercent}%b%c01{/}%b{%leadspeed}%b%c01{] with }%b{%filesleft}%b %c01{files left.}"
+announce.NEWLEADER = "%b{%c15{NEW LEADER:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{- }%c%sec_c4{%leaduser} %c01{takes the lead - }%c%sec_c5{%leadsize}%c01{/}%c%sec_c5{%leadfiles}F%c01{/}%c%sec_c5{%leadpercent}%c01{/}%c%sec_c5{%leadspeed}%c01{.}"
 
-announce.HALFWAY = "%b{%c15{HALFWAY}} %c01{in }%section_colored%c01{: -> }%b{%path}%b %c01{at avg speed }%b{%t_avgspeed}%b %c01{%t_timeleft} with race leader %b{%leaduser}%b %b{[}%b{%leadsize}%b%c01{/}%b{%leadfiles}F%b%c01{/}%b{%leadpercent}%b%c01{/}%b{%leadspeed}%b%b{]} %c01{with }%b{%filesleft}%b %c01{files left.}"
+announce.HALFWAY = "%b{%c15{HALFWAY:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{- avg speed: }%c%sec_c5{%t_avgspeed} %c01{- time left: }%c%sec_c5{%t_timeleft} %c01{- leader: }%c%sec_c4{%leaduser} %c01{[}%c%sec_c5{%leadsize}%c01{/}%c%sec_c5{%leadfiles}F%c01{/}%c%sec_c5{%leadpercent}%c01{/}%c%sec_c5{%leadspeed}%c01{] - }%c%sec_c5{%filesleft} %c01{files left.}"
 
 announce.TVINFO = "%section_colored %c14{-TvMaze-} %c07{%title}%c01{ :: }%c07{%network}%c01{ :: }%c07{%type}%c01{ :: }%c07{%genre}%c01{ :: }%c07{%language}%c01{ :: }%link"
 
 announce.MOVIEINFO = "%section_colored %c14{-IMDB-} %c07{%title}%c01{ (}%c07{%year}%c01{)}\n%section_colored %c14{-IMDB-} %c01{Genres: }%c07{%genre}%c01{ :: Language: }%c07{%language}%c01{ :: Country: }%c07{%country}%c01{ :: Director: }%c07{%director}%c01{ :: Scored: }%c07{%rating}/10%c01{ with }%c07{%votes}%c01{ votes :: Runtime: }%c07{%runtime}\n%section_colored %c14{-IMDB-} %c01{Plot: }%plot\n%u{%link}"
 
-announce.COMPLETE = "%b{%c15{COMPLETE}} %c01{in }%section_colored%c01{: -> }%b{%path}%b %c01{( }%b{%size}%b %c01{in }%b{%files}F%b%c01{ at avg speed }%b{%t_avgspeed}%b %c01{%t_duration} ) by }%b{%racers}%b %c01{racer(s).}"
+announce.COMPLETE = "%b{%c15{COMPLETE:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{by }%c%sec_c5{%racers} %c01{racers - }%c%sec_c5{%size}%c01{/}%c%sec_c5{%files}%c01{/}%c%sec_c5{%t_avgspeed}%c01{/}%c%sec_c5{%t_duration}"
 
-announce.STATS_HOF = "%b{%c01{STATS:}} ▂▃▅▇█▓▒░۩۞۩  %c03{Users Hall Of Fame} ۩۞۩░▒▓█▇▅▃▂"
+announce.STATS_HOF = "%b{%c01{STATS:}} ===== %c03{Users Hall Of Fame} %c01{=====}"
 
 announce.STATS_SPEEDS = "%b{%c01{STATS:}} %c01{Slowest:} %c%sec_c4{%u_slowest_name} %c01{at} %c05{%u_slowest_speed} %c01{-} %c01{Fastest:} %c%sec_c4{%u_fastest_name} %c01{at} %c05{%u_fastest_speed}%c01{.}"
 
