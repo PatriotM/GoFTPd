@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"goftpd/internal/core"
 )
 
 // VFSFile represents a file or directory in the master's virtual file system.
@@ -342,6 +344,62 @@ func (vfs *VirtualFileSystem) ListDirectory(dirPath string) []*VFSFile {
 	}
 
 	return results
+}
+
+// GetImmediateChildDirFacts returns one-pass metadata about direct child
+// directories below parentDir, derived from the in-memory VFS.
+func (vfs *VirtualFileSystem) GetImmediateChildDirFacts(parentDir string) map[string]core.ReleaseChildFacts {
+	vfs.mu.RLock()
+	defer vfs.mu.RUnlock()
+
+	parentDir = cleanVFSPath(parentDir)
+	childPaths := vfs.children[parentDir]
+	if len(childPaths) == 0 {
+		return nil
+	}
+
+	out := make(map[string]core.ReleaseChildFacts, len(childPaths))
+	for childPath := range childPaths {
+		if vfs.isHiddenPathLocked(childPath) {
+			continue
+		}
+		child := vfs.files[childPath]
+		if child == nil || !child.IsDir || child.IsSymlink {
+			continue
+		}
+
+		facts := core.ReleaseChildFacts{Path: childPath}
+		for grandChildPath := range vfs.children[childPath] {
+			if vfs.isHiddenPathLocked(grandChildPath) {
+				continue
+			}
+			grandChild := vfs.files[grandChildPath]
+			if grandChild == nil {
+				continue
+			}
+			name := strings.TrimSpace(filepath.Base(grandChild.Path))
+			if strings.HasPrefix(name, ".") {
+				continue
+			}
+			facts.VisibleCount++
+			if grandChild.IsDir {
+				continue
+			}
+			lower := strings.ToLower(name)
+			if strings.HasSuffix(lower, ".sfv") {
+				facts.HasSFV = true
+			}
+			if strings.HasSuffix(lower, ".nfo") {
+				facts.HasNFO = true
+			}
+		}
+		out[childPath] = facts
+	}
+
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // FileExists checks if a path exists in the VFS

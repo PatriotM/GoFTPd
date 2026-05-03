@@ -938,7 +938,6 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				}
 
 				totalBytes, present, total := dirRaceProgress(bridge, s.Config, s.CurrentDir)
-
 				if s.Config.Debug {
 					log.Printf("[LIST/RACESTATS] dir=%s totalBytes=%d present=%d total=%d",
 						s.CurrentDir, totalBytes, present, total)
@@ -1717,6 +1716,7 @@ func incompleteMarkerEntries(bridge MasterBridge, cfg *Config, pattern, dirPath 
 	cdPattern := zipscript.CDIndicator(cfg.Zipscript)
 	markEmptyDirs := zipscript.MarkEmptyDirsOnRescan(cfg.Zipscript)
 	bulkProgress := bridge.GetImmediateReleaseProgress(dirPath)
+	childFacts := bridge.GetImmediateReleaseChildFacts(dirPath)
 	existing := make(map[string]bool, len(entries))
 	for _, e := range entries {
 		existing[e.Name] = true
@@ -1736,8 +1736,9 @@ func incompleteMarkerEntries(bridge MasterBridge, cfg *Config, pattern, dirPath 
 		usesZip := zipscript.UsesZip(cfg.Zipscript, releasePath)
 		present, total := 0, 0
 		progress, hasProgress := bulkProgress[releasePath]
+		facts, hasFacts := childFacts[releasePath]
 		var releaseEntries []MasterFileEntry
-		needReleaseEntries := usesZip || nfoPattern != "" || (noSFVPattern != "" && !hasProgress) || (markEmptyDirs && !hasProgress)
+		needReleaseEntries := usesZip || (!hasFacts && (nfoPattern != "" || (noSFVPattern != "" && !hasProgress) || (markEmptyDirs && !hasProgress)))
 		if needReleaseEntries {
 			releaseEntries = bridge.ListDir(releasePath)
 		}
@@ -1756,7 +1757,11 @@ func incompleteMarkerEntries(bridge MasterBridge, cfg *Config, pattern, dirPath 
 		hasSFV := hasProgress && progress.HasSFV
 		if noSFVPattern != "" && !usesZip {
 			if !hasProgress {
-				hasSFV = hasSFVEntry(releaseEntries)
+				if hasFacts {
+					hasSFV = facts.HasSFV
+				} else {
+					hasSFV = hasSFVEntry(releaseEntries)
+				}
 			}
 		}
 		if noSFVPattern != "" && !usesZip && !hasSFV {
@@ -1773,7 +1778,13 @@ func incompleteMarkerEntries(bridge MasterBridge, cfg *Config, pattern, dirPath 
 				existing[marker] = true
 			}
 		}
-		if nfoPattern != "" && !hasNFOEntry(releaseEntries) {
+		hasNFO := false
+		if hasFacts {
+			hasNFO = facts.HasNFO
+		} else if nfoPattern != "" {
+			hasNFO = hasNFOEntry(releaseEntries)
+		}
+		if nfoPattern != "" && !hasNFO {
 			marker := incompleteMarkerName(nfoPattern, e.Name)
 			if marker != "" && !existing[marker] {
 				out = append(out, MasterFileEntry{
@@ -1791,16 +1802,20 @@ func incompleteMarkerEntries(bridge MasterBridge, cfg *Config, pattern, dirPath 
 		emptyDir := false
 		if total <= 0 {
 			if markEmptyDirs {
-				if len(releaseEntries) == 0 {
-					releaseEntries = bridge.ListDir(releasePath)
-				}
-				visible := 0
-				for _, child := range releaseEntries {
-					if !strings.HasPrefix(child.Name, ".") {
-						visible++
+				if hasFacts {
+					emptyDir = facts.VisibleCount == 0
+				} else {
+					if len(releaseEntries) == 0 {
+						releaseEntries = bridge.ListDir(releasePath)
 					}
+					visible := 0
+					for _, child := range releaseEntries {
+						if !strings.HasPrefix(child.Name, ".") {
+							visible++
+						}
+					}
+					emptyDir = visible == 0
 				}
-				emptyDir = visible == 0
 			}
 			if !emptyDir {
 				continue

@@ -81,6 +81,11 @@ type MasterBridge interface {
 	// release directories below dirPath, keyed by absolute release path.
 	GetImmediateReleaseProgress(dirPath string) map[string]ReleaseProgressStat
 
+	// GetImmediateReleaseChildFacts returns direct-child release metadata that
+	// can be derived from the current VFS in one pass, keyed by absolute
+	// release path.
+	GetImmediateReleaseChildFacts(dirPath string) map[string]ReleaseChildFacts
+
 	// GetRaceWallClockMilliseconds returns the wall-clock race duration (first
 	// file start to last file end) in milliseconds. Used for accurate aggregate
 	// speed in STATS — summing per-file durations overcounts when uploads run
@@ -171,6 +176,13 @@ type ReleaseProgressStat struct {
 	Present int
 	Total   int
 	HasSFV  bool
+}
+
+type ReleaseChildFacts struct {
+	Path         string
+	VisibleCount int
+	HasSFV       bool
+	HasNFO       bool
 }
 
 // SFVEntryInfo is a filename→CRC32 pair from a parsed SFV file.
