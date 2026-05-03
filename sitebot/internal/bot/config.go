@@ -37,19 +37,30 @@ type HelpConfig struct {
 }
 
 type IRCConfig struct {
-	Host          string   `yaml:"host"`
-	Port          int      `yaml:"port"`
-	SSL           bool     `yaml:"ssl"`
-	Nick          string   `yaml:"nick"`
-	User          string   `yaml:"user"`
-	RealName      string   `yaml:"realname"`
-	Password      string   `yaml:"password"`
-	Channels      []string `yaml:"channels"`
-	OperUser      string   `yaml:"operuser"`
-	OperPassword  string   `yaml:"operpassword"`
-	AutoOper      bool     `yaml:"auto_oper"`
-	UserModes     string   `yaml:"user_modes"`
-	AutoJoinDelay int      `yaml:"autojoin_delay_ms"`
+	Host          string         `yaml:"host"`
+	Port          int            `yaml:"port"`
+	SSL           bool           `yaml:"ssl"`
+	Nick          string         `yaml:"nick"`
+	User          string         `yaml:"user"`
+	RealName      string         `yaml:"realname"`
+	Password      string         `yaml:"password"`
+	Channels      []string       `yaml:"channels"`
+	NickServ      NickServConfig `yaml:"nickserv"`
+	OperUser      string         `yaml:"operuser"`
+	OperPassword  string         `yaml:"operpassword"`
+	AutoOper      bool           `yaml:"auto_oper"`
+	UserModes     string         `yaml:"user_modes"`
+	AutoJoinDelay int            `yaml:"autojoin_delay_ms"`
+}
+
+type NickServConfig struct {
+	Enabled      bool   `yaml:"enabled"`
+	Service      string `yaml:"service"`
+	Account      string `yaml:"account"`
+	Password     string `yaml:"password"`
+	Email        string `yaml:"email"`
+	AutoRegister bool   `yaml:"auto_register"`
+	DelayMS      int    `yaml:"delay_ms"`
 }
 
 type EncConfig struct {
@@ -122,6 +133,9 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if len(cfg.Help.Channels) == 0 {
 		cfg.Help.Channels = []string{"#goftpd"}
+	}
+	if strings.TrimSpace(cfg.IRC.NickServ.Service) == "" {
+		cfg.IRC.NickServ.Service = "NickServ"
 	}
 	if strings.TrimSpace(cfg.Help.ReplyTarget) == "" {
 		cfg.Help.ReplyTarget = "pm"
