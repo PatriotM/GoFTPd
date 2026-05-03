@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/sha1"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -30,30 +31,28 @@ type Handler struct {
 }
 
 type config struct {
-	ScanIntervalSeconds      int
-	Host                     string
-	Port                     int
-	User                     string
-	Password                 string
-	UseTLS                   bool
-	Insecure                 bool
-	TimeoutSeconds           int
-	StateDir                 string
-	NukedPrefix              string
-	UseZipscriptReleaseCheck bool
-	ReleasePatterns          []string
-	SectionRoots             []string
-	AffilsDirs               []string
-	Excludes                 []string
-	ApprovalMarkers          []string
-	CheckCompleteDir         bool
-	UserExclude              string
-	Empty                    timedRule
-	HalfEmpty                timedPayloadRule
-	Incomplete               incompleteRule
-	Banned                   timedPatternRules
-	Allowed                  timedPatternRules
-	DeleteNukes              deleteRule
+	ScanIntervalSeconds int
+	Host                string
+	Port                int
+	User                string
+	Password            string
+	UseTLS              bool
+	Insecure            bool
+	TimeoutSeconds      int
+	StateDir            string
+	NukedPrefix         string
+	Sections            []string
+	AffilsDirs          []string
+	Excludes            []string
+	ApprovalMarkers     []string
+	CheckCompleteDir    bool
+	UserExclude         string
+	Empty               timedRule
+	HalfEmpty           timedPayloadRule
+	Incomplete          incompleteRule
+	Banned              timedPatternRules
+	Allowed             timedPatternRules
+	DeleteNukes         deleteRule
 }
 
 type timedRule struct {
@@ -117,6 +116,17 @@ type fileInfo struct {
 	ModTime   int64
 }
 
+type historyEntry struct {
+	Timestamp string `json:"timestamp"`
+	Action    string `json:"action"`
+	Path      string `json:"path,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Section   string `json:"section,omitempty"`
+	Owner     string `json:"owner,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+	Detail    string `json:"detail,omitempty"`
+}
+
 func New() *Handler {
 	return &Handler{stopCh: make(chan struct{})}
 }
@@ -138,8 +148,8 @@ func (h *Handler) Init(svc *pluginpkg.Services, raw map[string]interface{}) erro
 	if strings.TrimSpace(h.cfg.User) == "" || h.cfg.Password == "" {
 		return fmt.Errorf("autonuke requires user/password so it can run normal SITE NUKE")
 	}
-	if len(h.cfg.ReleasePatterns) == 0 {
-		h.logf("no release patterns configured, plugin idle")
+	if len(h.cfg.Sections) == 0 {
+		h.logf("no sections configured, plugin idle")
 		return nil
 	}
 	if err := os.MkdirAll(h.cfg.StateDir, 0755); err != nil {
@@ -147,7 +157,7 @@ func (h *Handler) Init(svc *pluginpkg.Services, raw map[string]interface{}) erro
 	}
 	h.wg.Add(1)
 	go h.loop()
-	h.logf("initialized interval=%ds patterns=%d state_dir=%s", h.cfg.ScanIntervalSeconds, len(h.cfg.ReleasePatterns), h.cfg.StateDir)
+	h.logf("initialized interval=%ds sections=%d state_dir=%s", h.cfg.ScanIntervalSeconds, len(h.cfg.Sections), h.cfg.StateDir)
 	return nil
 }
 
@@ -199,13 +209,15 @@ func (h *Handler) runOnce() {
 }
 
 func (h *Handler) processRelease(rel releaseCandidate) {
-	if h.isSectionRoot(rel.Path) {
-		h.logf("skipping section root %s from autonuke scan", rel.Path)
+	if h.isProtectedBase(rel.Path) {
+		h.logf("skipping section base %s from autonuke scan", rel.Path)
+		h.appendHistory("skip_section_base", rel, "section base", "")
 		h.clearAllWarnings(rel)
 		return
 	}
 	if isDatedBucketName(rel.Name) {
 		h.logf("skipping dated bucket %s from autonuke scan", rel.Path)
+		h.appendHistory("skip_dated_bucket", rel, "dated bucket", "")
 		h.clearAllWarnings(rel)
 		return
 	}
@@ -233,7 +245,7 @@ func (h *Handler) processRelease(rel releaseCandidate) {
 
 func (h *Handler) listReleaseCandidates() []releaseCandidate {
 	seen := make(map[string]releaseCandidate)
-	for _, pattern := range h.cfg.ReleasePatterns {
+	for _, pattern := range h.currentSectionPatterns() {
 		for _, rel := range h.expandPattern(path.Clean(pattern)) {
 			seen[rel.Path] = rel
 		}
@@ -483,6 +495,7 @@ func (h *Handler) warn(rel releaseCandidate, key, tag, description string, warnA
 		message += " [" + detail + "]"
 	}
 	h.logf(message)
+	h.appendHistory("warn", rel, description, detail)
 }
 
 func (h *Handler) clearAllWarnings(rel releaseCandidate) {
@@ -507,8 +520,8 @@ func (h *Handler) cleanupOldNukes() {
 	if limitMinutes <= 0 {
 		return
 	}
-	for _, pattern := range h.cfg.ReleasePatterns {
-		base := strings.TrimSuffix(strings.TrimSuffix(pattern, "/*/*"), "/*")
+	for _, pattern := range h.currentSectionPatterns() {
+		base := sectionPatternBase(pattern)
 		for _, entry := range h.svc.Bridge.PluginListDir(base) {
 			if !entry.IsDir {
 				continue
@@ -526,9 +539,23 @@ func (h *Handler) cleanupOldNukes() {
 			target := path.Join(base, entry.Name)
 			if _, err := h.runSITE("WIPE " + target); err != nil {
 				h.logf("delete old nuke failed for %s: %v", target, err)
+				h.appendHistory("cleanup_failed", releaseCandidate{
+					Path:    target,
+					Name:    entry.Name,
+					Section: sectionFromPath(base),
+					Owner:   entry.Owner,
+					ModTime: entry.ModTime,
+				}, "delete old nuke failed", err.Error())
 				continue
 			}
 			h.logf("deleted old nuked release %s after %s", target, formatMinutes(limitMinutes))
+			h.appendHistory("cleanup_deleted", releaseCandidate{
+				Path:    target,
+				Name:    entry.Name,
+				Section: sectionFromPath(base),
+				Owner:   entry.Owner,
+				ModTime: entry.ModTime,
+			}, fmt.Sprintf("deleted after %s", formatMinutes(limitMinutes)), "")
 		}
 	}
 }
@@ -545,10 +572,10 @@ func (h *Handler) excludeTokens() []string {
 	return out
 }
 
-func (h *Handler) isSectionRoot(dirPath string) bool {
+func (h *Handler) isProtectedBase(dirPath string) bool {
 	clean := path.Clean(dirPath)
-	for _, root := range h.cfg.SectionRoots {
-		if path.Clean(root) == clean {
+	for _, pattern := range h.cfg.Sections {
+		if sectionProtectedBase(pattern) == clean {
 			return true
 		}
 	}
@@ -630,13 +657,47 @@ func (h *Handler) nuke(rel releaseCandidate, multiplier int, reason string) bool
 		response := responseText(responseLines)
 		if response != "" {
 			h.logf("nuke failed for %s: %v (%s)", rel.Path, err, response)
+			h.appendHistory("nuke_failed", rel, reason, response)
 		} else {
 			h.logf("nuke failed for %s: %v", rel.Path, err)
+			h.appendHistory("nuke_failed", rel, reason, err.Error())
 		}
 		return false
 	}
 	h.logf("nuked %s [%s] reason=%s", rel.Path, rel.Section, reason)
+	h.appendHistory("nuked", rel, reason, fmt.Sprintf("multiplier=x%d", multiplier))
 	return true
+}
+
+func (h *Handler) historyFile() string {
+	return path.Join(h.cfg.StateDir, "history.jsonl")
+}
+
+func (h *Handler) appendHistory(action string, rel releaseCandidate, reason string, detail string) {
+	entry := historyEntry{
+		Timestamp: time.Now().Format(time.RFC3339),
+		Action:    strings.TrimSpace(action),
+		Path:      strings.TrimSpace(rel.Path),
+		Name:      strings.TrimSpace(rel.Name),
+		Section:   strings.TrimSpace(rel.Section),
+		Owner:     strings.TrimSpace(rel.Owner),
+		Reason:    strings.TrimSpace(reason),
+		Detail:    strings.TrimSpace(detail),
+	}
+	data, err := json.Marshal(entry)
+	if err != nil {
+		h.logf("history marshal failed for %s: %v", rel.Path, err)
+		return
+	}
+	f, err := os.OpenFile(h.historyFile(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		h.logf("history open failed for %s: %v", rel.Path, err)
+		return
+	}
+	defer f.Close()
+	if _, err := f.Write(append(data, '\n')); err != nil {
+		h.logf("history write failed for %s: %v", rel.Path, err)
+	}
 }
 
 func (h *Handler) ownerLabel(rel releaseCandidate) string {
@@ -847,26 +908,21 @@ func loadConfig(raw map[string]interface{}) config {
 	allowedRaw := subMap(raw, "allowed")
 	deleteRaw := subMap(raw, "delete_nukes")
 	cfg := config{
-		ScanIntervalSeconds:      intValue(raw, 600, "scan_interval_seconds", "SLEEPTIME"),
-		Host:                     stringValue(raw, "127.0.0.1", "host"),
-		Port:                     intValue(raw, 21212, "port"),
-		User:                     stringValue(raw, "NUKEBOT", "user", "NUKEUSER", "nuke_user"),
-		Password:                 stringValue(raw, "change-me", "password", "nuke_password"),
-		UseTLS:                   boolValue(raw, true, "tls"),
-		Insecure:                 boolValue(raw, true, "insecure_skip_verify"),
-		TimeoutSeconds:           intValue(raw, 10, "timeout_seconds"),
-		StateDir:                 stringValue(raw, "logs/autonuke", "state_dir", "TEMPDIR"),
-		NukedPrefix:              stringValue(raw, "[NUKED]-", "nuked_prefix"),
-		UseZipscriptReleaseCheck: boolValue(raw, true, "use_zipscript_release_check"),
-		CheckCompleteDir:         boolValue(raw, true, "check_complete_dir", "CHECK_COMPLETE_DIR"),
-		UserExclude:              stringValue(raw, "goftpd", "user_exclude", "USEREXCLUDE"),
+		ScanIntervalSeconds: intValue(raw, 600, "scan_interval_seconds", "SLEEPTIME"),
+		Host:                stringValue(raw, "127.0.0.1", "host"),
+		Port:                intValue(raw, 21212, "port"),
+		User:                stringValue(raw, "NUKEBOT", "user", "NUKEUSER", "nuke_user"),
+		Password:            stringValue(raw, "change-me", "password", "nuke_password"),
+		UseTLS:              boolValue(raw, true, "tls"),
+		Insecure:            boolValue(raw, true, "insecure_skip_verify"),
+		TimeoutSeconds:      intValue(raw, 10, "timeout_seconds"),
+		StateDir:            stringValue(raw, "logs/autonuke", "state_dir", "TEMPDIR"),
+		NukedPrefix:         stringValue(raw, "[NUKED]-", "nuked_prefix"),
+		CheckCompleteDir:    boolValue(raw, true, "check_complete_dir", "CHECK_COMPLETE_DIR"),
+		UserExclude:         stringValue(raw, "goftpd", "user_exclude", "USEREXCLUDE"),
 	}
 
-	cfg.ReleasePatterns = normalizeReleasePatterns(stringSliceValue(raw, "release_patterns", "DIRS"))
-	if cfg.UseZipscriptReleaseCheck && len(cfg.ReleasePatterns) == 0 {
-		cfg.ReleasePatterns = normalizeReleasePatterns(stringSliceValue(raw, "zipscript_release_check"))
-	}
-	cfg.SectionRoots = normalizeBasePaths(stringSliceValue(raw, "sections"))
+	cfg.Sections = normalizeSectionPatterns(stringSliceValue(raw, "sections"))
 	cfg.AffilsDirs = normalizeBasePaths(stringSliceValue(raw, "affils_dirs", "AFFILSDIRS"))
 	cfg.Excludes = stringSliceValue(raw, "exclude_name_contains", "excludes", "EXCLUDES")
 	cfg.ApprovalMarkers = stringSliceValue(raw, "approval_markers")
@@ -943,10 +999,10 @@ func loadConfig(raw map[string]interface{}) config {
 	return cfg
 }
 
-func normalizeReleasePatterns(values []string) []string {
+func normalizeSectionPatterns(values []string) []string {
 	out := make([]string, 0, len(values))
 	for _, item := range values {
-		item = expandDateTokens(normalizeVirtualPath(item))
+		item = normalizeVirtualPath(item)
 		if item == "" {
 			continue
 		}
@@ -957,6 +1013,48 @@ func normalizeReleasePatterns(values []string) []string {
 		out = append(out, path.Clean(item+"/*"))
 	}
 	return dedupeStrings(out)
+}
+
+func sectionPatternBase(pattern string) string {
+	pattern = path.Clean(strings.TrimSpace(expandDateTokens(pattern)))
+	pattern = strings.TrimSuffix(pattern, "/*/*")
+	pattern = strings.TrimSuffix(pattern, "/*")
+	if pattern == "" {
+		return "/"
+	}
+	return path.Clean(pattern)
+}
+
+func sectionProtectedBase(pattern string) string {
+	pattern = path.Clean(strings.TrimSpace(normalizeVirtualPath(pattern)))
+	pattern = strings.TrimSuffix(pattern, "/*/*")
+	pattern = strings.TrimSuffix(pattern, "/*")
+	if pattern == "" || pattern == "/" {
+		return "/"
+	}
+	parts := strings.Split(strings.TrimPrefix(pattern, "/"), "/")
+	for len(parts) > 0 && isDateTokenSegment(parts[len(parts)-1]) {
+		parts = parts[:len(parts)-1]
+	}
+	if len(parts) == 0 {
+		return "/"
+	}
+	return "/" + strings.Join(parts, "/")
+}
+
+func isDateTokenSegment(part string) bool {
+	part = strings.TrimSpace(strings.ToUpper(part))
+	if part == "" {
+		return false
+	}
+	if strings.Contains(part, "{TODAY}") || strings.Contains(part, "{YESTERDAY}") {
+		return true
+	}
+	return strings.Contains(part, "MM") ||
+		strings.Contains(part, "DD") ||
+		strings.Contains(part, "YYYY") ||
+		strings.Contains(part, "YY") ||
+		strings.Contains(part, "WW")
 }
 
 func normalizeBasePaths(values []string) []string {
@@ -988,9 +1086,27 @@ func normalizeVirtualPath(p string) string {
 	return path.Clean(p)
 }
 
+func (h *Handler) currentSectionPatterns() []string {
+	out := make([]string, 0, len(h.cfg.Sections))
+	for _, item := range h.cfg.Sections {
+		item = expandDateTokens(strings.TrimSpace(item))
+		if item == "" {
+			continue
+		}
+		out = append(out, path.Clean(item))
+	}
+	return dedupeStrings(out)
+}
+
 func expandDateTokens(v string) string {
 	now := time.Now()
 	yesterday := now.Add(-24 * time.Hour)
+	_, isoWeek := now.ISOWeek()
+	v = strings.ReplaceAll(v, "YYYY", fmt.Sprintf("%04d", now.Year()))
+	v = strings.ReplaceAll(v, "YY", fmt.Sprintf("%02d", now.Year()%100))
+	v = strings.ReplaceAll(v, "MM", now.Format("01"))
+	v = strings.ReplaceAll(v, "DD", now.Format("02"))
+	v = strings.ReplaceAll(v, "WW", fmt.Sprintf("%02d", isoWeek))
 	v = strings.ReplaceAll(v, "{today}", now.Format("0102"))
 	v = strings.ReplaceAll(v, "{yesterday}", yesterday.Format("0102"))
 	return v
