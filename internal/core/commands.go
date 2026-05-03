@@ -340,16 +340,14 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		s.CurrentDir = path.Clean(target)
 		if s.Config.Mode == "master" && s.MasterManager != nil {
 			if bridge, ok := s.MasterManager.(MasterBridge); ok {
+				s.CurrentDir = path.Clean(bridge.ResolvePath(s.CurrentDir))
 				parent := path.Dir(s.CurrentDir)
 				name := path.Base(s.CurrentDir)
-				for _, e := range bridge.ListDir(parent) {
-					if e.Name == name && e.IsSymlink && e.LinkTarget != "" {
-						s.CurrentDir = path.Clean(e.LinkTarget)
-						break
+				pattern := activeIncompleteIndicator(s.Config)
+				if isIncompleteMarkerName(pattern, name) {
+					if resolved := resolveIncompleteMarkerTarget(bridge, s.Config, pattern, parent, name); resolved != "" {
+						s.CurrentDir = resolved
 					}
-				}
-				if resolved := resolveIncompleteMarkerTarget(bridge, s.Config, activeIncompleteIndicator(s.Config), parent, name); resolved != "" {
-					s.CurrentDir = resolved
 				}
 			}
 		}
@@ -373,29 +371,37 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					}
 				}
 
-				users, groups, totalBytes, present, total := bridge.GetVFSRaceStats(s.CurrentDir)
-				users = trimRaceUsers(s.Config, users)
-				groups = trimRaceGroups(s.Config, groups)
+				if raceStatusEligibleDir(s.CurrentDir) {
+					users, groups, totalBytes, present, total := bridge.GetVFSRaceStats(s.CurrentDir)
+					users = trimRaceUsers(s.Config, users)
+					groups = trimRaceGroups(s.Config, groups)
 
-				if s.Config.Debug {
-					log.Printf("[RACESTATS] dir=%s users=%d groups=%d totalBytes=%d present=%d total=%d",
-						s.CurrentDir, len(users), len(groups), totalBytes, present, total)
-				}
+					if s.Config.Debug {
+						log.Printf("[RACESTATS] dir=%s users=%d groups=%d totalBytes=%d present=%d total=%d",
+							s.CurrentDir, len(users), len(groups), totalBytes, present, total)
+					}
 
-				if HasRaceStats(users, groups, totalBytes, present, total) {
-					var builder strings.Builder
-					RenderRaceStats(
-						&builder,
-						users,
-						groups,
-						totalBytes,
-						present,
-						total,
-						s.Config.Version,
-					)
+					if HasRaceStats(users, groups, totalBytes, present, total) {
+						var builder strings.Builder
+						RenderRaceStats(
+							&builder,
+							users,
+							groups,
+							totalBytes,
+							present,
+							total,
+							s.Config.Version,
+						)
 
-					for _, line := range strings.Split(strings.TrimRight(builder.String(), "\r\n"), "\n") {
-						fmt.Fprintf(s.Conn, "250-%s\r\n", line)
+						for _, line := range strings.Split(strings.TrimRight(builder.String(), "\r\n"), "\n") {
+							fmt.Fprintf(s.Conn, "250-%s\r\n", line)
+						}
+					} else if s.Config.ShowCWDBanner {
+						var builder strings.Builder
+						RenderRaceHeader(&builder, s.Config.Version)
+						for _, line := range strings.Split(strings.TrimRight(builder.String(), "\r\n"), "\n") {
+							fmt.Fprintf(s.Conn, "250-%s\r\n", line)
+						}
 					}
 				} else if s.Config.ShowCWDBanner {
 					var builder strings.Builder
@@ -1817,6 +1823,9 @@ func incompleteMarkerEntries(bridge MasterBridge, cfg *Config, pattern, dirPath 
 }
 
 func resolveIncompleteMarkerTarget(bridge MasterBridge, cfg *Config, pattern, parent, name string) string {
+	if !isIncompleteMarkerName(pattern, name) {
+		return ""
+	}
 	for _, marker := range incompleteMarkerEntries(bridge, cfg, pattern, parent, bridge.ListDir(parent)) {
 		if marker.Name == name && marker.LinkTarget != "" {
 			return path.Clean(marker.LinkTarget)
