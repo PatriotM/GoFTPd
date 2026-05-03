@@ -141,7 +141,7 @@ func IsIgnoredReleaseSubdir(cfg Config, dirPath string) bool {
 	}
 	items := cfg.Sections.IgnoredReleaseSubdirs
 	if len(items) == 0 {
-		items = []string{"Sample", "Proof", "Subs", "Subtitles", "Covers"}
+		items = []string{"Sample", "Proof", "Subs", "Subtitles", "Covers", "Spam"}
 	}
 	for _, item := range items {
 		if strings.EqualFold(strings.TrimSpace(item), name) {
@@ -353,7 +353,7 @@ func CanTriggerRaceEnd(cfg Config, sfvEntries map[string]uint32, fileName string
 }
 
 func CanTriggerRaceEndForDir(cfg Config, dirPath string, sfvEntries map[string]uint32, fileName string) bool {
-	if dirPath != "" && IsIgnoredReleaseSubdir(cfg, dirPath) && !AnnounceReleaseSubdirs(cfg) {
+	if dirPath != "" && IsIgnoredReleaseSubdir(cfg, dirPath) {
 		return false
 	}
 	if dirPath != "" && !RaceEnabled(cfg, dirPath) {

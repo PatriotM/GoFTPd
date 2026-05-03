@@ -20,6 +20,7 @@ type releaseState struct {
 	HasSFV        bool
 	FirstRar      bool
 	Created       bool
+	Completed     bool
 	HalfwayDone   bool
 	CurrentLeader string
 	LastSeen      time.Time
@@ -515,6 +516,9 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 		}
 		if isReleaseDir(evt.Path, section) {
 			if !st.Created {
+				st.Completed = false
+				st.HalfwayDone = false
+				st.CurrentLeader = ""
 				st.Created = true
 				if p.shouldInlinePretime() && p.asyncEmit != nil {
 					p.queueInlinePretime(syntheticNewRelPath(evt, section), section, vars)
@@ -528,6 +532,9 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 			return nil, nil
 		}
 		if !st.Created && shouldEmitSyntheticNew(evt, section) {
+			st.Completed = false
+			st.HalfwayDone = false
+			st.CurrentLeader = ""
 			st.Created = true
 			if p.shouldInlinePretime() && p.asyncEmit != nil {
 				p.queueInlinePretime(syntheticNewRelPath(evt, section), section, vars)
@@ -539,11 +546,17 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 		case "nfo", "sample":
 			return nil, nil
 		case "sfv":
+			if st.Completed {
+				return nil, nil
+			}
 			if !st.HasSFV {
 				st.HasSFV = true
 				outs = append(outs, plugin.Output{Type: "RACE", Text: p.render("SFV_RAR", vars, fmt.Sprintf("RACE: [%s] Got SFV for %s%s uploaded by %s.", section, vars["subdir_prefix"], rel, evt.User))})
 			}
 		case "rar", "audio", "zip":
+			if st.Completed {
+				return nil, nil
+			}
 			if evt.User != "" && !st.Users[evt.User] {
 				st.Users[evt.User] = true
 				if !st.FirstRar {
@@ -606,6 +619,8 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 		if skipReleaseAnnounce {
 			return nil, nil
 		}
+		st.Completed = true
+		st.HalfwayDone = true
 		outs = append(outs, plugin.Output{Type: "COMPLETE", Text: p.render("COMPLETE", vars, fmt.Sprintf("COMPLETE: [%s] %s%s by %s racers - %s/%s/%s/%s", section, vars["subdir_prefix"], rel, vars["u_count"], vars["t_mbytes"], vars["t_files"], vars["t_avgspeed"], vars["t_duration"]))})
 	case event.EventRaceStats:
 		if skipReleaseAnnounce {

@@ -107,3 +107,41 @@ func TestRaceDBReconcileDoesNotPurgeWhenVFSIsEmpty(t *testing.T) {
 		t.Fatalf("expected release path %s, got %s", releasePath, results[0].Path)
 	}
 }
+
+func TestRecordUploadDoesNotRewriteExistingPresentRaceWinner(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "race.db")
+	rdb, err := NewRaceDB(dbPath)
+	if err != nil {
+		t.Fatalf("NewRaceDB failed: %v", err)
+	}
+	defer rdb.Close()
+
+	releasePath := "/site/MP3/Stable.Release-GRP"
+	if err := rdb.SaveSFV(releasePath, "release.sfv", map[string]uint32{
+		"01-track.mp3": 1,
+	}); err != nil {
+		t.Fatalf("SaveSFV failed: %v", err)
+	}
+
+	filePath := releasePath + "/01-track.mp3"
+	if err := rdb.RecordUpload(filePath, "first", "GRP1", 100, 1000, 1); err != nil {
+		t.Fatalf("first RecordUpload failed: %v", err)
+	}
+	if err := rdb.RecordUpload(filePath, "second", "GRP2", 200, 2000, 2); err != nil {
+		t.Fatalf("second RecordUpload failed: %v", err)
+	}
+
+	users, _, totalBytes, present, total := rdb.GetRaceStats(releasePath)
+	if total != 1 || present != 1 {
+		t.Fatalf("expected complete 1/1 release, got present=%d total=%d", present, total)
+	}
+	if totalBytes != 100 {
+		t.Fatalf("expected original file size to remain 100 bytes, got %d", totalBytes)
+	}
+	if len(users) != 1 {
+		t.Fatalf("expected one race user, got %d", len(users))
+	}
+	if users[0].Name != "first" || users[0].Group != "GRP1" {
+		t.Fatalf("expected original winner first/GRP1 to remain, got %s/%s", users[0].Name, users[0].Group)
+	}
+}

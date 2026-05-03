@@ -125,3 +125,33 @@ func TestCompleteStatusNameUsesMusicMetadataForAffilPredir(t *testing.T) {
 		t.Fatalf("CompleteStatusName = %q, want %q", got, want)
 	}
 }
+
+func TestIgnoredReleaseSubdirsIncludeSpamByDefault(t *testing.T) {
+	cfg := Config{Enabled: true}
+
+	if !IsIgnoredReleaseSubdir(cfg, "/MP3/0503/Artist-Album-2026-GRP/Spam") {
+		t.Fatalf("expected Spam to be ignored by default")
+	}
+}
+
+func TestIgnoredReleaseSubdirNeverTriggersRaceEnd(t *testing.T) {
+	announce := true
+	cfg := Config{
+		Enabled: true,
+		Race: RaceConfig{
+			Enabled:         true,
+			AnnounceSubdirs: &announce,
+		},
+		Sections: SectionsConfig{
+			SFV: []string{"/MP3/*/*", "/MP3/*/*/*"},
+		},
+	}
+
+	sfvEntries := map[string]uint32{
+		"01-track.mp3": 1234,
+	}
+
+	if CanTriggerRaceEndForDir(cfg, "/MP3/0503/Artist-Album-2026-GRP/Spam", sfvEntries, "01-track.mp3") {
+		t.Fatalf("expected ignored subdir to never trigger race end")
+	}
+}
