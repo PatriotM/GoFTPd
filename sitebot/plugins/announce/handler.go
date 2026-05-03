@@ -646,8 +646,42 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 		perVars["u_mb"] = vars["u_racer_mb"]
 		perVars["u_pct"] = vars["u_racer_pct"]
 		perVars["u_speed"] = vars["u_racer_speed"]
-		fallback := fmt.Sprintf("STATS: [%s] %s/%s %sMB %s%% %s", vars["u_rank"], perVars["u_name"], perVars["u_group"], perVars["u_mb"], perVars["u_pct"], perVars["u_speed"])
+		perVars["u_alup"] = vars["u_alup"]
+		perVars["u_wkup"] = vars["u_wkup"]
+		perVars["u_monthup"] = vars["u_monthup"]
+		perVars["u_dayup"] = vars["u_dayup"]
+		perVars["u_aldn"] = vars["u_aldn"]
+		perVars["u_wkdn"] = vars["u_wkdn"]
+		perVars["u_monthdn"] = vars["u_monthdn"]
+		perVars["u_daydn"] = vars["u_daydn"]
+		fallback := fmt.Sprintf("%s. %s@%s [%sMB/%s Files/%s%%/%s] [ALUP #%s][WKUP #%s]",
+			vars["u_rank"], perVars["u_name"], perVars["u_group"], perVars["u_mb"], perVars["u_files"], perVars["u_pct"], perVars["u_speed"], perVars["u_alup"], perVars["u_wkup"])
 		if line := strings.TrimSpace(p.render("STATS_USER", perVars, fallback)); line != "" {
+			outs = append(outs, plugin.Output{Type: "STATS", Text: line})
+		}
+	case event.EventRaceGroupHeader:
+		if skipReleaseAnnounce {
+			return nil, nil
+		}
+		if line := strings.TrimSpace(p.render("STATS_GROUP_HEADER", vars, "GroupTop")); line != "" {
+			outs = append(outs, plugin.Output{Type: "STATS", Text: line})
+		}
+	case event.EventRaceGroup:
+		if skipReleaseAnnounce {
+			return nil, nil
+		}
+		perVars := map[string]string{}
+		for k, v := range vars {
+			perVars[k] = v
+		}
+		perVars["g_rank"] = vars["g_rank"]
+		perVars["g_name"] = vars["g_name"]
+		perVars["g_files"] = vars["g_files"]
+		perVars["g_mb"] = vars["g_mb"]
+		perVars["g_pct"] = vars["g_pct"]
+		perVars["g_speed"] = vars["g_speed"]
+		fallback := fmt.Sprintf("%s. %s [%sMB/%s Files/%s%%/%s]", perVars["g_rank"], perVars["g_name"], perVars["g_mb"], perVars["g_files"], perVars["g_pct"], perVars["g_speed"])
+		if line := strings.TrimSpace(p.render("STATS_GROUP", perVars, fallback)); line != "" {
 			outs = append(outs, plugin.Output{Type: "STATS", Text: line})
 		}
 	case event.EventRaceFooter:
