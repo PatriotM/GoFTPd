@@ -1198,9 +1198,10 @@ func (b *Bridge) CacheMediaInfo(dirPath string, fields map[string]string) {
 // GetVFSRaceStats returns race statistics for a directory,
 // counting ONLY files that are listed in the cached SFV data.
 func (b *Bridge) GetVFSRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRaceGroup, int64, int, int) {
+	cleanDirPath := filepath.Clean(dirPath)
 	if b.raceDB != nil {
-		users, groups, totalBytes, present, total := b.raceDB.GetRaceStats(filepath.Clean(dirPath))
-		if total > 0 || present > 0 || totalBytes > 0 || len(users) > 0 || len(groups) > 0 {
+		users, groups, totalBytes, present, total := b.raceDB.GetRaceStats(cleanDirPath)
+		if total > 0 || present > 0 || totalBytes > 0 || len(users) > 0 || len(groups) > 0 || b.raceDB.HasRelease(cleanDirPath) {
 			return users, groups, totalBytes, present, total
 		}
 	}
@@ -1232,6 +1233,13 @@ func (b *Bridge) GetVFSRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFS
 	}
 
 	return coreUsers, coreGroups, totalBytes, present, total
+}
+
+func (b *Bridge) GetImmediateReleaseProgress(dirPath string) map[string]core.ReleaseProgressStat {
+	if b == nil || b.raceDB == nil {
+		return nil
+	}
+	return b.raceDB.GetImmediateReleaseProgress(filepath.Clean(dirPath))
 }
 
 func (b *Bridge) PluginGetVFSRaceStats(dirPath string) ([]plugin.RaceUser, []plugin.RaceGroup, int64, int, int) {

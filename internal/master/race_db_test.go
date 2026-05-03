@@ -145,3 +145,75 @@ func TestRecordUploadDoesNotRewriteExistingPresentRaceWinner(t *testing.T) {
 		t.Fatalf("expected original winner first/GRP1 to remain, got %s/%s", users[0].Name, users[0].Group)
 	}
 }
+
+func TestRaceDBGetRaceStatsUsesNormalizedFilenameKeys(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "race.db")
+	rdb, err := NewRaceDB(dbPath)
+	if err != nil {
+		t.Fatalf("NewRaceDB failed: %v", err)
+	}
+	defer rdb.Close()
+
+	releasePath := "/site/MP3/MixedCase.Release-GRP"
+	if err := rdb.SaveSFV(releasePath, "release.sfv", map[string]uint32{
+		"01-Track.MP3": 1,
+	}); err != nil {
+		t.Fatalf("SaveSFV failed: %v", err)
+	}
+	if err := rdb.RecordUpload(releasePath+"/01-track.mp3", "steel", "GRP", 1234, 1000, 1); err != nil {
+		t.Fatalf("RecordUpload failed: %v", err)
+	}
+
+	users, groups, totalBytes, present, total := rdb.GetRaceStats(releasePath)
+	if total != 1 || present != 1 {
+		t.Fatalf("expected present=1 total=1, got present=%d total=%d", present, total)
+	}
+	if totalBytes != 1234 {
+		t.Fatalf("expected totalBytes=1234, got %d", totalBytes)
+	}
+	if len(users) != 1 || users[0].Name != "steel" || users[0].Files != 1 {
+		t.Fatalf("unexpected user stats: %+v", users)
+	}
+	if len(groups) != 1 || groups[0].Name != "GRP" || groups[0].Files != 1 {
+		t.Fatalf("unexpected group stats: %+v", groups)
+	}
+}
+
+func TestRaceDBGetImmediateReleaseProgressReturnsDirectChildrenOnly(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "race.db")
+	rdb, err := NewRaceDB(dbPath)
+	if err != nil {
+		t.Fatalf("NewRaceDB failed: %v", err)
+	}
+	defer rdb.Close()
+
+	if err := rdb.SaveSFV("/site/MP3/0503/Direct-One", "one.sfv", map[string]uint32{"01.mp3": 1}); err != nil {
+		t.Fatalf("SaveSFV direct one failed: %v", err)
+	}
+	if err := rdb.RecordUpload("/site/MP3/0503/Direct-One/01.mp3", "u1", "G1", 100, 1000, 1); err != nil {
+		t.Fatalf("RecordUpload direct one failed: %v", err)
+	}
+	if err := rdb.SaveSFV("/site/MP3/0503/Direct-Two", "two.sfv", map[string]uint32{"02.mp3": 2, "03.mp3": 3}); err != nil {
+		t.Fatalf("SaveSFV direct two failed: %v", err)
+	}
+	if err := rdb.RecordUpload("/site/MP3/0503/Direct-Two/02.mp3", "u2", "G2", 200, 1000, 2); err != nil {
+		t.Fatalf("RecordUpload direct two failed: %v", err)
+	}
+	if err := rdb.SaveSFV("/site/MP3/0503/Direct-Two/CD1", "nested.sfv", map[string]uint32{"04.mp3": 4}); err != nil {
+		t.Fatalf("SaveSFV nested failed: %v", err)
+	}
+
+	progress := rdb.GetImmediateReleaseProgress("/site/MP3/0503")
+	if len(progress) != 2 {
+		t.Fatalf("expected 2 direct children, got %d: %+v", len(progress), progress)
+	}
+	if got := progress["/site/MP3/0503/Direct-One"]; got.Total != 1 || got.Present != 1 || !got.HasSFV {
+		t.Fatalf("unexpected direct-one progress: %+v", got)
+	}
+	if got := progress["/site/MP3/0503/Direct-Two"]; got.Total != 2 || got.Present != 1 || !got.HasSFV {
+		t.Fatalf("unexpected direct-two progress: %+v", got)
+	}
+	if _, ok := progress["/site/MP3/0503/Direct-Two/CD1"]; ok {
+		t.Fatalf("nested release should not be returned: %+v", progress)
+	}
+}

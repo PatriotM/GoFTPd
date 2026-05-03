@@ -12,6 +12,8 @@ const (
 	EventRaceEnd          EventType = "RACEEND"
 	EventRaceStats        EventType = "RACESTATS"
 	EventRaceUser         EventType = "RACEUSER"
+	EventRaceGroupHeader  EventType = "RACEGROUPH"
+	EventRaceGroup        EventType = "RACEGROUP"
 	EventRaceFooter       EventType = "RACEFOOTER"
 	EventNewUser          EventType = "NEWUSER"
 	EventLoginFail        EventType = "LOGINFAIL"

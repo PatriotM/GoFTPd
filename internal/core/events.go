@@ -12,6 +12,7 @@ import (
 	"time"
 
 	pluginpkg "goftpd/internal/plugin"
+	"goftpd/internal/user"
 	"goftpd/internal/zipscript"
 )
 
@@ -26,6 +27,8 @@ const (
 	EventRaceEnd          EventType = "RACEEND"    // COMPLETE line only
 	EventRaceStats        EventType = "RACESTATS"  // STATS_HOF + STATS_SPEEDS
 	EventRaceUser         EventType = "RACEUSER"   // one per racer in HOF
+	EventRaceGroupHeader  EventType = "RACEGROUPH" // GroupTop header
+	EventRaceGroup        EventType = "RACEGROUP"  // one per group in GroupTop
 	EventRaceFooter       EventType = "RACEFOOTER" // STATS_END line
 	EventNewUser          EventType = "NEWUSER"
 	EventLoginFail        EventType = "LOGINFAIL"
@@ -398,11 +401,15 @@ func emitRaceEnd(s *Session, dirPath string, users []VFSRaceUser, totalBytes int
 	// wall-clock for STATS_SPEED totals too.
 	var raceDurationMs int64
 	var hookRunner zipscript.CompleteHookRunner
+	var groups []VFSRaceGroup
 	if s.Config.Mode == "master" && s.MasterManager != nil {
 		if bridge, ok := s.MasterManager.(MasterBridge); ok {
 			hookRunner = bridge
 			if ms := bridge.GetRaceWallClockMilliseconds(dirPath); ms > 0 {
 				raceDurationMs = ms
+			}
+			if _, raceGroups, _, _, _ := bridge.GetVFSRaceStats(dirPath); len(raceGroups) > 0 {
+				groups = trimRaceGroups(s.Config, raceGroups)
 			}
 		}
 	}
@@ -436,6 +443,7 @@ func emitRaceEnd(s *Session, dirPath string, users []VFSRaceUser, totalBytes int
 		"t_duration": formatRaceDuration(raceDurationMs),
 		"t_avgspeed": fmt.Sprintf("%.2fMB/s", avgMB),
 		"u_count":    fmt.Sprintf("%d", len(users)),
+		"g_count":    fmt.Sprintf("%d", len(groups)),
 	}
 	if subdir := zipscript.ReleaseSubdirLabel(s.Config.Zipscript, dirPath); subdir != "" {
 		common["release_subdir"] = subdir
@@ -482,7 +490,29 @@ func emitRaceEnd(s *Session, dirPath string, users []VFSRaceUser, totalBytes int
 		uData["u_racer_mb"] = fmt.Sprintf("%.1f", float64(u.Bytes)/1024.0/1024.0)
 		uData["u_racer_pct"] = fmt.Sprintf("%d", u.Percent)
 		uData["u_racer_speed"] = fmt.Sprintf("%.2fMB/s", userDisplaySpeed(u)/1024.0/1024.0)
+		uData["u_alup"] = fmt.Sprintf("%d", userTransferStatsPlace("ALUP", u.Name, s.GroupMap))
+		uData["u_wkup"] = fmt.Sprintf("%d", userTransferStatsPlace("WKUP", u.Name, s.GroupMap))
+		uData["u_monthup"] = fmt.Sprintf("%d", userTransferStatsPlace("MONTHUP", u.Name, s.GroupMap))
+		uData["u_dayup"] = fmt.Sprintf("%d", userTransferStatsPlace("DAYUP", u.Name, s.GroupMap))
+		uData["u_aldn"] = fmt.Sprintf("%d", userTransferStatsPlace("ALDN", u.Name, s.GroupMap))
+		uData["u_wkdn"] = fmt.Sprintf("%d", userTransferStatsPlace("WKDN", u.Name, s.GroupMap))
+		uData["u_monthdn"] = fmt.Sprintf("%d", userTransferStatsPlace("MONTHDN", u.Name, s.GroupMap))
+		uData["u_daydn"] = fmt.Sprintf("%d", userTransferStatsPlace("DAYDN", u.Name, s.GroupMap))
 		s.emitEvent(EventRaceUser, dirPath, rel, u.Bytes, u.Speed/1024.0/1024.0, uData)
+	}
+
+	if len(groups) > 0 {
+		s.emitEvent(EventRaceGroupHeader, dirPath, rel, totalBytes, avgMB, copyMap(common))
+		for i, g := range groups {
+			gData := copyMap(common)
+			gData["g_rank"] = fmt.Sprintf("%d", i+1)
+			gData["g_name"] = g.Name
+			gData["g_files"] = fmt.Sprintf("%d", g.Files)
+			gData["g_mb"] = fmt.Sprintf("%.1f", float64(g.Bytes)/1024.0/1024.0)
+			gData["g_pct"] = fmt.Sprintf("%d", g.Percent)
+			gData["g_speed"] = fmt.Sprintf("%.2fMB/s", g.Speed/1024.0/1024.0)
+			s.emitEvent(EventRaceGroup, dirPath, rel, g.Bytes, g.Speed/1024.0/1024.0, gData)
+		}
 	}
 
 	// Footer
@@ -555,6 +585,55 @@ func userDisplaySpeed(u VFSRaceUser) float64 {
 		return u.PeakSpeed
 	}
 	return u.SlowSpeed
+}
+
+func userTransferStatsPlace(command, username string, groupMap map[string]int) int {
+	target, err := user.LoadUser(username, groupMap)
+	if err != nil || target == nil {
+		return 0
+	}
+	targetBytes := userTransferStatsBytes(command, target)
+	place := 1
+	names, err := listUserNames()
+	if err != nil {
+		return place
+	}
+	for _, name := range names {
+		other, err := user.LoadUser(name, groupMap)
+		if err != nil || other == nil {
+			continue
+		}
+		if userTransferStatsBytes(command, other) > targetBytes {
+			place++
+		}
+	}
+	return place
+}
+
+func userTransferStatsBytes(command string, u *user.User) int64 {
+	if u == nil {
+		return 0
+	}
+	switch strings.ToUpper(strings.TrimSpace(command)) {
+	case "ALUP":
+		return u.AllUp.Bytes
+	case "WKUP":
+		return u.WkUp.Bytes
+	case "DAYUP":
+		return u.DayUp.Bytes
+	case "MONTHUP":
+		return u.MonthUp.Bytes
+	case "ALDN":
+		return u.AllDn.Bytes
+	case "WKDN":
+		return u.WkDn.Bytes
+	case "DAYDN":
+		return u.DayDn.Bytes
+	case "MONTHDN":
+		return u.MonthDn.Bytes
+	default:
+		return 0
+	}
 }
 
 func markRaceCompleteOnce(dirPath string, totalBytes int64, total int) bool {
