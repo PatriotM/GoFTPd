@@ -323,7 +323,7 @@ announce.NEWDAY = "%b{%c01{NEW DAY:}} %c01{-}%section_colored%c01{- A new day ha
 
 announce.AUDIOINFO = "%b{%c01{AUDIO-INFO:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{Get ready for some} %c%sec_c5{%genre} %c01{from} %c%sec_c5{%year} %c01{at} %c%sec_c5{%sample_rate}Hz %c01{in} %c%sec_c5{%channels} %c%sec_c5{%bitrate} %c01{(}%c%sec_c5{%bitrate_mode}%c01{).}"
 
-announce.MEDIAINFO = "%b{%c01{SAMPLE-INFO:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{- Video:} %c%sec_c5{%video_format} %c01{%width}x%height %c01{- Audio:} %c%sec_c5{%audio_format} %c01{%channels} %c01{- Subs:} %c%sec_c5{%subtitle_format} %c01{- Duration:} %c%sec_c5{%duration}"
+announce.MEDIAINFO = "%b{%c01{SAMPLE-INFO:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{- Video:} %c%sec_c5{%video_format} %c05{%{width}}%c01{x}%c05{%{height}} %c01{- Audio:} %c%sec_c5{%audio_format} %c01{%channels} %c01{- Subs:} %c%sec_c5{%subtitle_format} %c01{- Duration:} %c%sec_c5{%duration}"
 
 announce.SPEEDTEST = "%b{%c01{SPEEDTEST:}} %c04{%nick} %c01{%action} %c01{a} %c05{%{size_mb}MB} %c01{file with} %c06{%speed_mbs}"
 
@@ -355,11 +355,11 @@ announce.STATS_HOF = "%b{%c01{STATS:}} ▂▃▅▇█▓▒░۩۞۩  %c03{User
 
 announce.STATS_SPEEDS = "%b{%c01{STATS:}} %c01{Slowest:} %c%sec_c4{%u_slowest_name} %c01{at} %c05{%u_slowest_speed} %c01{-} %c01{Fastest:} %c%sec_c4{%u_fastest_name} %c01{at} %c05{%u_fastest_speed}%c01{.}"
 
-announce.STATS_USER = "%b{%c01{STATS:}} %b{%{u_rank}}%c01{. }%b{%{u_name}}%c01{@}%c06{%{u_group}} %c01{[}%{u_mb}MB%c01{/}%{u_files} %c01{Files/}%{u_pct}%c01{%/}%{u_speed}%c01{] [ALUP #}%{u_alup}%c01{][WKUP #}%{u_wkup}%c01{]}"
+announce.STATS_USER = "%b{%c01{STATS:}} %b{%{u_rank}}%c01{. }%b{%{u_name}}%c01{@}%c06{%{u_group}} %c01{[}%c05{%{u_mb}MB}%c01{/}%c05{%{u_files}} %c01{Files/}%c05{%{u_pct}%}%c01{/}%c05{%{u_speed}}%c01{] [ALUP #}%c05{%{u_alup}}%c01{][WKUP #}%c05{%{u_wkup}}%c01{]}"
 
 announce.STATS_GROUP_HEADER = "%b{%c01{STATS:}} %c01{[ }%c15{GroupTop} %c01{]}"
 
-announce.STATS_GROUP = "%b{%c01{STATS:}} %b{%{g_rank}}%c01{. }%b{%{g_name}} %c01{[}%{g_mb}MB%c01{/}%{g_files} %c01{Files/}%{g_pct}%c01{%/}%{g_speed}%c01{]}"
+announce.STATS_GROUP = "%b{%c01{STATS:}} %b{%{g_rank}}%c01{. }%b{%{g_name}} %c01{[}%c05{%{g_mb}MB}%c01{/}%c05{%{g_files}} %c01{Files/}%c05{%{g_pct}%}%c01{/}%c05{%{g_speed}}%c01{]}"
 
 announce.STATS_END = "%b{%c01{STATS:}} -----------====>>>>           %c03{END}          <<<<====-----------"
 
