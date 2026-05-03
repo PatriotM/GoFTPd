@@ -77,6 +77,10 @@ type MasterBridge interface {
 	// GetVFSRaceStats returns race statistics computed from VFS metadata.
 	GetVFSRaceStats(dirPath string) (users []VFSRaceUser, groups []VFSRaceGroup, totalBytes int64, present int, total int)
 
+	// GetImmediateReleaseProgress returns completion metadata for direct child
+	// release directories below dirPath, keyed by absolute release path.
+	GetImmediateReleaseProgress(dirPath string) map[string]ReleaseProgressStat
+
 	// GetRaceWallClockMilliseconds returns the wall-clock race duration (first
 	// file start to last file end) in milliseconds. Used for accurate aggregate
 	// speed in STATS — summing per-file durations overcounts when uploads run
@@ -160,6 +164,13 @@ type VFSSearchResult struct {
 	Files   int
 	Bytes   int64
 	ModTime int64
+}
+
+type ReleaseProgressStat struct {
+	Path    string
+	Present int
+	Total   int
+	HasSFV  bool
 }
 
 // SFVEntryInfo is a filename→CRC32 pair from a parsed SFV file.

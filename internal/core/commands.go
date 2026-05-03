@@ -1712,6 +1712,11 @@ func incompleteMarkerEntries(bridge MasterBridge, cfg *Config, pattern, dirPath 
 	if cleanDirPath == "/" {
 		return nil
 	}
+	noSFVPattern := zipscript.NoSFVIndicator(cfg.Zipscript)
+	nfoPattern := zipscript.NFOIndicator(cfg.Zipscript)
+	cdPattern := zipscript.CDIndicator(cfg.Zipscript)
+	markEmptyDirs := zipscript.MarkEmptyDirsOnRescan(cfg.Zipscript)
+	bulkProgress := bridge.GetImmediateReleaseProgress(dirPath)
 	existing := make(map[string]bool, len(entries))
 	for _, e := range entries {
 		existing[e.Name] = true
@@ -1728,20 +1733,33 @@ func incompleteMarkerEntries(bridge MasterBridge, cfg *Config, pattern, dirPath 
 		if zipscript.IsIgnoredReleaseSubdir(cfg.Zipscript, releasePath) {
 			continue
 		}
-		releaseEntries := bridge.ListDir(releasePath)
+		usesZip := zipscript.UsesZip(cfg.Zipscript, releasePath)
 		present, total := 0, 0
-		if zipscript.UsesZip(cfg.Zipscript, releasePath) {
+		progress, hasProgress := bulkProgress[releasePath]
+		var releaseEntries []MasterFileEntry
+		needReleaseEntries := usesZip || nfoPattern != "" || (noSFVPattern != "" && !hasProgress) || (markEmptyDirs && !hasProgress)
+		if needReleaseEntries {
+			releaseEntries = bridge.ListDir(releasePath)
+		}
+		if usesZip {
 			expected := zipExpectedPartsFromDIZ(bridge, releasePath)
 			_, _, present = zipDirRaceStats(releaseEntries, expected)
 			if expected > 0 {
 				total = expected
 			}
+		} else if hasProgress {
+			present, total = progress.Present, progress.Total
 		} else {
 			_, _, _, present, total = bridge.GetVFSRaceStats(releasePath)
 		}
 
-		noSFVPattern := zipscript.NoSFVIndicator(cfg.Zipscript)
-		if noSFVPattern != "" && !zipscript.UsesZip(cfg.Zipscript, releasePath) && !hasSFVEntry(releaseEntries) {
+		hasSFV := hasProgress && progress.HasSFV
+		if noSFVPattern != "" && !usesZip {
+			if !hasProgress {
+				hasSFV = hasSFVEntry(releaseEntries)
+			}
+		}
+		if noSFVPattern != "" && !usesZip && !hasSFV {
 			marker := incompleteMarkerName(noSFVPattern, e.Name)
 			if marker != "" && !existing[marker] {
 				out = append(out, MasterFileEntry{
@@ -1755,7 +1773,6 @@ func incompleteMarkerEntries(bridge MasterBridge, cfg *Config, pattern, dirPath 
 				existing[marker] = true
 			}
 		}
-		nfoPattern := zipscript.NFOIndicator(cfg.Zipscript)
 		if nfoPattern != "" && !hasNFOEntry(releaseEntries) {
 			marker := incompleteMarkerName(nfoPattern, e.Name)
 			if marker != "" && !existing[marker] {
@@ -1773,7 +1790,10 @@ func incompleteMarkerEntries(bridge MasterBridge, cfg *Config, pattern, dirPath 
 
 		emptyDir := false
 		if total <= 0 {
-			if zipscript.MarkEmptyDirsOnRescan(cfg.Zipscript) {
+			if markEmptyDirs {
+				if len(releaseEntries) == 0 {
+					releaseEntries = bridge.ListDir(releasePath)
+				}
 				visible := 0
 				for _, child := range releaseEntries {
 					if !strings.HasPrefix(child.Name, ".") {
@@ -1800,9 +1820,11 @@ func incompleteMarkerEntries(bridge MasterBridge, cfg *Config, pattern, dirPath 
 				existing[marker] = true
 			}
 		}
-		cdPattern := zipscript.CDIndicator(cfg.Zipscript)
 		if cdPattern != "" && isDiscDirName(e.Name) {
-			_, _, _, childPresent, childTotal := bridge.GetVFSRaceStats(releasePath)
+			childPresent, childTotal := present, total
+			if usesZip || !hasProgress {
+				_, _, _, childPresent, childTotal = bridge.GetVFSRaceStats(releasePath)
+			}
 			if childTotal > 0 && childPresent < childTotal {
 				marker := incompleteMarkerName2(cdPattern, path.Base(dirPath), e.Name)
 				if marker != "" && !existing[marker] {
