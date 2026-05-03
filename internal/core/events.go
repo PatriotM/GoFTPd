@@ -452,13 +452,14 @@ func emitRaceEnd(s *Session, dirPath string, users []VFSRaceUser, totalBytes int
 		return
 	}
 
-	// Figure out slowest/fastest based on each user's peak single-file speed
+	// Keep the HOF summary consistent with the per-user rows: use the same
+	// aggregate uploader race speed for both the header and each user line.
 	slowest, fastest := users[0], users[0]
 	for _, u := range users {
-		if userSlowSpeed(u) < userSlowSpeed(slowest) {
+		if userDisplaySpeed(u) < userDisplaySpeed(slowest) {
 			slowest = u
 		}
-		if u.PeakSpeed > fastest.PeakSpeed {
+		if userDisplaySpeed(u) > userDisplaySpeed(fastest) {
 			fastest = u
 		}
 	}
@@ -466,9 +467,9 @@ func emitRaceEnd(s *Session, dirPath string, users []VFSRaceUser, totalBytes int
 	// HOF header + speeds line (RACESTATS)
 	statsData := copyMap(common)
 	statsData["u_slowest_name"] = slowest.Name
-	statsData["u_slowest_speed"] = fmt.Sprintf("%.2fMB/s", userSlowSpeed(slowest)/1024.0/1024.0)
+	statsData["u_slowest_speed"] = fmt.Sprintf("%.2fMB/s", userDisplaySpeed(slowest)/1024.0/1024.0)
 	statsData["u_fastest_name"] = fastest.Name
-	statsData["u_fastest_speed"] = fmt.Sprintf("%.2fMB/s", fastest.PeakSpeed/1024.0/1024.0)
+	statsData["u_fastest_speed"] = fmt.Sprintf("%.2fMB/s", userDisplaySpeed(fastest)/1024.0/1024.0)
 	s.emitEvent(EventRaceStats, dirPath, rel, totalBytes, avgMB, statsData)
 
 	// One event per racer in HOF
@@ -480,7 +481,7 @@ func emitRaceEnd(s *Session, dirPath string, users []VFSRaceUser, totalBytes int
 		uData["u_racer_files"] = fmt.Sprintf("%d", u.Files)
 		uData["u_racer_mb"] = fmt.Sprintf("%.1f", float64(u.Bytes)/1024.0/1024.0)
 		uData["u_racer_pct"] = fmt.Sprintf("%d", u.Percent)
-		uData["u_racer_speed"] = fmt.Sprintf("%.2fMB/s", u.Speed/1024.0/1024.0)
+		uData["u_racer_speed"] = fmt.Sprintf("%.2fMB/s", userDisplaySpeed(u)/1024.0/1024.0)
 		s.emitEvent(EventRaceUser, dirPath, rel, u.Bytes, u.Speed/1024.0/1024.0, uData)
 	}
 
@@ -546,15 +547,18 @@ func formatRaceDuration(ms int64) string {
 	return fmt.Sprintf("%dm%ds", minutes, seconds)
 }
 
-func userSlowSpeed(u VFSRaceUser) float64 {
-	if u.SlowSpeed > 0 {
-		return u.SlowSpeed
+func userDisplaySpeed(u VFSRaceUser) float64 {
+	if u.Speed > 0 {
+		return u.Speed
 	}
-	return u.PeakSpeed
+	if u.PeakSpeed > 0 {
+		return u.PeakSpeed
+	}
+	return u.SlowSpeed
 }
 
 func markRaceCompleteOnce(dirPath string, totalBytes int64, total int) bool {
-	key := fmt.Sprintf("%s|%d|%d", path.Clean(dirPath), totalBytes, total)
+	key := path.Clean(dirPath)
 	now := time.Now()
 
 	completedRaceMu.Lock()

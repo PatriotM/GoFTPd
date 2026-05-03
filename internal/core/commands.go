@@ -2616,11 +2616,6 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 			data["t_mbytes"] = fmt.Sprintf("%.0fMB", float64(estBytes)/1024.0/1024.0)
 			if len(users) > 0 {
 				leader := users[0]
-				for _, u := range users {
-					if u.Files > leader.Files {
-						leader = u
-					}
-				}
 				data["leader_name"] = leader.Name
 				data["leader_group"] = leader.Group
 				data["leader_files"] = fmt.Sprintf("%d", leader.Files)

@@ -53,15 +53,15 @@ func TestVarsProvidesDrFTPDStyleAliases(t *testing.T) {
 		Path:     "/FOREIGN/TV-DE/Example.Release-GRP/example.r00",
 		Size:     150 * 1024 * 1024,
 		Data: map[string]string{
-			"t_mbytes":    "3678MB",
-			"t_files":     "20F",
-			"u_count":     "3",
-			"leader_name": "musch3l",
-			"leader_mb":   "953.7",
+			"t_mbytes":     "3678MB",
+			"t_files":      "20F",
+			"u_count":      "3",
+			"leader_name":  "musch3l",
+			"leader_mb":    "953.7",
 			"leader_files": "5",
-			"leader_pct":  "50",
+			"leader_pct":   "50",
 			"leader_speed": "456.41MB/s",
-			"t_filesleft": "5",
+			"t_filesleft":  "5",
 		},
 	}
 
@@ -86,5 +86,57 @@ func TestVarsProvidesDrFTPDStyleAliases(t *testing.T) {
 		if got := vars[key]; got != want {
 			t.Fatalf("%s = %q, want %q", key, got, want)
 		}
+	}
+}
+
+func TestUploadRaceAnnouncesStopAfterComplete(t *testing.T) {
+	p := New()
+
+	releasePath := "/MP3/03.05.26/Artist-Album-2026-GRP"
+	completeEvt := &event.Event{
+		Type:    event.EventRaceEnd,
+		Section: "MP3",
+		Path:    releasePath,
+		Data: map[string]string{
+			"u_count":    "3",
+			"t_mbytes":   "50MB",
+			"t_files":    "10F",
+			"t_avgspeed": "12.50MB/s",
+			"t_duration": "4.0s",
+		},
+	}
+	outs, err := p.OnEvent(completeEvt)
+	if err != nil {
+		t.Fatalf("OnEvent complete failed: %v", err)
+	}
+	if len(outs) == 0 {
+		t.Fatalf("expected complete output")
+	}
+
+	uploadEvt := &event.Event{
+		Type:     event.EventUpload,
+		Section:  "MP3",
+		User:     "lateuser",
+		Group:    "GRP",
+		Filename: "01-track.mp3",
+		Path:     releasePath + "/01-track.mp3",
+		Speed:    12.34,
+		Data: map[string]string{
+			"leader_name":  "lateuser",
+			"leader_mb":    "5.0",
+			"leader_files": "1",
+			"leader_pct":   "10",
+			"leader_speed": "12.34MB/s",
+			"t_present":    "10",
+			"t_files":      "10",
+			"t_filesleft":  "0",
+		},
+	}
+	outs, err = p.OnEvent(uploadEvt)
+	if err != nil {
+		t.Fatalf("OnEvent upload failed: %v", err)
+	}
+	if len(outs) != 0 {
+		t.Fatalf("expected no post-complete race outputs, got %+v", outs)
 	}
 }

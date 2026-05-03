@@ -221,6 +221,7 @@ func (r *RaceDB) RecordUpload(filePath, owner, group string, size int64, duratio
             checksum = excluded.checksum,
             is_present = 1,
             updated_at = strftime('%s','now')
+        WHERE release_files.is_present = 0
     `, releaseID, fileName, owner, group, size, durationMs, int64(checksum))
 	return err
 }

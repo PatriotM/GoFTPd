@@ -117,6 +117,7 @@ func DisconnectActiveSession(id uint64) bool {
 	if !ok || s == nil || s.Conn == nil {
 		return false
 	}
+	s.endTransfer()
 	_ = s.Conn.Close()
 	return true
 }
@@ -133,6 +134,7 @@ func kickActiveUser(username string) int {
 			return true
 		}
 		if strings.EqualFold(s.User.Name, username) {
+			s.endTransfer()
 			_ = s.Conn.Close()
 			kicked++
 		}
