@@ -169,7 +169,7 @@ func main() {
 			}
 		}
 		sm.SetSlavePolicies(policies)
-		sm.SetBootstrapDirs(configuredSectionDirs(cfg))
+		sm.SetBootstrapDirs(configuredBootstrapDirs(cfg))
 		sm.SetProtectedDirs(protectedVFSDirs(cfg))
 		sm.SetHiddenPaths(cfg.HiddenVFSPaths)
 		if err := sm.Start(); err != nil {
@@ -206,7 +206,7 @@ func main() {
 				}
 			}
 			sm.SetSlavePolicies(policies)
-			sm.SetBootstrapDirs(configuredSectionDirs(c))
+			sm.SetBootstrapDirs(configuredBootstrapDirs(c))
 			sm.SetProtectedDirs(protectedVFSDirs(c))
 			sm.SetHiddenPaths(c.HiddenVFSPaths)
 			if err := sm.ConfigureAuthAllowlist(stringSliceFromCfg(c.Master, "slave_allowlist")); err != nil {
@@ -624,6 +624,57 @@ func stringSliceFromPluginConfig(raw interface{}) []string {
 
 func protectedVFSDirs(cfg *core.Config) []string {
 	return configuredSectionDirs(cfg)
+}
+
+func configuredBootstrapDirs(cfg *core.Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	add := func(p string) {
+		p = strings.TrimSpace(p)
+		if p == "" || strings.ContainsAny(p, "*?[]") {
+			return
+		}
+		if !strings.HasPrefix(p, "/") {
+			p = "/" + p
+		}
+		p = path.Clean(p)
+		if p == "." || p == "/" || seen[p] {
+			return
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	for _, section := range cfg.Sections {
+		add(section)
+	}
+	if daemonPluginEnabled(cfg, "pre") {
+		preCfg := cfg.Plugins["pre"]
+		base := "/PRE"
+		if configuredBase, ok := preCfg["base"].(string); ok && strings.TrimSpace(configuredBase) != "" {
+			base = configuredBase
+		}
+		add(base)
+	}
+	if daemonPluginEnabled(cfg, "request") {
+		requestCfg := cfg.Plugins["request"]
+		dir := "/REQUESTS"
+		if configuredDir, ok := requestCfg["dir"].(string); ok && strings.TrimSpace(configuredDir) != "" {
+			dir = configuredDir
+		}
+		add(dir)
+	}
+	if daemonPluginEnabled(cfg, "speedtest") {
+		speedtestCfg := cfg.Plugins["speedtest"]
+		dir := "/SPEEDTEST"
+		if configuredDir, ok := speedtestCfg["dir"].(string); ok && strings.TrimSpace(configuredDir) != "" {
+			dir = configuredDir
+		}
+		add(dir)
+	}
+	return out
 }
 
 func daemonPluginEnabled(cfg *core.Config, name string) bool {

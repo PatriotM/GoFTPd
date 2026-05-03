@@ -26,6 +26,14 @@ irc:
   realname: "GoSitebot v1.0.6b"
   password: "changeme"
   ssl: true
+  nickserv:
+    enabled: false
+    service: "NickServ"
+    account: ""
+    password: "changeme-nickserv"
+    email: "sitebot@example.net"
+    auto_register: false
+    delay_ms: 800
   auto_oper: false
   operuser: "GoSitebot"
   operpassword: "changeme-oper"

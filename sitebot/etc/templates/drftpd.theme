@@ -326,7 +326,7 @@ announce.NEWDAY = "%b{%c01{NEW DAY:}} %c01{-}%section_colored%c01{- A new day ha
 
 announce.AUDIOINFO = "%b{%c15{FLAC}} %c01{-> }%b{%relname}%b %c01{[}%b{%genre}%b %c01{from }%b{%year}%b %c01{at sample rate }%b{%sample_rate}%b %c01{Hz, channels }%b{%channels}%b%c01{]}"
 
-announce.MEDIAINFO = "%b{[SAMPLE]} %b{%path}%b %c01{::} %b{%video_format}%b %c01{: }%widthx%height %c01{: }%b{%audio_format}%b %c01{: }%b{%channels}%b %c01{: }%b{%duration}%b"
+announce.MEDIAINFO = "%b{[SAMPLE]} %b{%relname}%b %c01{::} %b{%video_format}%b %c01{: }%c05{%{width}}%c01{x}%c05{%{height}} %c01{: }%b{%audio_format}%b %c01{: }%b{%channels}%b %c01{: }%b{%duration}%b"
 
 announce.SPEEDTEST = "%b{%c01{SPEEDTEST:}} %c04{%nick} %c01{%action} %c01{a} %c05{%{size_mb}MB} %c01{file with} %c06{%speed_mbs}"
 
@@ -348,7 +348,7 @@ announce.NEWLEADER = "%b{%c15{NEW LEADER:}} %c01{[}%section_colored%c01{]} %c%se
 
 announce.HALFWAY = "%b{%c15{HALFWAY:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{- avg speed: }%c%sec_c5{%t_avgspeed} %c01{- time left: }%c%sec_c5{%t_timeleft} %c01{- leader: }%c%sec_c4{%leaduser} %c01{[}%c%sec_c5{%leadsize}%c01{/}%c%sec_c5{%leadfiles}F%c01{/}%c%sec_c5{%leadpercent}%c01{/}%c%sec_c5{%leadspeed}%c01{] - }%c%sec_c5{%filesleft} %c01{files left.}"
 
-announce.TVINFO = "%section_colored %c14{-TvMaze-} %c07{%title}%c01{ :: }%c07{%network}%c01{ :: }%c07{%type}%c01{ :: }%c07{%genre}%c01{ :: }%c07{%language}%c01{ :: }%link"
+announce.TVINFO = "%b{%c15{RACE:}} %c01{[}%section_colored%c01{]} %c01{[TvMaze] }%c07{%title}%c01{ :: }%c07{%network}%c01{ :: }%c07{%type}%c01{ :: }%c07{%genre}%c01{ :: }%c07{%language}%c01{ :: }%link"
 
 announce.MOVIEINFO = "%section_colored %c14{-IMDB-} %c07{%title}%c01{ (}%c07{%year}%c01{)}\n%section_colored %c14{-IMDB-} %c01{Genres: }%c07{%genre}%c01{ :: Language: }%c07{%language}%c01{ :: Country: }%c07{%country}%c01{ :: Director: }%c07{%director}%c01{ :: Scored: }%c07{%rating}/10%c01{ with }%c07{%votes}%c01{ votes :: Runtime: }%c07{%runtime}\n%section_colored %c14{-IMDB-} %c01{Plot: }%plot\n%u{%link}"
 

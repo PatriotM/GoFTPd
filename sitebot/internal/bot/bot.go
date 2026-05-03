@@ -541,7 +541,66 @@ func cleanIRCText(s string) string {
 	return strings.Trim(strings.TrimSpace(s), "\x00")
 }
 
+func (b *Bot) nickServDelay() time.Duration {
+	delay := b.Config.IRC.NickServ.DelayMS
+	if delay <= 0 {
+		delay = 800
+	}
+	return time.Duration(delay) * time.Millisecond
+}
+
+func (b *Bot) authWithNickServ() {
+	ns := b.Config.IRC.NickServ
+	if !ns.Enabled {
+		return
+	}
+	service := strings.TrimSpace(ns.Service)
+	if service == "" {
+		service = "NickServ"
+	}
+	password := strings.TrimSpace(ns.Password)
+	account := strings.TrimSpace(ns.Account)
+	email := strings.TrimSpace(ns.Email)
+
+	if ns.AutoRegister {
+		if password == "" || email == "" {
+			if b.Debug {
+				log.Printf("[Bot] NickServ auto_register enabled but password/email missing; skipping REGISTER")
+			}
+		} else {
+			if err := b.IRC.SendRaw(fmt.Sprintf("PRIVMSG %s :REGISTER %s %s", service, password, email)); err != nil {
+				if b.Debug {
+					log.Printf("[Bot] NickServ REGISTER failed: %v", err)
+				}
+			} else {
+				time.Sleep(b.nickServDelay())
+			}
+		}
+	}
+
+	if password == "" {
+		if b.Debug {
+			log.Printf("[Bot] NickServ enabled but no password configured; skipping IDENTIFY")
+		}
+		return
+	}
+
+	identify := password
+	if account != "" {
+		identify = account + " " + password
+	}
+	if err := b.IRC.SendRaw(fmt.Sprintf("PRIVMSG %s :IDENTIFY %s", service, identify)); err != nil {
+		if b.Debug {
+			log.Printf("[Bot] NickServ IDENTIFY failed: %v", err)
+		}
+		return
+	}
+	time.Sleep(b.nickServDelay())
+}
+
 func (b *Bot) onRegistered() {
+	b.authWithNickServ()
+
 	opered := false
 	operUser := strings.TrimSpace(b.Config.IRC.OperUser)
 	if operUser == "" {

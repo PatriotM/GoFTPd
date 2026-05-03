@@ -1242,6 +1242,13 @@ func (b *Bridge) GetImmediateReleaseProgress(dirPath string) map[string]core.Rel
 	return b.raceDB.GetImmediateReleaseProgress(filepath.Clean(dirPath))
 }
 
+func (b *Bridge) GetImmediateReleaseChildFacts(dirPath string) map[string]core.ReleaseChildFacts {
+	if b == nil || b.sm == nil {
+		return nil
+	}
+	return b.sm.GetVFS().GetImmediateChildDirFacts(filepath.Clean(dirPath))
+}
+
 func (b *Bridge) PluginGetVFSRaceStats(dirPath string) ([]plugin.RaceUser, []plugin.RaceGroup, int64, int, int) {
 	coreUsers, coreGroups, totalBytes, present, total := b.GetVFSRaceStats(dirPath)
 	users := make([]plugin.RaceUser, 0, len(coreUsers))

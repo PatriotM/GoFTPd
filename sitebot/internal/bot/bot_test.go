@@ -1,12 +1,32 @@
 package bot
 
 import (
+	"io"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"goftpd/sitebot/internal/irc"
 )
+
+type recordingConn struct {
+	writes []string
+}
+
+func (c *recordingConn) Read(_ []byte) (int, error) { return 0, io.EOF }
+func (c *recordingConn) Write(b []byte) (int, error) {
+	c.writes = append(c.writes, string(b))
+	return len(b), nil
+}
+func (c *recordingConn) Close() error                       { return nil }
+func (c *recordingConn) LocalAddr() net.Addr                { return nil }
+func (c *recordingConn) RemoteAddr() net.Addr               { return nil }
+func (c *recordingConn) SetDeadline(_ time.Time) error      { return nil }
+func (c *recordingConn) SetReadDeadline(_ time.Time) error  { return nil }
+func (c *recordingConn) SetWriteDeadline(_ time.Time) error { return nil }
 
 func TestResolveSectionTreatsForeignChildAsSection(t *testing.T) {
 	b := &Bot{
@@ -126,5 +146,79 @@ func TestLoadConfigPreservesAnnouncePretimeConfig(t *testing.T) {
 	pretime, ok := cfg.Announce.Pretime["mode"].(string)
 	if !ok || pretime != "inline" {
 		t.Fatalf("announce.pretime.mode = %#v, want inline", cfg.Announce.Pretime["mode"])
+	}
+}
+
+func TestOnRegisteredNickServIdentifyBeforeJoin(t *testing.T) {
+	conn := &recordingConn{}
+	b := &Bot{
+		Config: &Config{
+			IRC: IRCConfig{
+				Nick:          "GoSitebot",
+				Channels:      []string{"#goftpd"},
+				AutoJoinDelay: 0,
+				NickServ: NickServConfig{
+					Enabled:  true,
+					Password: "secret",
+					DelayMS:  1,
+				},
+			},
+		},
+		IRC: irc.NewBot("irc.example.net", 6697, "GoSitebot", "sitebot", "GoSitebot"),
+	}
+	b.IRC.Conn = conn
+	b.IRC.Connected = true
+	b.IRC.Debug = false
+
+	b.onRegistered()
+
+	if len(conn.writes) < 2 {
+		t.Fatalf("expected at least IDENTIFY and JOIN, got %d writes", len(conn.writes))
+	}
+	if got := strings.TrimSpace(conn.writes[0]); got != "PRIVMSG NickServ :IDENTIFY secret" {
+		t.Fatalf("first write = %q", got)
+	}
+	if got := strings.TrimSpace(conn.writes[1]); got != "JOIN #goftpd" {
+		t.Fatalf("second write = %q", got)
+	}
+}
+
+func TestOnRegisteredNickServRegisterThenIdentify(t *testing.T) {
+	conn := &recordingConn{}
+	b := &Bot{
+		Config: &Config{
+			IRC: IRCConfig{
+				Nick:          "GoSitebot",
+				Channels:      []string{"#goftpd"},
+				AutoJoinDelay: 0,
+				NickServ: NickServConfig{
+					Enabled:      true,
+					Account:      "GoSitebot",
+					Password:     "secret",
+					Email:        "bot@example.net",
+					AutoRegister: true,
+					DelayMS:      1,
+				},
+			},
+		},
+		IRC: irc.NewBot("irc.example.net", 6697, "GoSitebot", "sitebot", "GoSitebot"),
+	}
+	b.IRC.Conn = conn
+	b.IRC.Connected = true
+	b.IRC.Debug = false
+
+	b.onRegistered()
+
+	if len(conn.writes) < 3 {
+		t.Fatalf("expected REGISTER, IDENTIFY, JOIN; got %d writes", len(conn.writes))
+	}
+	if got := strings.TrimSpace(conn.writes[0]); got != "PRIVMSG NickServ :REGISTER secret bot@example.net" {
+		t.Fatalf("first write = %q", got)
+	}
+	if got := strings.TrimSpace(conn.writes[1]); got != "PRIVMSG NickServ :IDENTIFY GoSitebot secret" {
+		t.Fatalf("second write = %q", got)
+	}
+	if got := strings.TrimSpace(conn.writes[2]); got != "JOIN #goftpd" {
+		t.Fatalf("third write = %q", got)
 	}
 }
