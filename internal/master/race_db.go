@@ -69,6 +69,10 @@ CREATE TABLE IF NOT EXISTS release_files (
 );
 
 CREATE INDEX IF NOT EXISTS idx_release_files_release_id ON release_files(release_id);
+CREATE INDEX IF NOT EXISTS idx_release_files_expected ON release_files(release_id, is_expected, filename);
+CREATE INDEX IF NOT EXISTS idx_release_files_present ON release_files(release_id, is_present, filename);
+CREATE INDEX IF NOT EXISTS idx_release_files_uploader_present ON release_files(release_id, uploader, is_present);
+CREATE INDEX IF NOT EXISTS idx_release_files_group_present ON release_files(release_id, grp, is_present);
 CREATE INDEX IF NOT EXISTS idx_releases_path ON releases(path);
 
 CREATE TABLE IF NOT EXISTS release_media (
@@ -376,9 +380,17 @@ func (r *RaceDB) Reconcile(vfs *VirtualFileSystem) error {
 }
 
 func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRaceGroup, int64, int, int) {
+	var releaseID int64
 	var total int
-	if err := r.db.QueryRow(`SELECT total_expected FROM releases WHERE path = ?`, dirPath).Scan(&total); err != nil && err != sql.ErrNoRows {
-		log.Printf("[RaceDB] total_expected query failed for %s: %v", dirPath, err)
+	err := r.db.QueryRow(`SELECT id, total_expected FROM releases WHERE path = ?`, dirPath).Scan(&releaseID, &total)
+	if err == sql.ErrNoRows {
+		return nil, nil, 0, 0, 0
+	}
+	if err != nil {
+		log.Printf("[RaceDB] release lookup failed for %s: %v", dirPath, err)
+		return nil, nil, 0, 0, 0
+	}
+	if total <= 0 {
 		return nil, nil, 0, 0, 0
 	}
 
@@ -387,17 +399,17 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 	if err := r.db.QueryRow(`
         SELECT COALESCE(COUNT(*), 0), COALESCE(SUM(size_bytes), 0)
         FROM (
-            SELECT LOWER(e.filename) AS filename_key, MAX(p.size_bytes) AS size_bytes
+            SELECT e.filename, MAX(p.size_bytes) AS size_bytes
             FROM release_files e
             JOIN release_files p
               ON p.release_id = e.release_id
              AND p.is_present = 1
-             AND LOWER(p.filename) = LOWER(e.filename)
-            WHERE e.release_id = (SELECT id FROM releases WHERE path = ?)
+             AND p.filename = e.filename
+            WHERE e.release_id = ?
               AND e.is_expected = 1
-            GROUP BY LOWER(e.filename)
+            GROUP BY e.filename
         )
-    `, dirPath).Scan(&present, &totalBytes); err != nil {
+    `, releaseID).Scan(&present, &totalBytes); err != nil {
 		log.Printf("[RaceDB] present query failed for %s: %v", dirPath, err)
 		return nil, nil, 0, 0, 0
 	}
@@ -405,17 +417,17 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 	userRows, err := r.db.Query(`
         SELECT uploader, grp, COUNT(*), COALESCE(SUM(size_bytes),0), COALESCE(SUM(duration_ms),0)
         FROM release_files p
-        WHERE p.release_id = (SELECT id FROM releases WHERE path = ?)
+        WHERE p.release_id = ?
           AND p.is_present = 1
           AND EXISTS (
               SELECT 1 FROM release_files e
               WHERE e.release_id = p.release_id
                 AND e.is_expected = 1
-                AND LOWER(e.filename) = LOWER(p.filename)
+                AND e.filename = p.filename
           )
         GROUP BY uploader, grp
         ORDER BY COALESCE(SUM(size_bytes),0) DESC, COUNT(*) DESC, uploader ASC
-    `, dirPath)
+    `, releaseID)
 	if err != nil {
 		log.Printf("[RaceDB] user stats query failed for %s: %v", dirPath, err)
 		return nil, nil, 0, 0, 0
@@ -450,19 +462,19 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 		var peakBytes, peakMs sql.NullInt64
 		err := r.db.QueryRow(`
             SELECT size_bytes, duration_ms FROM release_files
-            WHERE release_id = (SELECT id FROM releases WHERE path = ?)
+            WHERE release_id = ?
               AND uploader = ?
               AND is_present = 1
               AND EXISTS (
                   SELECT 1 FROM release_files e
                   WHERE e.release_id = release_files.release_id
                     AND e.is_expected = 1
-                    AND LOWER(e.filename) = LOWER(release_files.filename)
+                    AND e.filename = release_files.filename
               )
               AND duration_ms > 0
             ORDER BY (CAST(size_bytes AS REAL) / CAST(duration_ms AS REAL)) DESC
             LIMIT 1
-        `, dirPath, u.Name).Scan(&peakBytes, &peakMs)
+        `, releaseID, u.Name).Scan(&peakBytes, &peakMs)
 		if err != nil && err != sql.ErrNoRows {
 			log.Printf("[RaceDB] peak query failed for %s user=%s: %v", dirPath, u.Name, err)
 		}
@@ -472,19 +484,19 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 		var slowBytes, slowMs sql.NullInt64
 		err = r.db.QueryRow(`
             SELECT size_bytes, duration_ms FROM release_files
-            WHERE release_id = (SELECT id FROM releases WHERE path = ?)
+            WHERE release_id = ?
               AND uploader = ?
               AND is_present = 1
               AND EXISTS (
                   SELECT 1 FROM release_files e
                   WHERE e.release_id = release_files.release_id
                     AND e.is_expected = 1
-                    AND LOWER(e.filename) = LOWER(release_files.filename)
+                    AND e.filename = release_files.filename
               )
               AND duration_ms > 0
             ORDER BY (CAST(size_bytes AS REAL) / CAST(duration_ms AS REAL)) ASC
             LIMIT 1
-        `, dirPath, u.Name).Scan(&slowBytes, &slowMs)
+        `, releaseID, u.Name).Scan(&slowBytes, &slowMs)
 		if err != nil && err != sql.ErrNoRows {
 			log.Printf("[RaceDB] slowest query failed for %s user=%s: %v", dirPath, u.Name, err)
 		}
@@ -502,17 +514,17 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 	groupRows, err := r.db.Query(`
         SELECT grp, COUNT(*), COALESCE(SUM(size_bytes),0), COALESCE(SUM(duration_ms),0)
         FROM release_files p
-        WHERE p.release_id = (SELECT id FROM releases WHERE path = ?)
+        WHERE p.release_id = ?
           AND p.is_present = 1
           AND EXISTS (
               SELECT 1 FROM release_files e
               WHERE e.release_id = p.release_id
                 AND e.is_expected = 1
-                AND LOWER(e.filename) = LOWER(p.filename)
+                AND e.filename = p.filename
           )
         GROUP BY grp
         ORDER BY COALESCE(SUM(size_bytes),0) DESC, COUNT(*) DESC, grp ASC
-    `, dirPath)
+    `, releaseID)
 	if err != nil {
 		log.Printf("[RaceDB] group stats query failed for %s: %v", dirPath, err)
 		return nil, nil, 0, 0, 0
@@ -544,6 +556,15 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 	}
 
 	return users, groups, totalBytes, present, total
+}
+
+func (r *RaceDB) HasRelease(dirPath string) bool {
+	if r == nil || r.db == nil {
+		return false
+	}
+	var one int
+	err := r.db.QueryRow(`SELECT 1 FROM releases WHERE path = ? LIMIT 1`, dirPath).Scan(&one)
+	return err == nil && one == 1
 }
 
 func raceDBFileKey(name string) string {

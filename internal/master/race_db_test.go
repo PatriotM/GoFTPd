@@ -145,3 +145,36 @@ func TestRecordUploadDoesNotRewriteExistingPresentRaceWinner(t *testing.T) {
 		t.Fatalf("expected original winner first/GRP1 to remain, got %s/%s", users[0].Name, users[0].Group)
 	}
 }
+
+func TestRaceDBGetRaceStatsUsesNormalizedFilenameKeys(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "race.db")
+	rdb, err := NewRaceDB(dbPath)
+	if err != nil {
+		t.Fatalf("NewRaceDB failed: %v", err)
+	}
+	defer rdb.Close()
+
+	releasePath := "/site/MP3/MixedCase.Release-GRP"
+	if err := rdb.SaveSFV(releasePath, "release.sfv", map[string]uint32{
+		"01-Track.MP3": 1,
+	}); err != nil {
+		t.Fatalf("SaveSFV failed: %v", err)
+	}
+	if err := rdb.RecordUpload(releasePath+"/01-track.mp3", "steel", "GRP", 1234, 1000, 1); err != nil {
+		t.Fatalf("RecordUpload failed: %v", err)
+	}
+
+	users, groups, totalBytes, present, total := rdb.GetRaceStats(releasePath)
+	if total != 1 || present != 1 {
+		t.Fatalf("expected present=1 total=1, got present=%d total=%d", present, total)
+	}
+	if totalBytes != 1234 {
+		t.Fatalf("expected totalBytes=1234, got %d", totalBytes)
+	}
+	if len(users) != 1 || users[0].Name != "steel" || users[0].Files != 1 {
+		t.Fatalf("unexpected user stats: %+v", users)
+	}
+	if len(groups) != 1 || groups[0].Name != "GRP" || groups[0].Files != 1 {
+		t.Fatalf("unexpected group stats: %+v", groups)
+	}
+}
