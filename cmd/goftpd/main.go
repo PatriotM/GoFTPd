@@ -348,15 +348,6 @@ func main() {
 		if pluginCfg["debug"] == nil {
 			pluginCfg["debug"] = cfg.Debug
 		}
-		if canonicalName == "autonuke" {
-			if _, ok := pluginCfg["zipscript_release_check"]; !ok {
-				pluginCfg["zipscript_release_check"] = append([]string(nil), cfg.Zipscript.Sections.ReleaseCheck...)
-			}
-			if _, ok := pluginCfg["sections"]; !ok {
-				pluginCfg["sections"] = append([]string(nil), cfg.Sections...)
-			}
-		}
-
 		var p plugin.Plugin
 		switch canonicalName {
 		case "autonuke":
