@@ -320,39 +320,39 @@ COLOR_XXX-0DAY_3 = "14"
 COLOR_XXX-0DAY_4 = "13"
 COLOR_XXX-0DAY_5 = "07"
 
-announce.NEWDIR = "%b{%c01{NEW :}} %c01{[}%section_colored%c01{]} %c%sec_c5{%subdir_prefix}%c%sec_c3{%b{%relname}} %c01{by} %c%sec_c4{%u_name}"
+announce.NEWDIR = "%b{%c15{NEW}} %c01{in }%section_colored%c01{: -> }%b{%path}%b %c01{by }%b{%user}%b%c14{/}%b{%group}%b."
 
 announce.NEWDAY = "%b{%c01{NEW DAY:}} %c01{-}%section_colored%c01{- A new day has come!} %c%sec_c5{%date} %c01{has been created along with its symlink.}"
 
-announce.AUDIOINFO = "%b{%c01{AUDIO-INFO:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{Get ready for some} %c%sec_c5{%genre} %c01{from} %c%sec_c5{%year} %c01{at} %c%sec_c5{%sample_rate}Hz %c01{in} %c%sec_c5{%channels} %c%sec_c5{%bitrate} %c01{(}%c%sec_c5{%bitrate_mode}%c01{).}"
+announce.AUDIOINFO = "%b{%c15{AUDIO}} %c01{in }%section_colored%c01{: -> }%b{%path}%b %c01{[}%b{%genre}%b %c01{from }%b{%year}%b %c01{at }%b{%bitrate}%b %b{%channels}%b%c01{]}"
 
-announce.MEDIAINFO = "%b{%c01{SAMPLE-INFO:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{- Video:} %c%sec_c5{%video_format} %c01{%width}x%height %c01{- Audio:} %c%sec_c5{%audio_format} %c01{%channels} %c01{- Subs:} %c%sec_c5{%subtitle_format} %c01{- Duration:} %c%sec_c5{%duration}"
+announce.MEDIAINFO = "%b{[SAMPLE]} %b{%path}%b %c01{::} %b{%video_format}%b %c01{: }%widthx%height %c01{: }%b{%audio_format}%b %c01{: }%b{%channels}%b %c01{: }%b{%duration}%b"
 
 announce.SPEEDTEST = "%b{%c01{SPEEDTEST:}} %c04{%nick} %c01{%action} %c01{a} %c05{%{size_mb}MB} %c01{file with} %c06{%speed_mbs}"
 
-announce.SFV_RAR = "%b{%c01{RACE:}} %c01{[}%section_colored%c01{]} Got SFV for %c%sec_c5{%subdir_prefix}%c%sec_c3{%b{%relname}} %c01{uploaded by} %c%sec_c4{%u_name}%c01{. Now expecting} %c%sec_c5{%b{%t_filecount}} %c01{%t_file_label.}"
+announce.SFV_RAR = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%b{%path}%b %c01{by }%b{%user}%b%c14{/}%b{%group}%b %c01{@ }%b{%speed}%b%c01{. Expecting }%b{%size}%b %c01{in }%b{%files}%b %c01{files.}"
 
-announce.UPDATE_RAR = "%b{%c01{RACE:}} %c01{[}%section_colored%c01{]} %c%sec_c5{%subdir_prefix}%c%sec_c3{%b{%relname}} %c01{got its first rar file from} %c%sec_c4{%u_name} %c01{at} %c%sec_c5{%u_speed}%c01{. Now expecting} %c%sec_c5{%b{%t_mbytes}}%c01{.}"
+announce.UPDATE_RAR = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%b{%path}%b %c01{by }%b{%user}%b%c14{/}%b{%group}%b %c01{@ }%b{%speed}%b%c01{. Expecting }%b{%size}%b %c01{in }%b{%files}%b %c01{files.}"
 
-announce.UPDATE_RAR_UNKNOWN = "%b{%c01{RACE:}} %c01{[}%section_colored%c01{]} %c%sec_c5{%subdir_prefix}%c%sec_c3{%b{%relname}} %c01{got its first rar file from} %c%sec_c4{%u_name} %c01{at} %c%sec_c5{%u_speed}%c01{.}"
+announce.UPDATE_RAR_UNKNOWN = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%b{%path}%b %c01{by }%b{%user}%b%c14{/}%b{%group}%b %c01{@ }%b{%speed}%b."
 
-announce.UPDATE_ZIP = "%b{%c01{RACE:}} %c01{[}%section_colored%c01{]} %c%sec_c5{%subdir_prefix}%c%sec_c3{%b{%relname}} %c01{got its first zip file from} %c%sec_c4{%u_name} %c01{at} %c%sec_c5{%u_speed}%c01{. Now expecting} %c%sec_c5{%b{%t_files}} %c01{file(s).}"
+announce.UPDATE_ZIP = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%b{%path}%b %c01{by }%b{%user}%b%c14{/}%b{%group}%b %c01{@ }%b{%speed}%b%c01{. Expecting }%b{%size}%b %c01{in }%b{%files}%b %c01{files.}"
 
-announce.UPDATE_ZIP_UNKNOWN = "%b{%c01{RACE:}} %c01{[}%section_colored%c01{]} %c%sec_c5{%subdir_prefix}%c%sec_c3{%b{%relname}} %c01{got its first zip file from} %c%sec_c4{%u_name} %c01{at} %c%sec_c5{%u_speed}%c01{.}"
+announce.UPDATE_ZIP_UNKNOWN = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%b{%path}%b %c01{by }%b{%user}%b%c14{/}%b{%group}%b %c01{@ }%b{%speed}%b."
 
-announce.UPDATE_TRACK = "%b{%c01{RACE:}} %c01{[}%section_colored%c01{]} %c%sec_c5{%subdir_prefix}%c%sec_c3{%b{%relname}} %c01{got first track from} %c%sec_c4{%u_name} %c01{at} %c%sec_c5{%u_speed}%c01{.}"
+announce.UPDATE_TRACK = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%b{%path}%b %c01{by }%b{%user}%b%c14{/}%b{%group}%b %c01{@ }%b{%speed}%b."
 
-announce.RACE_RAR = "%b{%c01{RACE:}} %c01{[}%section_colored%c01{]} %c%sec_c5{%subdir_prefix}%c%sec_c3{%b{%relname}} %c01{-} %c%sec_c4{%u_name} joined the race %c01{at} %c%sec_c5{%u_speed}%c01{.}"
+announce.RACE_RAR = "%b{%c15{RACE}} %c01{in }%section_colored%c01{: -> }%b{%user}%b%c14{/}%b{%group}%b %c01{is joining on }%b{%path}%b %c14{@ }%b{%speed}%b %c01{and }%b{%filesleft}%b %c01{files left.}"
 
-announce.NEWLEADER = "%b{%c01{NEW LEADER:}} %c01{[}%section_colored%c01{]} %c%sec_c5{%subdir_prefix}%c%sec_c3{%b{%relname}} %c01{-} %c%sec_c4{%leader_name} %c01{takes the lead -} %c%sec_c5{%{leader_mb}MB}%c01{/}%c%sec_c5{%{leader_files}F}%c01{/}%c%sec_c5{%{leader_pct}%}%c01{/}%c%sec_c5{%leader_speed} %c01{-} %c%sec_c5{%t_filesleft} %c01{files left.}"
+announce.NEWLEADER = "%b{%c15{NEW RACE LEADER}} %c01{in }%section_colored%c01{: -> }%b{%path}%b %c01{: }%b{%leaduser}%b %c01{is now leading [}%b{%leadsize}%b%c01{/}%b{%leadfiles}F%b%c01{/}%b{%leadpercent}%b%c01{/}%b{%leadspeed}%b%c01{] with }%b{%filesleft}%b %c01{files left.}"
 
-announce.HALFWAY = "%b{%c01{HALFWAY:}} %c01{[}%section_colored%c01{]} %c%sec_c5{%subdir_prefix}%c%sec_c3{%b{%relname}} %c01{- avg speed:} %c%sec_c5{%t_avgspeed} %c01{- time left:} %c%sec_c5{%t_timeleft} %c01{- leader:} %c%sec_c4{%leader_name} %c01{[}%c%sec_c5{%{leader_mb}MB}%c01{/}%c%sec_c5{%{leader_files}F}%c01{/}%c%sec_c5{%{leader_pct}%}%c01{/}%c%sec_c5{%leader_speed}%c01{] -} %c%sec_c5{%t_filesleft} %c01{files left.}"
+announce.HALFWAY = "%b{%c15{HALFWAY}} %c01{in }%section_colored%c01{: -> }%b{%path}%b %c01{at avg speed }%b{%t_avgspeed}%b %c01{%t_timeleft} with race leader %b{%leaduser}%b %b{[}%b{%leadsize}%b%c01{/}%b{%leadfiles}F%b%c01{/}%b{%leadpercent}%b%c01{/}%b{%leadspeed}%b%b{]} %c01{with }%b{%filesleft}%b %c01{files left.}"
 
-announce.TVINFO = "%b{%c01{TV-INFO:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{- Genre:} %c%sec_c5{%genre} %c01{- Type:} %c%sec_c5{%b{%type}} %c01{- Link:} %c%sec_c5{%link}\n%b{%c01{TV-INFO:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{- Network:} %c%sec_c5{%b{%network}} %c01{- Rating:} %b{%c%sec_c5{%rating}} %c01{- Language:} %c%sec_c5{%language}"
+announce.TVINFO = "%section_colored %c14{-TvMaze-} %c07{%title}%c01{ :: }%c07{%network}%c01{ :: }%c07{%type}%c01{ :: }%c07{%genre}%c01{ :: }%c07{%language}%c01{ :: }%link"
 
-announce.MOVIEINFO = "%b{%c01{MOVIE-INFO:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{-} %c%sec_c5{%title} %c01{(}%c%sec_c5{%year}%c01{)} %c01{- Genre:} %c%sec_c5{%genre} %c01{-} %b{%c%sec_c5{%rating}}/10 %c01{(}%c%sec_c5{%votes} votes%c01{) - Metacritic:} %c%sec_c5{%metacritic} %c01{-} %c%sec_c5{%runtime} %c01{-} %c%sec_c5{%language}\n%b{%c01{MOVIE-INFO:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{- Link:} %link %c01{- Director:} %c%sec_c4{%director} %c01{- Stars:} %c%sec_c4{%stars}"
+announce.MOVIEINFO = "%section_colored %c14{-IMDB-} %c07{%title}%c01{ (}%c07{%year}%c01{)}\n%section_colored %c14{-IMDB-} %c01{Genres: }%c07{%genre}%c01{ :: Language: }%c07{%language}%c01{ :: Country: }%c07{%country}%c01{ :: Director: }%c07{%director}%c01{ :: Scored: }%c07{%rating}/10%c01{ with }%c07{%votes}%c01{ votes :: Runtime: }%c07{%runtime}\n%section_colored %c14{-IMDB-} %c01{Plot: }%plot\n%u{%link}"
 
-announce.COMPLETE = "%b{%c01{COMPLETE:}} %c01{[}%section_colored%c01{]} %c%sec_c5{%subdir_prefix}%c%sec_c3{%b{%relname}} %c01{by} %c%sec_c5{%u_count} %c01{racers -} %c%sec_c5{%t_mbytes}%c01{/}%c%sec_c5{%t_files}%c01{/}%c%sec_c5{%t_avgspeed}%c01{/}%c%sec_c5{%t_duration}"
+announce.COMPLETE = "%b{%c15{COMPLETE}} %c01{in }%section_colored%c01{: -> }%b{%path}%b %c01{( }%b{%size}%b %c01{in }%b{%files}F%b%c01{ at avg speed }%b{%t_avgspeed}%b %c01{%t_duration} ) by }%b{%racers}%b %c01{racer(s).}"
 
 announce.STATS_HOF = "%b{%c01{STATS:}} ▂▃▅▇█▓▒░۩۞۩  %c03{Users Hall Of Fame} ۩۞۩░▒▓█▇▅▃▂"
 
@@ -426,23 +426,23 @@ announce.TOPICCMD_ERROR = "%b{%c02{TOPIC:}} %c04{%response}"
 announce.TOPICCMD_DENIED = "%b{%c02{TOPIC:}} %c04{Staff command only.}"
 announce.TOPICCMD_USAGE = "%b{%c02{TOPIC:}} %c01{Usage:} %c05{!topic #channel topic text}"
 
-announce.NUKE = "%b{%c04{NUKED:}} %c01{[}%section_colored%c01{]} %c06{%b{%relname}}"
-announce.NUKE_FACTOR = "%b{%c04{NUKED:}} %c01{Was nuked factor} %c04{%b{%multiplier_label}} %c01{by} %c07{%b{%u_name}}"
-announce.NUKE_REASON = "%b{%c04{NUKED:}} %c01{[reason]} %c14{-->} %c04{%b{%reason}}"
-announce.NUKE_NUKEES = "%b{%c04{NUKED:}} %c01{[nukees]} %c14{-->} %c07{%nukees}"
+announce.NUKE = "%u{%c04{/}%c08,04%b{!}%c04{\\}} %b{%c15{NUKE}} %u{%c04{/}%c08,04%b{!}%c04{\\}} %c01{in }%section_colored%c01{: -> }%b{%relname}%b"
+announce.NUKE_FACTOR = "%b{%c15{NUKER}} %c01{: }%b{%user}%b %c01{- factor }%b{%multiplier_label}%b"
+announce.NUKE_REASON = "%b{%c15{REASON}} %c01{: }%b{%reason}%b"
+announce.NUKE_NUKEES = "%b{%c15{NUKEES}} %c01{: }%nukees"
 
-announce.UNNUKE = "%b{%c01{UNNUKE:}} %c01{[}%section_colored%c01{]} %c06{%b{%relname}} %c01{by} %c04{%u_name}"
+announce.UNNUKE = "%b{%c15{UNNUKE}} %c01{in }%section_colored%c01{: -> }%b{%relname}%b %c01{by }%b{%user}%b"
 
-announce.PRE = "%b{%c01{PRE:}} %c01{[}%section_colored%c01{]} %c06{%b{%relname}} %c01{by} %c04{%b{%group}} %c01{(}%c04{%user}%c01{)} %c01{-} %c05{%t_mbytes}%c01{/}%c05{%t_files}%pre_suffix"
-announce.PREAUDIOINFO = "%b{%c01{PRE:}} %c01{[}%section_colored%c01{]} %c06{%b{%relname}} %c01{::} %c04{%pre_audio_head} %c01{::} %c05{%genre} %c01{::} %c05{%year} %c01{::} %c05{%bitrate}"
-announce.PREMOVIEINFO = "%b{%c01{PRE:}} %c01{[}%section_colored%c01{]} %c06{%b{%relname}} %c01{::} %c04{%title} %c01{(}%c04{%year}%c01{) ::} %c05{%genre} %c01{::} %c05{%rating}"
-announce.PRETVINFO = "%b{%c01{PRE:}} %c01{[}%section_colored%c01{]} %c06{%b{%relname}} %c01{::} %c04{%episode} %c01{::} %c05{%genre} %c01{::} %c05{%type} %c01{::} %c05{%network} %c01{::} %c05{%language}"
+announce.PRE = "%b{%c15{PRE}} %c01{in }%section_colored%c01{: -> }%b{%group}%b %c01{gives us }%b{%relname}%b %c01{(}%b{%t_files}%b %c01{files - }%b{%t_mbytes}%b%c01{).}%pre_suffix"
+announce.PREAUDIOINFO = "%b{%c15{PRE}} %c01{in }%section_colored%c01{: -> }%b{%relname}%b %c01{:: }%b{%pre_audio_head}%b %c01{:: }%b{%genre}%b %c01{:: }%b{%year}%b %c01{:: }%b{%bitrate}%b"
+announce.PREMOVIEINFO = "%b{%c15{PRE}} %c01{in }%section_colored%c01{: -> }%b{%relname}%b %c01{:: }%b{%title}%b %c01{(}%b{%year}%b%c01{) :: }%b{%genre}%b %c01{:: }%b{%rating}%b"
+announce.PRETVINFO = "%b{%c15{PRE}} %c01{in }%section_colored%c01{: -> }%b{%relname}%b %c01{:: }%b{%episode}%b %c01{:: }%b{%genre}%b %c01{:: }%b{%type}%b %c01{:: }%b{%network}%b %c01{:: }%b{%language}%b"
 
-announce.PREBW = "%b{%c01{PREBW:}} %c01{[}%section_colored%c01{]} %c01{::} %c06{%b{%relname}} %c01{::} %c03{%b{%traffic_val}}%c01{%traffic_unit} %c01{@} %c03{%b{%avg_val}}%c01{%avg_unit} %c01{:: Highest} %c03{%b{%peak_val}}%c01{%peak_unit}"
+announce.PREBW = "%b{[}%section_colored%b{]} %c14{-PREBW-} %relname %c01{:: Leeched: }%b{%traffic_val}%b%traffic_unit %c01{:: Average speed: }%b{%avg_val}%b%avg_unit %c01{:: Best: }%b{%peak_val}%b%peak_unit"
 
-announce.PREBWINTERVAL = "%b{%c01{PREBW:}} %c01{[}%section_colored%c01{]} %c01{::} %c03{%b{%b1}}%c01{%u1 @} %c03{%t1}%c01{s ::} %c03{%b{%b2}}%c01{%u2 @} %c03{%t2}%c01{s ::} %c03{%b{%b3}}%c01{%u3 @} %c03{%t3}%c01{s ::} %c03{%b{%b4}}%c01{%u4 @} %c03{%t4}%c01{s ::} %c03{%b{%b5}}%c01{%u5 @} %c03{%t5}%c01{s :: Highest} %c03{%b{%peak_val}}%c01{%peak_unit}"
+announce.PREBWINTERVAL = "%b{[}%section_colored%b{]} %c14{-PREBW-} %c01{:: }%b{%b1}%b%c01{%u1 @ }%b{%t1}%b%c01{s :: }%b{%b2}%b%c01{%u2 @ }%b{%t2}%b%c01{s :: }%b{%b3}%b%c01{%u3 @ }%b{%t3}%b%c01{s :: }%b{%b4}%b%c01{%u4 @ }%b{%t4}%b%c01{s :: }%b{%b5}%b%c01{%u5 @ }%b{%t5}%b%c01{s :: Highest }%b{%peak_val}%b%peak_unit"
 
-announce.PREBWUSER = "%b{%c01{PREBW:}} %c01{[}%section_colored%c01{]} %c01{::} %c04{%b{%user}} %c01{::} %c03{%b{%size_val}}%c01{%size_unit}%c01{/}%c03{%b{%cnt_files}}%c01{F @} %c03{%b{%avg_val_user}}%c01{%avg_unit_user} %c01{:: Highest} %c03{%b{%peak_val_user}}%c01{%peak_unit_user}"
+announce.PREBWUSER = "%b{[}%section_colored%b{]} %c14{-PREBW-} %c01{:: }%b{%user}%b %c01{:: }%b{%size_val}%b%size_unit %c01{:: }%b{%cnt_files}%b %c01{files :: }%b{%avg_val_user}%b%avg_unit_user %c01{(Peak: }%b{%peak_val_user}%b%peak_unit_user%c01{)}"
 
 announce.NEWPRETIME = "%b{%c09{PRETiME:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{::} %c09{OK} %c01{:: released} %c09{%preage}%c01{ ago}"
 announce.OLDPRETIME = "%b{%c04{PRETiME:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{::} %c04{BAD} %c01{:: released} %c04{%preage}%c01{ ago}"

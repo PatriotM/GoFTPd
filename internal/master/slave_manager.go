@@ -1142,8 +1142,9 @@ func (sm *SlaveManager) Stop() {
 
 // vfsPersistLoop saves the VFS to disk.
 func (sm *SlaveManager) vfsPersistLoop() {
-	// Save frequently so owner/group metadata and recent VFS changes survive restarts.
-	ticker := time.NewTicker(10 * time.Second)
+	// Save often enough to survive crashes, but not so often that large VFS
+	// snapshots compete with hot upload/race paths during busy periods.
+	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
 
 	for sm.running.Load() {
