@@ -165,6 +165,38 @@ func TestVFSRaceStatsRefreshAfterDelete(t *testing.T) {
 	}
 }
 
+func TestVFSDeleteDirRemovesSubtreeAndMetadataWithoutRebuild(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/site/TV/release", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/site/TV/release/file1.r00", VFSFile{Size: 100, Seen: true})
+	vfs.AddFile("/site/TV/release/Sample", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/site/TV/release/Sample/sample.mkv", VFSFile{Size: 200, Seen: true})
+	vfs.SetSFVData("/site/TV/release", "release.sfv", map[string]uint32{"file1.r00": 1})
+	vfs.SetMediaInfo("/site/TV/release", map[string]string{"video_format": "AVC"})
+
+	vfs.DeleteFile("/site/TV/release")
+
+	if got := vfs.GetFile("/site/TV/release"); got != nil {
+		t.Fatalf("expected deleted release dir to be gone, got %+v", got)
+	}
+	if got := vfs.GetFile("/site/TV/release/file1.r00"); got != nil {
+		t.Fatalf("expected deleted release file to be gone, got %+v", got)
+	}
+	if got := vfs.GetFile("/site/TV/release/Sample/sample.mkv"); got != nil {
+		t.Fatalf("expected deleted nested sample file to be gone, got %+v", got)
+	}
+	if got := vfs.GetSFVData("/site/TV/release"); got != nil {
+		t.Fatalf("expected deleted release sfv metadata to be gone, got %+v", got)
+	}
+	if got := vfs.GetMediaInfo("/site/TV/release"); got != nil {
+		t.Fatalf("expected deleted release mediainfo to be gone, got %+v", got)
+	}
+	children := vfs.ListDirectory("/site/TV")
+	if len(children) != 0 {
+		t.Fatalf("expected parent directory to have no children after delete, got %d", len(children))
+	}
+}
+
 func TestParentDirModTimeBubblesOnChanges(t *testing.T) {
 	vfs := NewVirtualFileSystem()
 	vfs.AddFile("/site", VFSFile{IsDir: true, Seen: true, LastModified: 1})

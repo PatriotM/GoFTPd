@@ -98,10 +98,17 @@ func LoadConfig(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, err
 	}
+	cfg.Version = loadVersion(path, cfg.Version)
 	if strings.TrimSpace(cfg.Version) == "" {
 		if idx := strings.LastIndex(strings.TrimSpace(cfg.IRC.RealName), " v"); idx >= 0 {
 			cfg.Version = strings.TrimSpace(cfg.IRC.RealName[idx+2:])
 		}
+	}
+	if strings.TrimSpace(cfg.IRC.RealName) == "" {
+		cfg.IRC.RealName = "GoSitebot"
+	}
+	if strings.TrimSpace(cfg.Version) != "" && strings.TrimSpace(cfg.IRC.RealName) == "GoSitebot" {
+		cfg.IRC.RealName = "GoSitebot v" + cfg.Version
 	}
 	if err := resolveAnnounceConfigFile(&cfg.Announce, filepath.Dir(path)); err != nil {
 		return nil, err
@@ -194,6 +201,54 @@ func resolveAnnounceConfigFile(cfg *AnnounceConfig, baseDir string) error {
 	loaded.ConfigFile = cfg.ConfigFile
 	*cfg = loaded
 	return nil
+}
+
+func loadVersion(configPath, fallback string) string {
+	for _, candidate := range versionCandidatePaths(configPath) {
+		data, err := os.ReadFile(candidate)
+		if err != nil {
+			continue
+		}
+		if version := firstNonEmptyLine(string(data)); version != "" {
+			return version
+		}
+	}
+	return strings.TrimSpace(fallback)
+}
+
+func versionCandidatePaths(configPath string) []string {
+	dir := filepath.Dir(configPath)
+	seen := map[string]struct{}{}
+	var out []string
+	add := func(p string) {
+		p = filepath.Clean(p)
+		if _, ok := seen[p]; ok {
+			return
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+
+	add(filepath.Join(dir, "version"))
+	for current := filepath.Dir(dir); current != "" && current != "."; {
+		add(filepath.Join(current, "etc", "version"))
+		parent := filepath.Dir(current)
+		if parent == current {
+			break
+		}
+		current = parent
+	}
+	return out
+}
+
+func firstNonEmptyLine(s string) string {
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			return line
+		}
+	}
+	return ""
 }
 
 func resolvePluginConfigFiles(config map[string]interface{}, baseDir string) error {

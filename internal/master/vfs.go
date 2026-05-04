@@ -306,17 +306,44 @@ func (vfs *VirtualFileSystem) DeleteFile(path string) {
 	defer vfs.mu.Unlock()
 
 	path = cleanVFSPath(path)
+	if path == "/" {
+		return
+	}
 	parent := cleanVFSPath(filepath.Dir(path))
-	delete(vfs.files, path)
+	removed := make([]string, 0, 8)
+	if _, ok := vfs.files[path]; ok {
+		delete(vfs.files, path)
+		removed = append(removed, path)
+	}
 
 	// Also delete children if directory
 	prefix := path + "/"
 	for k := range vfs.files {
 		if strings.HasPrefix(k, prefix) {
 			delete(vfs.files, k)
+			removed = append(removed, k)
 		}
 	}
-	vfs.rebuildChildrenLocked()
+	if len(removed) == 0 {
+		return
+	}
+	if children := vfs.children[parent]; children != nil {
+		delete(children, path)
+	}
+	for _, removedPath := range removed {
+		delete(vfs.children, removedPath)
+		if removedPath == path {
+			continue
+		}
+		if children := vfs.children[cleanVFSPath(filepath.Dir(removedPath))]; children != nil {
+			delete(children, removedPath)
+		}
+	}
+	for metaPath := range vfs.dirMeta {
+		if metaPath == path || strings.HasPrefix(metaPath, prefix) {
+			delete(vfs.dirMeta, metaPath)
+		}
+	}
 	vfs.touchAncestorsLocked(parent, time.Now().Unix())
 	vfs.invalidateRacePathLocked(path)
 	vfs.markPersistDirtyLocked()

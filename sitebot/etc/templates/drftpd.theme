@@ -320,7 +320,7 @@ COLOR_XXX-0DAY_3 = "14"
 COLOR_XXX-0DAY_4 = "13"
 COLOR_XXX-0DAY_5 = "07"
 
-announce.NEWDIR = "%b{%c15{NEW}} %c01{in }%section_colored%c01{: -> }%b{%path}%b %c01{by }%b{%user}%b%c14{/}%b{%group}%b."
+announce.NEWDIR = "%b{%c15{NEW:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{by }%c%sec_c4{%u_name}"
 
 announce.NEWDAY = "%b{%c01{NEW DAY:}} %c01{-}%section_colored%c01{- A new day has come!} %c%sec_c5{%date} %c01{has been created along with its symlink.}"
 
@@ -332,15 +332,15 @@ announce.SPEEDTEST = "%b{%c01{SPEEDTEST:}} %c04{%nick} %c01{%action} %c01{a} %c0
 
 announce.SFV_RAR = "%b{%c15{RACE:}} %c01{[}%section_colored%c01{]} %c01{Got SFV for }%c%sec_c3{%b{%relname}} %c01{uploaded by }%c%sec_c4{%u_name}%c01{. Now expecting }%c%sec_c5{%b{%t_filecount}} %c01{%t_file_label.}"
 
-announce.UPDATE_RAR = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%b{%relname}%b %c01{by }%b{%user}%b %c01{at }%b{%speed}%b%c01{. Expecting }%b{%size}%b %c01{in }%b{%files}%b %c01{files.}"
+announce.UPDATE_RAR = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%c%sec_c3{%b{%relname}} %c01{by }%b{%user}%b %c01{at }%b{%speed}%b%c01{. Expecting }%b{%size}%b %c01{in }%b{%files}%b %c01{files.}"
 
-announce.UPDATE_RAR_UNKNOWN = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%b{%relname}%b %c01{by }%b{%user}%b %c01{at }%b{%speed}%b."
+announce.UPDATE_RAR_UNKNOWN = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%c%sec_c3{%b{%relname}} %c01{by }%b{%user}%b %c01{at }%b{%speed}%b."
 
-announce.UPDATE_ZIP = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%b{%relname}%b %c01{by }%b{%user}%b %c01{at }%b{%speed}%b%c01{. Expecting }%b{%size}%b %c01{in }%b{%files}%b %c01{files.}"
+announce.UPDATE_ZIP = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%c%sec_c3{%b{%relname}} %c01{by }%b{%user}%b %c01{at }%b{%speed}%b%c01{. Expecting }%b{%size}%b %c01{in }%b{%files}%b %c01{files.}"
 
-announce.UPDATE_ZIP_UNKNOWN = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%b{%relname}%b %c01{by }%b{%user}%b %c01{at }%b{%speed}%b."
+announce.UPDATE_ZIP_UNKNOWN = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%c%sec_c3{%b{%relname}} %c01{by }%b{%user}%b %c01{at }%b{%speed}%b."
 
-announce.UPDATE_TRACK = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%b{%relname}%b %c01{by }%b{%user}%b %c01{at }%b{%speed}%b."
+announce.UPDATE_TRACK = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%c%sec_c3{%b{%relname}} %c01{by }%b{%user}%b %c01{at }%b{%speed}%b."
 
 announce.RACE_RAR = "%b{%c15{RACE:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{- }%c%sec_c4{%u_name} %c01{joined the race at }%c%sec_c5{%u_speed}%c01{.}"
 
@@ -350,7 +350,7 @@ announce.HALFWAY = "%b{%c15{HALFWAY:}} %c01{[}%section_colored%c01{]} %c%sec_c3{
 
 announce.TVINFO = "%b{%c15{RACE:}} %c01{[}%section_colored%c01{]} %c01{[TvMaze] }%c07{%title}%c01{ :: }%c07{%network}%c01{ :: }%c07{%type}%c01{ :: }%c07{%genre}%c01{ :: }%c07{%language}%c01{ :: }%link"
 
-announce.MOVIEINFO = "%section_colored %c14{-IMDB-} %c07{%title}%c01{ (}%c07{%year}%c01{)}\n%section_colored %c14{-IMDB-} %c01{Genres: }%c07{%genre}%c01{ :: Language: }%c07{%language}%c01{ :: Country: }%c07{%country}%c01{ :: Director: }%c07{%director}%c01{ :: Scored: }%c07{%rating}/10%c01{ with }%c07{%votes}%c01{ votes :: Runtime: }%c07{%runtime}\n%section_colored %c14{-IMDB-} %c01{Plot: }%plot\n%u{%link}"
+announce.MOVIEINFO = "%b{%c15{RACE:}} %c01{[}%section_colored%c01{]} %c05{[IMDB]} %c07{%title}%c01{ (}%c07{%year}%c01{)}\n%b{%c15{RACE:}} %c01{[}%section_colored%c01{]} %c05{[IMDB]} %c01{Genres: }%c07{%genre}%c01{ :: Language: }%c07{%language}%c01{ :: Country: }%c07{%country}%c01{ :: Director: }%c07{%director}%c01{ :: Scored: }%c07{%rating}/10%c01{ with }%c07{%votes}%c01{ votes :: Runtime: }%c07{%runtime}\n%b{%c15{RACE:}} %c01{[}%section_colored%c01{]} %c05{[IMDB]} %c01{Plot: }%c07{%plot}\n%b{%c15{RACE:}} %c01{[}%section_colored%c01{]} %c05{[IMDB]} %u{%link}"
 
 announce.COMPLETE = "%b{%c15{COMPLETE:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{by }%c%sec_c5{%racers} %c01{racers - }%c%sec_c5{%size}%c01{/}%c%sec_c5{%files}%c01{/}%c%sec_c5{%t_avgspeed}%c01{/}%c%sec_c5{%t_duration}"
 
@@ -405,9 +405,9 @@ announce.RULESCMD_LINE = "%b{%c01{RULES:}} %c05{%line}"
 
 announce.RULESCMD_ERROR = "%b{%c01{RULES:}} %c04{%response}"
 announce.QUOTACMD_QUOTA_HEADER = "%b{%c02{QUOTA:}} %c05{WEEKLY QUOTA} %c01{[ }%b{%count} %c01{Users - (Min }%b{%quota_gb}%c01{) ]}"
-announce.QUOTACMD_QUOTA_ENTRY = "%c01{[ }%c06{%rank} %c01{]} %b{%user}%c01{/}%c06{%group} %c01{( }%b{%size} %c01{Up ) is currently }%b{%status_plain}%c01{.}"
+announce.QUOTACMD_QUOTA_ENTRY = "%c01{[ }%c06{%rank} %c01{]} %b{%user}%c01{/}%c06{%group} %c01{( }%b{%size} %c01{Up ) is currently }%b{%status_colored}%c01{.}"
 announce.QUOTACMD_TRIAL_HEADER = "%b{%c02{QUOTA:}} %c05{TRIAL QUOTA} %c01{[ Trial List - }%b{%count} %c01{Trialing - (Min }%b{%quota_gb}%c01{) ]}"
-announce.QUOTACMD_TRIAL_ENTRY = "%c01{[ }%c06{%rank} %c01{]} %b{%user}%c01{/trial ( }%b{%size} %c01{Up ) is currently }%b{%status_plain}%c01{. (}%b{%days_remaining}%c01{ days left)}"
+announce.QUOTACMD_TRIAL_ENTRY = "%c01{[ }%c06{%rank} %c01{]} %b{%user}%c01{/trial ( }%b{%size} %c01{Up ) is currently }%b{%status_colored}%c01{. (}%b{%days_remaining}%c01{ days left)}"
 announce.QUOTACMD_EMPTY = "%b{%c02{QUOTA:}} %c04{No trial or quota users tracked.}"
 announce.QUOTACMD_OK = "%b{%c02{QUOTA:}} %c05{%response}"
 announce.QUOTACMD_ERROR = "%b{%c02{QUOTA:}} %c04{%response}"
