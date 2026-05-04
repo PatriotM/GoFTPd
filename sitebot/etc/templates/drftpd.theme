@@ -332,15 +332,15 @@ announce.SPEEDTEST = "%b{%c01{SPEEDTEST:}} %c04{%nick} %c01{%action} %c01{a} %c0
 
 announce.SFV_RAR = "%b{%c15{RACE:}} %c01{[}%section_colored%c01{]} %c01{Got SFV for }%c%sec_c3{%b{%relname}} %c01{uploaded by }%c%sec_c4{%u_name}%c01{. Now expecting }%c%sec_c5{%b{%t_filecount}} %c01{%t_file_label.}"
 
-announce.UPDATE_RAR = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%b{%relname}%b %c01{by }%b{%user}%b %c01{at }%b{%speed}%b%c01{. Expecting }%b{%size}%b %c01{in }%b{%files}%b %c01{files.}"
+announce.UPDATE_RAR = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%c%sec_c3{%b{%relname}} %c01{by }%b{%user}%b %c01{at }%b{%speed}%b%c01{. Expecting }%b{%size}%b %c01{in }%b{%files}%b %c01{files.}"
 
-announce.UPDATE_RAR_UNKNOWN = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%b{%relname}%b %c01{by }%b{%user}%b %c01{at }%b{%speed}%b."
+announce.UPDATE_RAR_UNKNOWN = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%c%sec_c3{%b{%relname}} %c01{by }%b{%user}%b %c01{at }%b{%speed}%b."
 
-announce.UPDATE_ZIP = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%b{%relname}%b %c01{by }%b{%user}%b %c01{at }%b{%speed}%b%c01{. Expecting }%b{%size}%b %c01{in }%b{%files}%b %c01{files.}"
+announce.UPDATE_ZIP = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%c%sec_c3{%b{%relname}} %c01{by }%b{%user}%b %c01{at }%b{%speed}%b%c01{. Expecting }%b{%size}%b %c01{in }%b{%files}%b %c01{files.}"
 
-announce.UPDATE_ZIP_UNKNOWN = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%b{%relname}%b %c01{by }%b{%user}%b %c01{at }%b{%speed}%b."
+announce.UPDATE_ZIP_UNKNOWN = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%c%sec_c3{%b{%relname}} %c01{by }%b{%user}%b %c01{at }%b{%speed}%b."
 
-announce.UPDATE_TRACK = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%b{%relname}%b %c01{by }%b{%user}%b %c01{at }%b{%speed}%b."
+announce.UPDATE_TRACK = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%c%sec_c3{%b{%relname}} %c01{by }%b{%user}%b %c01{at }%b{%speed}%b."
 
 announce.RACE_RAR = "%b{%c15{RACE:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{- }%c%sec_c4{%u_name} %c01{joined the race at }%c%sec_c5{%u_speed}%c01{.}"
 
