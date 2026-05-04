@@ -3,6 +3,7 @@ package imdb
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"log"
 	"net/http"
@@ -17,6 +18,30 @@ import (
 	"goftpd/sitebot/internal/plugin"
 	tmpl "goftpd/sitebot/internal/template"
 )
+
+func normalizePlotText(plot string, maxRunes int) string {
+	plot = html.UnescapeString(strings.TrimSpace(plot))
+	if plot == "" {
+		return ""
+	}
+	plot = strings.Join(strings.Fields(plot), " ")
+	if maxRunes <= 0 {
+		return plot
+	}
+	runes := []rune(plot)
+	if len(runes) <= maxRunes {
+		return plot
+	}
+	cut := maxRunes - 3
+	if cut < 1 {
+		cut = 1
+	}
+	truncated := strings.TrimSpace(string(runes[:cut]))
+	if idx := strings.LastIndex(truncated, " "); idx >= cut/2 {
+		truncated = strings.TrimSpace(truncated[:idx])
+	}
+	return truncated + "..."
+}
 
 // IMDBPlugin looks up movie info on imdbapi.dev and announces MOVIE-INFO.
 // Uses the same async worker pattern as TVMazePlugin so HTTP latency never
@@ -351,11 +376,7 @@ func (p *IMDBPlugin) doLookup(job imdbJob) {
 	if m.Metacritic.Score > 0 {
 		metacritic = fmt.Sprintf("%d", m.Metacritic.Score)
 	}
-	plot := m.Plot
-	// Trim very long plots — IRC lines get awkward beyond ~300 chars.
-	if len(plot) > 280 {
-		plot = plot[:277] + "..."
-	}
+	plot := normalizePlotText(m.Plot, 280)
 	if plot == "" {
 		plot = "N/A"
 	}
