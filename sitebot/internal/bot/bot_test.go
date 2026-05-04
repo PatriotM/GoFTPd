@@ -149,6 +149,36 @@ func TestLoadConfigPreservesAnnouncePretimeConfig(t *testing.T) {
 	}
 }
 
+func TestLoadConfigReadsVersionFromAncestorEtcFile(t *testing.T) {
+	tmp := t.TempDir()
+	rootEtc := filepath.Join(tmp, "etc")
+	cfgDir := filepath.Join(tmp, "sitebot", "etc")
+	cfgPath := filepath.Join(cfgDir, "config.yml")
+	if err := os.MkdirAll(rootEtc, 0o755); err != nil {
+		t.Fatalf("MkdirAll(rootEtc): %v", err)
+	}
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(cfgDir): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(rootEtc, "version"), []byte("7.7.7\n"), 0o644); err != nil {
+		t.Fatalf("write version: %v", err)
+	}
+	if err := os.WriteFile(cfgPath, []byte("irc:\n  host: \"irc.example.net\"\n  port: 6697\n  nick: \"GoSitebot\"\n  user: \"sitebot\"\n  realname: \"GoSitebot\"\nannounce:\nplugins:\n  enabled: {}\n  config: {}\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.Version != "7.7.7" {
+		t.Fatalf("cfg.Version = %q, want %q", cfg.Version, "7.7.7")
+	}
+	if cfg.IRC.RealName != "GoSitebot v7.7.7" {
+		t.Fatalf("cfg.IRC.RealName = %q, want %q", cfg.IRC.RealName, "GoSitebot v7.7.7")
+	}
+}
+
 func TestOnRegisteredNickServIdentifyBeforeJoin(t *testing.T) {
 	conn := &recordingConn{}
 	b := &Bot{

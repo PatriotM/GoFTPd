@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"goftpd/internal/timeutil"
+	"goftpd/internal/versionfile"
 	"goftpd/internal/zipscript"
 	"gopkg.in/yaml.v3"
 )
@@ -190,6 +191,7 @@ func LoadConfig(filePath string) (*Config, error) {
 	if err := resolvePluginConfigFiles(cfg.Mode, cfg.Plugins, filepath.Dir(filePath)); err != nil {
 		return nil, err
 	}
+	cfg.Version = versionfile.Load(filePath, cfg.Version)
 	if !cfg.LogConsole {
 		raw := map[string]interface{}{}
 		if err := yaml.Unmarshal(data, &raw); err == nil {

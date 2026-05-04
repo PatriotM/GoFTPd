@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"goftpd/internal/versionfile"
 	"gopkg.in/yaml.v3"
 )
 
@@ -67,6 +68,7 @@ func LoadConfig(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
+	cfg.Version = versionfile.Load(path, cfg.Version)
 
 	if cfg.Mode != "master" && cfg.Mode != "slave" {
 		cfg.Mode = "master"

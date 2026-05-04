@@ -424,6 +424,7 @@ func (p *Plugin) buildStatusLines() ([]string, error) {
 			"size":           formatBytes(entry.WkUpBytes),
 			"status":         passLabel(entry.WkUpBytes >= p.quotaBytes),
 			"status_plain":   passWord(entry.WkUpBytes >= p.quotaBytes),
+			"status_colored": passColored(entry.WkUpBytes >= p.quotaBytes),
 			"days_remaining": strconv.Itoa(entry.DaysRemaining),
 		}, fmt.Sprintf("[ %02d ] %s/%s ( %s Up ) is currently %s.", idx+1, entry.Username, entry.Group, formatBytes(entry.WkUpBytes), passWord(entry.WkUpBytes >= p.quotaBytes))))
 	}
@@ -441,6 +442,7 @@ func (p *Plugin) buildStatusLines() ([]string, error) {
 			"size":           formatBytes(entry.WkUpBytes),
 			"status":         passLabel(entry.WkUpBytes >= p.trialQuotaBytes),
 			"status_plain":   passWord(entry.WkUpBytes >= p.trialQuotaBytes),
+			"status_colored": passColored(entry.WkUpBytes >= p.trialQuotaBytes),
 			"days_remaining": strconv.Itoa(entry.DaysRemaining),
 		}, fmt.Sprintf("[ %02d ] %s/trial ( %s Up ) is currently %s. (%d days left)", idx+1, entry.Username, formatBytes(entry.WkUpBytes), passWord(entry.WkUpBytes >= p.trialQuotaBytes), entry.DaysRemaining)))
 	}
@@ -1080,6 +1082,13 @@ func passWord(passed bool) string {
 		return "PASSING"
 	}
 	return "FAILING"
+}
+
+func passColored(passed bool) string {
+	if passed {
+		return "\x0303PASSING\x03"
+	}
+	return "\x0304FAILING\x03"
 }
 
 func formatBytes(bytes int64) string {

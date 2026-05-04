@@ -3,7 +3,6 @@ log_file:      "logs/sitebot.log"
 log_delete_after_days: 1
 log_keep_days: 1
 log_console:   true
-version:       "1.0.6b"
 
 event_fifo: "/GoFTPd/etc/goftpd.sitebot.fifo"
 
@@ -23,7 +22,10 @@ irc:
   port: 6697
   nick: "GoSitebot"
   user: "sitebot"
-  realname: "GoSitebot v1.0.6b"
+  # Version comes from a plain "version" file:
+  #   1. sitebot/etc/version
+  #   2. nearest ancestor etc/version (default integrated layout)
+  realname: "GoSitebot"
   password: "changeme"
   ssl: true
   nickserv:

@@ -17,6 +17,17 @@ func writeConfigFixture(t *testing.T, body string) string {
 	return path
 }
 
+func writeConfigFixtureWithVersion(t *testing.T, body, version string) string {
+	t.Helper()
+	path := writeConfigFixture(t, body)
+	if strings.TrimSpace(version) != "" {
+		if err := os.WriteFile(filepath.Join(filepath.Dir(path), "version"), []byte(strings.TrimSpace(version)+"\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile(version) error = %v", err)
+		}
+	}
+	return path
+}
+
 func TestLoadConfigRejectsMissingSlaveHost(t *testing.T) {
 	path := writeConfigFixture(t, `
 sitename_long: "GoFTPd"
@@ -86,5 +97,30 @@ plugins:
 	}
 	if cfg.Mode != "slave" {
 		t.Fatalf("LoadConfig() mode = %q, want slave", cfg.Mode)
+	}
+}
+
+func TestLoadConfigVersionFileOverridesYamlVersion(t *testing.T) {
+	path := writeConfigFixtureWithVersion(t, `
+sitename_long: "GoFTPd"
+sitename_short: "GoFTPd"
+version: "old"
+timezone: "Europe/Amsterdam"
+mode: "master"
+listen_port: 21
+storage_path: "./site"
+acl_base_path: "/"
+tls_enabled: false
+master:
+  listen_host: "0.0.0.0"
+  control_port: 1099
+`, "9.9.9")
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if cfg.Version != "9.9.9" {
+		t.Fatalf("LoadConfig() version = %q, want %q", cfg.Version, "9.9.9")
 	}
 }
