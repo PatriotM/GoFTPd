@@ -18,40 +18,52 @@ type StatLine struct {
 }
 
 type User struct {
-	Name         string            `yaml:"name"`
-	Password     string            `yaml:"password"`
-	UID          int               `yaml:"uid"`
-	GID          int               `yaml:"gid"`
-	Flags        string            `yaml:"flags"`
-	Tagline      string            `yaml:"tagline"`
-	HomeRoot     string            `yaml:"home_root"`
-	HomeDir      string            `yaml:"homedir"`
-	CurrentDir   string            `yaml:"current_dir"`  // Runtime: current FTP dir
-	Added        int64             `yaml:"added"`
-	LastLogin    int64             `yaml:"last_login"`
-	Expires      int64             `yaml:"expires"`
-	Credits      int64             `yaml:"credits"`
-	Ratio        int               `yaml:"ratio"`
-	Groups       map[string]int    `yaml:"groups"`
-	PrimaryGroup string            `yaml:"primary_group"` // Primary group for file ownership
-	IPs          []string          `yaml:"ips"`
-	
+	Name         string         `yaml:"name"`
+	Password     string         `yaml:"password"`
+	UID          int            `yaml:"uid"`
+	GID          int            `yaml:"gid"`
+	Flags        string         `yaml:"flags"`
+	Tagline      string         `yaml:"tagline"`
+	HomeRoot     string         `yaml:"home_root"`
+	HomeDir      string         `yaml:"homedir"`
+	CurrentDir   string         `yaml:"current_dir"` // Runtime: current FTP dir
+	Added        int64          `yaml:"added"`
+	LastLogin    int64          `yaml:"last_login"`
+	Expires      int64          `yaml:"expires"`
+	Credits      int64          `yaml:"credits"`
+	Ratio        int            `yaml:"ratio"`
+	Groups       map[string]int `yaml:"groups"`
+	PrimaryGroup string         `yaml:"primary_group"` // Primary group for file ownership
+	IPs          []string       `yaml:"ips"`
+
 	// Throughput Stats (files, bytes, meta)
-	AllUp     StatLine          `yaml:"allup"`
-	AllDn     StatLine          `yaml:"alldn"`
-	WkUp      StatLine          `yaml:"wkup"`
-	WkDn      StatLine          `yaml:"wkdn"`
-	DayUp     StatLine          `yaml:"dayup"`
-	DayDn     StatLine          `yaml:"daydn"`
-	MonthUp   StatLine          `yaml:"monthup"`
-	MonthDn   StatLine          `yaml:"monthdn"`
-	
+	AllUp   StatLine `yaml:"allup"`
+	AllDn   StatLine `yaml:"alldn"`
+	WkUp    StatLine `yaml:"wkup"`
+	WkDn    StatLine `yaml:"wkdn"`
+	DayUp   StatLine `yaml:"dayup"`
+	DayDn   StatLine `yaml:"daydn"`
+	MonthUp StatLine `yaml:"monthup"`
+	MonthDn StatLine `yaml:"monthdn"`
+
 	// Nuke Stats
-	NukeStat  StatLine          `yaml:"nukestat"`
-	
+	NukeStat StatLine `yaml:"nukestat"`
+
 	// Slot Configuration
 	UploadSlots   int `yaml:"upload_slots"`   // Max concurrent uploads
 	DownloadSlots int `yaml:"download_slots"` // Max concurrent downloads
+
+	// Raw userfile fields we preserve across load/save so imported glFTPD
+	// accounts keep their original shape instead of being flattened.
+	UserLine      string            `yaml:"-"`
+	GeneralLine   string            `yaml:"-"`
+	LoginsLine    string            `yaml:"-"`
+	TimeframeLine string            `yaml:"-"`
+	AddedBy       string            `yaml:"-"`
+	CreditsExtra  string            `yaml:"-"`
+	RatioExtra    string            `yaml:"-"`
+	StatExtras    map[string]string `yaml:"-"`
+	TimeFields    []string          `yaml:"-"`
 }
 
 // LoadUser reads user file - supports userfile format
@@ -73,13 +85,14 @@ func loadUserFile(name, path string, groupMap map[string]int) (*User, error) {
 
 	// Parse userfile format
 	u := &User{
-		Name:   name,  // Keep original case
-		Groups: make(map[string]int),
-		IPs:    []string{},
-		UID:    1000,  // default
-		GID:    300,   // default
+		Name:       name, // Keep original case
+		Groups:     make(map[string]int),
+		IPs:        []string{},
+		UID:        1000, // default
+		GID:        300,  // default
+		StatExtras: make(map[string]string),
 	}
-	
+
 	// Load UID/GID from passwd file
 	if passwdData, err := os.ReadFile("etc/passwd"); err == nil {
 		lines := strings.Split(string(passwdData), "\n")
@@ -96,7 +109,7 @@ func loadUserFile(name, path string, groupMap map[string]int) (*User, error) {
 			}
 		}
 	}
-	
+
 	// Simple goftpd parser inline
 	lines := strings.Split(string(data), "\n")
 	for _, line := range lines {
@@ -104,14 +117,26 @@ func loadUserFile(name, path string, groupMap map[string]int) (*User, error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		
+
 		parts := strings.Fields(line)
 		if len(parts) == 0 {
 			continue
 		}
-		
+
 		cmd := parts[0]
 		switch cmd {
+		case "USER":
+			if len(parts) > 1 {
+				u.UserLine = strings.Join(parts[1:], " ")
+			}
+		case "GENERAL":
+			if len(parts) > 1 {
+				u.GeneralLine = strings.Join(parts[1:], " ")
+			}
+		case "LOGINS":
+			if len(parts) > 1 {
+				u.LoginsLine = strings.Join(parts[1:], " ")
+			}
 		case "HOMEDIR":
 			if len(parts) > 1 {
 				u.HomeRoot = parts[1]
@@ -132,9 +157,15 @@ func loadUserFile(name, path string, groupMap map[string]int) (*User, error) {
 			if len(parts) > 1 {
 				fmt.Sscanf(parts[1], "%d", &u.Ratio)
 			}
+			if len(parts) > 2 {
+				u.RatioExtra = strings.Join(parts[2:], " ")
+			}
 		case "CREDITS":
 			if len(parts) > 1 {
 				fmt.Sscanf(parts[1], "%d", &u.Credits)
+			}
+			if len(parts) > 2 {
+				u.CreditsExtra = strings.Join(parts[2:], " ")
 			}
 		case "ALLUP", "ALLDN", "WKUP", "WKDN", "DAYUP", "DAYDN", "MONTHUP", "MONTHDN":
 			if len(parts) >= 4 {
@@ -143,7 +174,7 @@ func loadUserFile(name, path string, groupMap map[string]int) (*User, error) {
 				fmt.Sscanf(parts[2], "%d", &bytes)
 				fmt.Sscanf(parts[3], "%d", &meta)
 				stat := StatLine{Files: files, Bytes: bytes, Meta: meta}
-				
+
 				switch cmd {
 				case "ALLUP":
 					u.AllUp = stat
@@ -162,6 +193,9 @@ func loadUserFile(name, path string, groupMap map[string]int) (*User, error) {
 				case "MONTHDN":
 					u.MonthDn = stat
 				}
+				if len(parts) > 4 {
+					u.StatExtras[cmd] = strings.Join(parts[4:], " ")
+				}
 			}
 		case "NUKE":
 			if len(parts) >= 4 {
@@ -170,8 +204,14 @@ func loadUserFile(name, path string, groupMap map[string]int) (*User, error) {
 				fmt.Sscanf(parts[2], "%d", &times)
 				fmt.Sscanf(parts[3], "%d", &bytes)
 				u.NukeStat = StatLine{Files: times, Bytes: bytes, Meta: last}
+				if len(parts) > 4 {
+					u.StatExtras[cmd] = strings.Join(parts[4:], " ")
+				}
 			}
 		case "TIME":
+			if len(parts) > 1 {
+				u.TimeFields = append([]string(nil), parts[1:]...)
+			}
 			if len(parts) >= 3 {
 				var lastOn int64
 				fmt.Sscanf(parts[2], "%d", &lastOn)
@@ -180,6 +220,9 @@ func loadUserFile(name, path string, groupMap map[string]int) (*User, error) {
 		case "ADDED":
 			if len(parts) > 1 {
 				fmt.Sscanf(parts[1], "%d", &u.Added)
+			}
+			if len(parts) > 2 {
+				u.AddedBy = strings.Join(parts[2:], " ")
 			}
 		case "EXPIRES":
 			if len(parts) > 1 {
@@ -211,11 +254,12 @@ func loadUserFile(name, path string, groupMap map[string]int) (*User, error) {
 				fmt.Sscanf(parts[1], "%d", &u.DownloadSlots)
 			}
 		case "TIMEFRAME":
-			// Login timeframe limits are parsed from glftpd userfiles but are
-			// not enforced yet; do not treat them as account expiry.
+			if len(parts) > 1 {
+				u.TimeframeLine = strings.Join(parts[1:], " ")
+			}
 		}
 	}
-	
+
 	if u.HomeDir == "" {
 		u.HomeDir = "/"
 	}
@@ -228,7 +272,22 @@ func loadUserFile(name, path string, groupMap map[string]int) (*User, error) {
 			u.Groups[u.PrimaryGroup] = 0
 		}
 	}
-	
+	if u.UserLine == "" {
+		u.UserLine = "Added by GoFTPd"
+	}
+	if u.GeneralLine == "" {
+		u.GeneralLine = "0,120 -1 0 0"
+	}
+	if u.LoginsLine == "" {
+		u.LoginsLine = "0 0 -1 -1"
+	}
+	if u.TimeframeLine == "" {
+		u.TimeframeLine = "0 0"
+	}
+	if u.AddedBy == "" {
+		u.AddedBy = "goftpd"
+	}
+
 	// Set GID based on primary group
 	if groupMap != nil {
 		if u.PrimaryGroup != "" {
@@ -250,7 +309,7 @@ func loadUserFile(name, path string, groupMap map[string]int) (*User, error) {
 			}
 		}
 	}
-	
+
 	return u, nil
 }
 
@@ -275,42 +334,60 @@ func (u *User) Save() error {
 			u.Groups[u.PrimaryGroup] = 0
 		}
 	}
-	
+	if u.UserLine == "" {
+		u.UserLine = "Added by GoFTPd"
+	}
+	if u.GeneralLine == "" {
+		u.GeneralLine = "0,120 -1 0 0"
+	}
+	if u.LoginsLine == "" {
+		u.LoginsLine = "0 0 -1 -1"
+	}
+	if u.TimeframeLine == "" {
+		u.TimeframeLine = "0 0"
+	}
+	if u.AddedBy == "" {
+		u.AddedBy = "goftpd"
+	}
+	if u.StatExtras == nil {
+		u.StatExtras = make(map[string]string)
+	}
+
 	dir := filepath.Dir(path)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		os.MkdirAll(dir, 0755)
 	}
-	
+
 	file, err := os.Create(path)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
 
-	fmt.Fprintf(file, "USER Added by GoFTPd\n")
-	fmt.Fprintf(file, "GENERAL 0,120 -1 0 0\n")
-	fmt.Fprintf(file, "LOGINS 0 0 -1 -1\n")
-	fmt.Fprintf(file, "TIMEFRAME 0 0\n")
+	fmt.Fprintf(file, "USER %s\n", u.UserLine)
+	fmt.Fprintf(file, "GENERAL %s\n", u.GeneralLine)
+	fmt.Fprintf(file, "LOGINS %s\n", u.LoginsLine)
+	fmt.Fprintf(file, "TIMEFRAME %s\n", u.TimeframeLine)
 	fmt.Fprintf(file, "FLAGS %s\n", u.Flags)
 	fmt.Fprintf(file, "TAGLINE %s\n", u.Tagline)
 	fmt.Fprintf(file, "HOMEDIR %s\n", u.HomeRoot)
 	fmt.Fprintf(file, "DIR %s\n", u.HomeDir)
-	fmt.Fprintf(file, "ADDED %d goftpd\n", u.Added)
+	fmt.Fprintf(file, "ADDED %d %s\n", u.Added, u.AddedBy)
 	fmt.Fprintf(file, "EXPIRES %d\n", u.Expires)
-	fmt.Fprintf(file, "CREDITS %d\n", u.Credits)
-	fmt.Fprintf(file, "RATIO %d\n", u.Ratio)
+	writeValueLine(file, "CREDITS", u.Credits, u.CreditsExtra)
+	writeValueLine(file, "RATIO", int64(u.Ratio), u.RatioExtra)
 	fmt.Fprintf(file, "UPLOADSLOTS %d\n", u.UploadSlots)
 	fmt.Fprintf(file, "DOWNLOADSLOTS %d\n", u.DownloadSlots)
-	fmt.Fprintf(file, "ALLUP %d %d %d\n", u.AllUp.Files, u.AllUp.Bytes, u.AllUp.Meta)
-	fmt.Fprintf(file, "ALLDN %d %d %d\n", u.AllDn.Files, u.AllDn.Bytes, u.AllDn.Meta)
-	fmt.Fprintf(file, "WKUP %d %d %d\n", u.WkUp.Files, u.WkUp.Bytes, u.WkUp.Meta)
-	fmt.Fprintf(file, "WKDN %d %d %d\n", u.WkDn.Files, u.WkDn.Bytes, u.WkDn.Meta)
-	fmt.Fprintf(file, "DAYUP %d %d %d\n", u.DayUp.Files, u.DayUp.Bytes, u.DayUp.Meta)
-	fmt.Fprintf(file, "DAYDN %d %d %d\n", u.DayDn.Files, u.DayDn.Bytes, u.DayDn.Meta)
-	fmt.Fprintf(file, "MONTHUP %d %d %d\n", u.MonthUp.Files, u.MonthUp.Bytes, u.MonthUp.Meta)
-	fmt.Fprintf(file, "MONTHDN %d %d %d\n", u.MonthDn.Files, u.MonthDn.Bytes, u.MonthDn.Meta)
-	fmt.Fprintf(file, "NUKE %d %d %d\n", u.NukeStat.Meta, u.NukeStat.Files, u.NukeStat.Bytes)
-	fmt.Fprintf(file, "TIME %d %d 0 0\n", 0, u.LastLogin)
+	writeStatLine(file, "ALLUP", u.AllUp, u.StatExtras["ALLUP"])
+	writeStatLine(file, "ALLDN", u.AllDn, u.StatExtras["ALLDN"])
+	writeStatLine(file, "WKUP", u.WkUp, u.StatExtras["WKUP"])
+	writeStatLine(file, "WKDN", u.WkDn, u.StatExtras["WKDN"])
+	writeStatLine(file, "DAYUP", u.DayUp, u.StatExtras["DAYUP"])
+	writeStatLine(file, "DAYDN", u.DayDn, u.StatExtras["DAYDN"])
+	writeStatLine(file, "MONTHUP", u.MonthUp, u.StatExtras["MONTHUP"])
+	writeStatLine(file, "MONTHDN", u.MonthDn, u.StatExtras["MONTHDN"])
+	writeNukeLine(file, u.NukeStat, u.StatExtras["NUKE"])
+	writeTimeLine(file, u.TimeFields, u.LastLogin)
 
 	if u.PrimaryGroup != "" {
 		fmt.Fprintf(file, "PRIMARY_GROUP %s\n", u.PrimaryGroup)
@@ -352,7 +429,7 @@ func (u *User) UpdateStatsWithCredits(bytes int64, isUpload bool, applyCredits b
 		u.DayUp.Bytes += bytes
 		u.MonthUp.Files++
 		u.MonthUp.Bytes += bytes
-		
+
 		if applyCredits && u.Ratio > 0 {
 			u.Credits += (bytes * int64(u.Ratio))
 		}
@@ -365,7 +442,7 @@ func (u *User) UpdateStatsWithCredits(bytes int64, isUpload bool, applyCredits b
 		u.DayDn.Bytes += bytes
 		u.MonthDn.Files++
 		u.MonthDn.Bytes += bytes
-		
+
 		if applyCredits && u.Ratio > 0 {
 			u.Credits -= bytes
 			if u.Credits < 0 {
@@ -404,6 +481,43 @@ func (u *User) IsExpired() bool {
 		return false
 	}
 	return u.Expires < time.Now().Unix()
+}
+
+func writeValueLine(file *os.File, key string, value int64, extra string) {
+	if extra != "" {
+		fmt.Fprintf(file, "%s %d %s\n", key, value, extra)
+		return
+	}
+	fmt.Fprintf(file, "%s %d\n", key, value)
+}
+
+func writeStatLine(file *os.File, key string, stat StatLine, extra string) {
+	if extra != "" {
+		fmt.Fprintf(file, "%s %d %d %d %s\n", key, stat.Files, stat.Bytes, stat.Meta, extra)
+		return
+	}
+	fmt.Fprintf(file, "%s %d %d %d\n", key, stat.Files, stat.Bytes, stat.Meta)
+}
+
+func writeTimeLine(file *os.File, fields []string, lastLogin int64) {
+	if len(fields) == 0 {
+		fmt.Fprintf(file, "TIME %d %d 0 0\n", 0, lastLogin)
+		return
+	}
+	copied := append([]string(nil), fields...)
+	for len(copied) < 2 {
+		copied = append(copied, "0")
+	}
+	copied[1] = fmt.Sprintf("%d", lastLogin)
+	fmt.Fprintf(file, "TIME %s\n", strings.Join(copied, " "))
+}
+
+func writeNukeLine(file *os.File, stat StatLine, extra string) {
+	if extra != "" {
+		fmt.Fprintf(file, "NUKE %d %d %d %s\n", stat.Meta, stat.Files, stat.Bytes, extra)
+		return
+	}
+	fmt.Fprintf(file, "NUKE %d %d %d\n", stat.Meta, stat.Files, stat.Bytes)
 }
 
 func (u *User) IsDisabled() bool {

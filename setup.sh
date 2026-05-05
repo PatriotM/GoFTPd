@@ -2073,6 +2073,16 @@ normalize_glftpd_user_file() {
 
     awk '{ sub(/\r$/, ""); print }' "${source_file}" > "${target_file}"
 
+    if ! grep -Eq '^HOMEDIR[[:space:]]+' "${target_file}"; then
+        printf 'HOMEDIR /site\n' >> "${target_file}"
+    fi
+    if ! grep -Eq '^UPLOADSLOTS[[:space:]]+' "${target_file}"; then
+        printf 'UPLOADSLOTS 0\n' >> "${target_file}"
+    fi
+    if ! grep -Eq '^DOWNLOADSLOTS[[:space:]]+' "${target_file}"; then
+        printf 'DOWNLOADSLOTS 0\n' >> "${target_file}"
+    fi
+
     if [ -n "${primary_group}" ]; then
         if ! grep -Eq '^PRIMARY(_GROUP)?[[:space:]]+' "${target_file}"; then
             printf 'PRIMARY_GROUP %s\n' "${primary_group}" >> "${target_file}"
