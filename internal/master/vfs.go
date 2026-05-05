@@ -65,6 +65,7 @@ type VirtualFileSystem struct {
 	raceDirty      map[string]bool
 	protectedDirs  map[string]bool
 	hiddenPaths    map[string]bool
+	excludePaths   map[string]bool
 	persistVersion uint64
 	savedVersion   uint64
 	mu             sync.RWMutex
@@ -79,6 +80,7 @@ func NewVirtualFileSystem() *VirtualFileSystem {
 		raceDirty:     make(map[string]bool),
 		protectedDirs: make(map[string]bool),
 		hiddenPaths:   make(map[string]bool),
+		excludePaths:  make(map[string]bool),
 	}
 	vfs.files["/"] = &VFSFile{Path: "/", IsDir: true, Seen: true}
 	vfs.children["/"] = make(map[string]struct{})
@@ -100,6 +102,13 @@ func (vfs *VirtualFileSystem) AddFile(path string, file VFSFile) {
 	}
 	if vfs.hiddenPaths == nil {
 		vfs.hiddenPaths = make(map[string]bool)
+	}
+	if vfs.excludePaths == nil {
+		vfs.excludePaths = make(map[string]bool)
+	}
+	if vfs.isExcludedPathLocked(path) {
+		delete(vfs.files, path)
+		return
 	}
 	if vfs.isHiddenPathLocked(path) {
 		delete(vfs.files, path)
@@ -145,6 +154,21 @@ func (vfs *VirtualFileSystem) SetHiddenPaths(paths []string) {
 		vfs.hiddenPaths[p] = true
 	}
 	vfs.pruneHiddenPathsLocked()
+}
+
+func (vfs *VirtualFileSystem) SetExcludePaths(paths []string) {
+	vfs.mu.Lock()
+	defer vfs.mu.Unlock()
+
+	vfs.excludePaths = make(map[string]bool, len(paths))
+	for _, p := range paths {
+		p = cleanVFSPath(p)
+		if p == "" || p == "." || p == "/" {
+			continue
+		}
+		vfs.excludePaths[p] = true
+	}
+	vfs.pruneExcludedPathsLocked()
 }
 
 func (vfs *VirtualFileSystem) AddSymlink(linkPath, targetPath string) {
@@ -270,6 +294,9 @@ func (vfs *VirtualFileSystem) GetFile(path string) *VFSFile {
 	vfs.mu.RLock()
 	defer vfs.mu.RUnlock()
 	path = cleanVFSPath(path)
+	if vfs.isExcludedPathLocked(path) {
+		return nil
+	}
 	if vfs.isHiddenPathLocked(path) {
 		return nil
 	}
@@ -752,6 +779,10 @@ func (vfs *VirtualFileSystem) LoadFromDisk(filePath string) error {
 	if vfs.hiddenPaths == nil {
 		vfs.hiddenPaths = make(map[string]bool)
 	}
+	if vfs.excludePaths == nil {
+		vfs.excludePaths = make(map[string]bool)
+	}
+	vfs.pruneExcludedPathsLocked()
 	vfs.pruneHiddenPathsLocked()
 	vfs.rebuildChildrenLocked()
 	vfs.invalidateAllRaceStatesLocked()
@@ -773,6 +804,42 @@ func (vfs *VirtualFileSystem) isHiddenPathLocked(p string) bool {
 		}
 	}
 	return false
+}
+
+func (vfs *VirtualFileSystem) isExcludedPathLocked(p string) bool {
+	p = cleanVFSPath(p)
+	if p == "/" || p == "" {
+		return false
+	}
+	for excluded := range vfs.excludePaths {
+		if p == excluded || strings.HasPrefix(p, excluded+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func (vfs *VirtualFileSystem) IsExcludedPath(p string) bool {
+	vfs.mu.RLock()
+	defer vfs.mu.RUnlock()
+	return vfs.isExcludedPathLocked(p)
+}
+
+func (vfs *VirtualFileSystem) pruneExcludedPathsLocked() {
+	changed := false
+	for p := range vfs.files {
+		if vfs.isExcludedPathLocked(p) {
+			delete(vfs.files, p)
+			delete(vfs.dirMeta, p)
+			delete(vfs.raceState, p)
+			changed = true
+		}
+	}
+	if changed {
+		vfs.rebuildChildrenLocked()
+		vfs.invalidateAllRaceStatesLocked()
+		vfs.markPersistDirtyLocked()
+	}
 }
 
 func (vfs *VirtualFileSystem) pruneHiddenPathsLocked() {

@@ -183,6 +183,17 @@ hidden_vfs_paths:
   # - "/ARCHiVE/_incoming"
   # - "/private-tools"
 
+# =============================================================================
+#  Exclude VFS paths — do not index these subtrees into the master VFS.
+#
+#  Use this for huge backup/archive trees you never want listed, searched, or
+#  remerged into the visible FTP view. Unlike hidden_vfs_paths, this also skips
+#  these paths during slave remerge processing.
+# =============================================================================
+exclude_vfs_paths:
+  # - "/backup"
+  # - "/ARCHiVE"
+
 
 # =============================================================================
 #  Storage + paths
