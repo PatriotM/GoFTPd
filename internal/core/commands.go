@@ -1204,6 +1204,15 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					if sfvEntries, err := bridge.GetSFVInfo(filePath); err == nil {
 						log.Printf("[MASTER-ZS] Parsed SFV %s: %d entries", fileName, len(sfvEntries))
 						bridge.CacheSFV(uploadDir, fileName, sfvEntries)
+						reconcile := reconcileReleaseSFVEntries(bridge, uploadDir, sfvEntries)
+						if len(reconcile.Errors) > 0 {
+							for _, errText := range reconcile.Errors {
+								log.Printf("[MASTER-ZS] SFV reconcile %s: %s", uploadDir, errText)
+							}
+						}
+						if reconcile.Bad > 0 || reconcile.Missing > 0 {
+							log.Printf("[MASTER-ZS] SFV reconcile %s: ok=%d missing=%d bad=%d", uploadDir, reconcile.OK, reconcile.Missing, reconcile.Bad)
+						}
 					}
 				}
 				if err := refreshZipDIZFromArchive(bridge, uploadDir, filePath, fileName); err != nil && s.Config.Debug {
@@ -1350,6 +1359,15 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					if sfvEntries, err := bridge.GetSFVInfo(filePath); err == nil {
 						log.Printf("[MASTER-ZS] Parsed SFV %s: %d entries", fileName, len(sfvEntries))
 						bridge.CacheSFV(uploadDir, fileName, sfvEntries)
+						reconcile := reconcileReleaseSFVEntries(bridge, uploadDir, sfvEntries)
+						if len(reconcile.Errors) > 0 {
+							for _, errText := range reconcile.Errors {
+								log.Printf("[MASTER-ZS] SFV reconcile %s: %s", uploadDir, errText)
+							}
+						}
+						if reconcile.Bad > 0 || reconcile.Missing > 0 {
+							log.Printf("[MASTER-ZS] SFV reconcile %s: ok=%d missing=%d bad=%d", uploadDir, reconcile.OK, reconcile.Missing, reconcile.Bad)
+						}
 					}
 				}
 				if err := refreshZipDIZFromArchive(bridge, uploadDir, filePath, fileName); err != nil && s.Config.Debug {

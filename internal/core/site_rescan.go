@@ -21,6 +21,15 @@ type rescanReleaseResult struct {
 	Errors       []string
 }
 
+type sfvReconcileResult struct {
+	OK           int
+	Missing      int
+	Bad          int
+	MissingFiles []string
+	BadFiles     []string
+	Errors       []string
+}
+
 func (s *Session) HandleSiteRescan(args []string) bool {
 	if len(args) == 0 || strings.TrimSpace(strings.Join(args, " ")) == "" {
 		fmt.Fprintf(s.Conn, "501 Usage: SITE RESCAN <path|path/*>\r\n")
@@ -78,7 +87,39 @@ func (s *Session) rescanRelease(bridge MasterBridge, releasePath string) rescanR
 	}
 	bridge.CacheSFV(releasePath, sfvName, entries)
 	result.Total = len(entries)
+	reconcile := reconcileReleaseSFVEntries(bridge, releasePath, entries)
+	result.OK = reconcile.OK
+	result.Missing = reconcile.Missing
+	result.Bad = reconcile.Bad
+	result.MissingFiles = reconcile.MissingFiles
+	result.BadFiles = reconcile.BadFiles
+	result.Errors = append(result.Errors, reconcile.Errors...)
 
+	if shouldRefreshRescanMediaInfo(s.Config, releasePath) {
+		if candidate, ok := findAudioRescanCandidate(bridge, releasePath); ok {
+			binary, timeoutSeconds := zipscriptMediaInfoSettings(s.Config)
+			fields, err := bridge.ProbeMediaInfo(candidate, binary, timeoutSeconds)
+			if err != nil {
+				if s.Config != nil && s.Config.Debug {
+					result.Errors = append(result.Errors, fmt.Sprintf("mediainfo refresh skipped: %v", err))
+				}
+			} else if len(fields) > 0 {
+				previousFields := cloneStringMap(bridge.GetDirMediaInfo(releasePath))
+				bridge.CacheMediaInfo(releasePath, fields)
+				if err := refreshAudioSortLinks(bridge, s.Config.Zipscript, releasePath, previousFields, fields); err != nil {
+					if s.Config != nil && s.Config.Debug {
+						result.Errors = append(result.Errors, fmt.Sprintf("audio sort refresh skipped: %v", err))
+					}
+				}
+			}
+		}
+	}
+
+	return result
+}
+
+func reconcileReleaseSFVEntries(bridge MasterBridge, releasePath string, entries []SFVEntryInfo) sfvReconcileResult {
+	result := sfvReconcileResult{}
 	for _, entry := range entries {
 		filePath := path.Join(releasePath, entry.FileName)
 		missingPath := filePath + "-MISSING"
@@ -113,27 +154,6 @@ func (s *Session) rescanRelease(bridge MasterBridge, releasePath string) rescanR
 			_ = bridge.DeleteFile(missingPath)
 		}
 	}
-
-	if shouldRefreshRescanMediaInfo(s.Config, releasePath) {
-		if candidate, ok := findAudioRescanCandidate(bridge, releasePath); ok {
-			binary, timeoutSeconds := zipscriptMediaInfoSettings(s.Config)
-			fields, err := bridge.ProbeMediaInfo(candidate, binary, timeoutSeconds)
-			if err != nil {
-				if s.Config != nil && s.Config.Debug {
-					result.Errors = append(result.Errors, fmt.Sprintf("mediainfo refresh skipped: %v", err))
-				}
-			} else if len(fields) > 0 {
-				previousFields := cloneStringMap(bridge.GetDirMediaInfo(releasePath))
-				bridge.CacheMediaInfo(releasePath, fields)
-				if err := refreshAudioSortLinks(bridge, s.Config.Zipscript, releasePath, previousFields, fields); err != nil {
-					if s.Config != nil && s.Config.Debug {
-						result.Errors = append(result.Errors, fmt.Sprintf("audio sort refresh skipped: %v", err))
-					}
-				}
-			}
-		}
-	}
-
 	return result
 }
 
