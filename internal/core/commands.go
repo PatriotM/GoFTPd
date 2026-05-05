@@ -343,11 +343,8 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				s.CurrentDir = path.Clean(bridge.ResolvePath(s.CurrentDir))
 				parent := path.Dir(s.CurrentDir)
 				name := path.Base(s.CurrentDir)
-				pattern := activeIncompleteIndicator(s.Config)
-				if isIncompleteMarkerName(pattern, name) {
-					if resolved := resolveIncompleteMarkerTarget(bridge, s.Config, pattern, parent, name); resolved != "" {
-						s.CurrentDir = resolved
-					}
+				if resolved := resolveKnownMarkerTarget(bridge, s.Config, parent, name); resolved != "" {
+					s.CurrentDir = resolved
 				}
 			}
 		}
@@ -1866,6 +1863,33 @@ func resolveIncompleteMarkerTarget(bridge MasterBridge, cfg *Config, pattern, pa
 	for _, marker := range incompleteMarkerEntries(bridge, cfg, pattern, parent, bridge.ListDir(parent)) {
 		if marker.Name == name && marker.LinkTarget != "" {
 			return path.Clean(marker.LinkTarget)
+		}
+	}
+	return ""
+}
+
+func resolveKnownMarkerTarget(bridge MasterBridge, cfg *Config, parent, name string) string {
+	if bridge == nil || cfg == nil {
+		return ""
+	}
+	patterns := []string{
+		activeIncompleteIndicator(cfg),
+		zipscript.NoSFVIndicator(cfg.Zipscript),
+		zipscript.NFOIndicator(cfg.Zipscript),
+		zipscript.CDIndicator(cfg.Zipscript),
+	}
+	seen := make(map[string]struct{}, len(patterns))
+	for _, pattern := range patterns {
+		pattern = strings.TrimSpace(pattern)
+		if pattern == "" {
+			continue
+		}
+		if _, ok := seen[pattern]; ok {
+			continue
+		}
+		seen[pattern] = struct{}{}
+		if resolved := resolveIncompleteMarkerTarget(bridge, cfg, pattern, parent, name); resolved != "" {
+			return resolved
 		}
 	}
 	return ""
