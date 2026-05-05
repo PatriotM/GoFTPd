@@ -1687,6 +1687,10 @@ func incompleteMarkerName2(pattern, relname, child string) string {
 	return pattern
 }
 
+func markerLinkTarget(dirPath, relName string) string {
+	return path.Clean(path.Join("/", strings.TrimSpace(dirPath), strings.TrimSpace(relName)))
+}
+
 func isIncompleteMarkerName(pattern, name string) bool {
 	pattern = strings.TrimSpace(pattern)
 	if pattern == "" {
@@ -1723,7 +1727,7 @@ func incompleteMarkerEntries(bridge MasterBridge, cfg *Config, pattern, dirPath 
 		if !e.IsDir || e.IsSymlink || strings.HasPrefix(e.Name, ".") || isIncompleteMarkerName(pattern, e.Name) {
 			continue
 		}
-		releasePath := path.Join(dirPath, e.Name)
+		releasePath := markerLinkTarget(dirPath, e.Name)
 		if !zipscript.UsesReleaseCheckEntry(cfg.Zipscript, releasePath) {
 			continue
 		}
@@ -1862,7 +1866,15 @@ func resolveIncompleteMarkerTarget(bridge MasterBridge, cfg *Config, pattern, pa
 	}
 	for _, marker := range incompleteMarkerEntries(bridge, cfg, pattern, parent, bridge.ListDir(parent)) {
 		if marker.Name == name && marker.LinkTarget != "" {
-			return path.Clean(marker.LinkTarget)
+			target := path.Clean("/" + strings.TrimSpace(marker.LinkTarget))
+			if bridge.FileExists(target) {
+				return target
+			}
+			rebased := markerLinkTarget(parent, path.Base(target))
+			if bridge.FileExists(rebased) {
+				return rebased
+			}
+			return target
 		}
 	}
 	return ""

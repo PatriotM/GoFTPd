@@ -41,6 +41,25 @@ func VFSUploaderBytes(entries []MasterFileEntry) map[string]int64 {
 	return uploaderBytes
 }
 
+func DirUploaderBytes(bridge MasterBridge, dirPath string) map[string]int64 {
+	if bridge != nil {
+		if users, _, _, _, _ := bridge.GetVFSRaceStats(dirPath); len(users) > 0 {
+			uploaderBytes := make(map[string]int64, len(users))
+			for _, u := range users {
+				if strings.TrimSpace(u.Name) == "" || u.Bytes <= 0 {
+					continue
+				}
+				uploaderBytes[u.Name] += u.Bytes
+			}
+			if len(uploaderBytes) > 0 {
+				return uploaderBytes
+			}
+		}
+		return VFSUploaderBytes(bridge.ListDir(dirPath))
+	}
+	return nil
+}
+
 func BuildNukeUserStats(uploaderBytes map[string]int64) []NukeUserStat {
 	stats := make([]NukeUserStat, 0, len(uploaderBytes))
 	for username, bytes := range uploaderBytes {
@@ -132,7 +151,7 @@ func PerformSystemNuke(bridge MasterBridge, groupMap map[string]int, dirPath str
 	if strings.HasPrefix(releaseName, nukedPrefix) {
 		return nil, fmt.Errorf("directory is already nuked: %s", dirPath)
 	}
-	uploaderBytes := VFSUploaderBytes(bridge.ListDir(dirPath))
+	uploaderBytes := DirUploaderBytes(bridge, dirPath)
 	totalNuked := ApplyNukeCredits(groupMap, uploaderBytes, multiplier)
 	newName := nukedPrefix + releaseName
 	bridge.RenameFile(dirPath, path.Dir(dirPath), newName)
