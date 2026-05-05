@@ -312,6 +312,33 @@ func TestSetHiddenPathsPrunesAndHidesSubtrees(t *testing.T) {
 	}
 }
 
+func TestSetExcludePathsPrunesAndSkipsSubtrees(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/ARCHiVE", VFSFile{Path: "/ARCHiVE", IsDir: true, Seen: true})
+	vfs.AddFile("/ARCHiVE/backup", VFSFile{Path: "/ARCHiVE/backup", IsDir: true, Seen: true})
+	vfs.AddFile("/ARCHiVE/backup/release", VFSFile{Path: "/ARCHiVE/backup/release", IsDir: true, Seen: true})
+	vfs.AddFile("/ARCHiVE/visible", VFSFile{Path: "/ARCHiVE/visible", IsDir: true, Seen: true})
+
+	vfs.SetExcludePaths([]string{"/ARCHiVE/backup"})
+
+	if got := vfs.GetFile("/ARCHiVE/backup"); got != nil {
+		t.Fatalf("expected excluded path to be absent from VFS, got %+v", got)
+	}
+	if got := vfs.GetFile("/ARCHiVE/backup/release"); got != nil {
+		t.Fatalf("expected excluded subtree path to be absent from VFS, got %+v", got)
+	}
+
+	children := vfs.ListDirectory("/ARCHiVE")
+	if len(children) != 1 || children[0].Path != "/ARCHiVE/visible" {
+		t.Fatalf("expected only visible child after exclude, got %+v", children)
+	}
+
+	vfs.AddFile("/ARCHiVE/backup/new-release", VFSFile{Path: "/ARCHiVE/backup/new-release", IsDir: true, Seen: true})
+	if got := vfs.GetFile("/ARCHiVE/backup/new-release"); got != nil {
+		t.Fatalf("expected new excluded path to be ignored, got %+v", got)
+	}
+}
+
 func TestVFSResolvePathFollowsSymlinkSegments(t *testing.T) {
 	vfs := NewVirtualFileSystem()
 

@@ -211,6 +211,10 @@ func (sm *SlaveManager) SetHiddenPaths(paths []string) {
 	sm.vfs.SetHiddenPaths(paths)
 }
 
+func (sm *SlaveManager) SetExcludePaths(paths []string) {
+	sm.vfs.SetExcludePaths(paths)
+}
+
 func (sm *SlaveManager) SetBootstrapDirs(paths []string) {
 	sm.bootstrapDirsMu.Lock()
 	defer sm.bootstrapDirsMu.Unlock()
@@ -727,6 +731,9 @@ func (sm *SlaveManager) ProcessRemerge(rs *RemoteSlave, resp *protocol.AsyncResp
 			path = "/" + inode.Name
 		} else {
 			path = resp.Path + "/" + inode.Name
+		}
+		if sm.vfs.IsExcludedPath(path) {
+			continue
 		}
 
 		// Keep trusted FTP owner/group metadata instead of replacing it with OS ownership.

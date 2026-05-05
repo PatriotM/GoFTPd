@@ -48,6 +48,9 @@ type Config struct {
 	// HiddenVFSPaths are master-side virtual paths/subtrees that should be
 	// suppressed from the VFS even if they exist on a slave.
 	HiddenVFSPaths []string `yaml:"hidden_vfs_paths"`
+	// ExcludeVFSPaths are virtual paths/subtrees that should be skipped from
+	// remerge indexing and omitted from the VFS entirely.
+	ExcludeVFSPaths []string `yaml:"exclude_vfs_paths"`
 
 	// InviteChannels maps channel names to required user flags. Channels
 	// not listed here are considered public and returned to every user

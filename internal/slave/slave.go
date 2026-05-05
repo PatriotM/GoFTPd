@@ -873,7 +873,6 @@ func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
 			// Get VFS-relative path
 			relPath, _ := filepath.Rel(root, fullPath)
 			relPath = "/" + filepath.ToSlash(relPath)
-
 			// Parent dir in VFS
 			parentDir := filepath.ToSlash(filepath.Dir(relPath))
 			if parentDir == "." {
