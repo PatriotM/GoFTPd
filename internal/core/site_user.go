@@ -544,9 +544,11 @@ func (s *Session) authenticateSelfIPUser(username, password string) (*user.User,
 	}
 
 	passwordOK := false
+	matchedHash := ""
 	passwds, err := LoadPasswdFile(s.Config.PasswdFile)
 	if err == nil {
 		if hash, ok := passwds[u.Name]; ok {
+			matchedHash = hash
 			passwordOK = VerifyPassword(password, hash)
 		}
 	}
@@ -555,6 +557,15 @@ func (s *Session) authenticateSelfIPUser(username, password string) (*user.User,
 	}
 	if !passwordOK {
 		return nil, "password not accepted"
+	}
+	if matchedHash != "" {
+		if upgraded, err := UpgradeLegacyPasswordHash(u.Name, password, matchedHash, s.Config.PasswdFile); err != nil {
+			if s.Config.Debug {
+				log.Printf("[SELFIP] User %s legacy hash upgrade failed: %v", u.Name, err)
+			}
+		} else if upgraded && s.Config.Debug {
+			log.Printf("[SELFIP] Upgraded legacy password hash to bcrypt for %s", u.Name)
+		}
 	}
 	return u, ""
 }

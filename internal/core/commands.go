@@ -230,9 +230,11 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			}
 
 			passwordOK := false
+			matchedHash := ""
 			passwds, err := LoadPasswdFile(s.Config.PasswdFile)
 			if err == nil {
 				if hash, ok := passwds[s.User.Name]; ok {
+					matchedHash = hash
 					passwordOK = VerifyPassword(pass, hash)
 				}
 			}
@@ -243,6 +245,15 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				s.emitLoginFailure(s.User.Name, remoteIP, "bad_password")
 				fmt.Fprintf(s.Conn, "530 Login incorrect.\r\n")
 				return false
+			}
+			if matchedHash != "" {
+				if upgraded, err := UpgradeLegacyPasswordHash(s.User.Name, pass, matchedHash, s.Config.PasswdFile); err != nil {
+					if s.Config.Debug {
+						log.Printf("[PASS] User %s legacy hash upgrade failed: %v", s.User.Name, err)
+					}
+				} else if upgraded && s.Config.Debug {
+					log.Printf("[PASS] Upgraded legacy password hash to bcrypt for %s", s.User.Name)
+				}
 			}
 
 			if !s.User.IPAllowed(remoteIP) {
