@@ -50,8 +50,10 @@ type User struct {
 	NukeStat StatLine `yaml:"nukestat"`
 
 	// Slot Configuration
-	UploadSlots   int `yaml:"upload_slots"`   // Max concurrent uploads
-	DownloadSlots int `yaml:"download_slots"` // Max concurrent downloads
+	UploadSlots      int  `yaml:"upload_slots"`   // Max concurrent uploads
+	DownloadSlots    int  `yaml:"download_slots"` // Max concurrent downloads
+	UploadSlotsSet   bool `yaml:"-"`
+	DownloadSlotsSet bool `yaml:"-"`
 
 	// Raw userfile fields we preserve across load/save so imported glFTPD
 	// accounts keep their original shape instead of being flattened.
@@ -248,10 +250,12 @@ func loadUserFile(name, path string, groupMap map[string]int) (*User, error) {
 		case "UPLOADSLOTS":
 			if len(parts) > 1 {
 				fmt.Sscanf(parts[1], "%d", &u.UploadSlots)
+				u.UploadSlotsSet = true
 			}
 		case "DOWNLOADSLOTS":
 			if len(parts) > 1 {
 				fmt.Sscanf(parts[1], "%d", &u.DownloadSlots)
+				u.DownloadSlotsSet = true
 			}
 		case "TIMEFRAME":
 			if len(parts) > 1 {
@@ -287,6 +291,9 @@ func loadUserFile(name, path string, groupMap map[string]int) (*User, error) {
 	if u.AddedBy == "" {
 		u.AddedBy = "goftpd"
 	}
+	if u.LoginsLine != "" && (!u.UploadSlotsSet || !u.DownloadSlotsSet || (u.UploadSlots == 0 && u.DownloadSlots == 0)) {
+		u.deriveSlotsFromLogins()
+	}
 
 	// Set GID based on primary group
 	if groupMap != nil {
@@ -311,6 +318,24 @@ func loadUserFile(name, path string, groupMap map[string]int) (*User, error) {
 	}
 
 	return u, nil
+}
+
+func (u *User) deriveSlotsFromLogins() {
+	fields := strings.Fields(u.LoginsLine)
+	if len(fields) < 4 {
+		return
+	}
+	var uploadSlots, downloadSlots int
+	fmt.Sscanf(fields[2], "%d", &uploadSlots)
+	fmt.Sscanf(fields[3], "%d", &downloadSlots)
+	if !u.UploadSlotsSet || u.UploadSlots == 0 {
+		u.UploadSlots = uploadSlots
+		u.UploadSlotsSet = true
+	}
+	if !u.DownloadSlotsSet || u.DownloadSlots == 0 {
+		u.DownloadSlots = downloadSlots
+		u.DownloadSlotsSet = true
+	}
 }
 
 // Save writes user back to userfile-format file

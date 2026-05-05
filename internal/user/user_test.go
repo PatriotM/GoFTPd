@@ -68,6 +68,12 @@ func TestLoadAndSavePreservesImportedUserfileFields(t *testing.T) {
 	if err := u.Save(); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
+	if u.UploadSlots != 6 {
+		t.Fatalf("UploadSlots = %d, want 6 derived from LOGINS", u.UploadSlots)
+	}
+	if u.DownloadSlots != 10 {
+		t.Fatalf("DownloadSlots = %d, want 10 derived from LOGINS", u.DownloadSlots)
+	}
 
 	out, err := os.ReadFile(userPath)
 	if err != nil {
@@ -82,8 +88,8 @@ func TestLoadAndSavePreservesImportedUserfileFields(t *testing.T) {
 		"ADDED 1712306777 glftpd",
 		"CREDITS 245752440015 0",
 		"RATIO 3 -1",
-		"UPLOADSLOTS 0",
-		"DOWNLOADSLOTS 0",
+		"UPLOADSLOTS 6",
+		"DOWNLOADSLOTS 10",
 		"ALLUP 962989 106564602869 283909879 0 0 0",
 		"NUKE 1777936801 1069 2480594 0 0 0",
 		"TIME 1602990 1778010002 0 235935",
