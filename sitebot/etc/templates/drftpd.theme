@@ -430,10 +430,10 @@ announce.TOPICCMD_ERROR = "%b{%c02{TOPIC:}} %c04{%response}"
 announce.TOPICCMD_DENIED = "%b{%c02{TOPIC:}} %c04{Staff command only.}"
 announce.TOPICCMD_USAGE = "%b{%c02{TOPIC:}} %c01{Usage:} %c05{!topic #channel topic text}"
 
-announce.NUKE = "%u{%c04{/}%c08,04%b{!}%c04{\\}} %b{%c15{NUKE}} %u{%c04{/}%c08,04%b{!}%c04{\\}} %c01{in }%section_colored%c01{: -> }%b{%relname}%b"
-announce.NUKE_FACTOR = "%b{%c15{NUKER}} %c01{: }%b{%user}%b %c01{- factor }%b{%multiplier_label}%b"
-announce.NUKE_REASON = "%b{%c15{REASON}} %c01{: }%b{%reason}%b"
-announce.NUKE_NUKEES = "%b{%c15{NUKEES}} %c01{: }%nukees"
+announce.NUKE = "%b{%c15{NUKE:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}}"
+announce.NUKE_FACTOR = "%b{%c15{NUKER:}} %c%sec_c4{%b{%user}} %c01{- factor }%c%sec_c5{%b{%multiplier_label}}"
+announce.NUKE_REASON = "%b{%c15{REASON:}} %c04{%b{%reason}}"
+announce.NUKE_NUKEES = "%b{%c15{NUKEES:}} %c07{%nukees}"
 
 announce.UNNUKE = "%b{%c15{UNNUKE}} %c01{in }%section_colored%c01{: -> }%b{%relname}%b %c01{by }%b{%user}%b"
 
