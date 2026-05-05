@@ -36,7 +36,6 @@ type Slave struct {
 	masterHost  string
 	masterPort  int
 	roots       []string // local filesystem roots (1, slave.root.2)
-	excludeVFSPaths []string
 	pasvPortMin int
 	pasvPortMax int
 	pasvNext    uint32
@@ -74,7 +73,6 @@ type SlaveConfig struct {
 	MasterHost  string   `yaml:"master_host"`
 	MasterPort  int      `yaml:"master_port"`
 	Roots       []string `yaml:"roots"` // e.g. ["/data/site", "/data2/site"]
-	ExcludeVFSPaths []string `yaml:"exclude_vfs_paths"`
 	PasvPortMin int      `yaml:"pasv_port_min"`
 	PasvPortMax int      `yaml:"pasv_port_max"`
 	TLSEnabled  bool     `yaml:"tls_enabled"`
@@ -97,7 +95,6 @@ func NewSlave(cfg SlaveConfig) *Slave {
 		masterHost:  cfg.MasterHost,
 		masterPort:  cfg.MasterPort,
 		roots:       cfg.Roots,
-		excludeVFSPaths: normalizeExcludeVFSPaths(cfg.ExcludeVFSPaths),
 		pasvPortMin: cfg.PasvPortMin,
 		pasvPortMax: cfg.PasvPortMax,
 		tlsEnabled:  cfg.TLSEnabled,
@@ -876,13 +873,6 @@ func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
 			// Get VFS-relative path
 			relPath, _ := filepath.Rel(root, fullPath)
 			relPath = "/" + filepath.ToSlash(relPath)
-			if isExcludedVFSPath(relPath, s.excludeVFSPaths) {
-				if info.IsDir() {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-
 			// Parent dir in VFS
 			parentDir := filepath.ToSlash(filepath.Dir(relPath))
 			if parentDir == "." {
@@ -926,37 +916,6 @@ func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
 
 	log.Printf("[Slave] Remerge complete: %d files, %d dirs across %d sent directories", totalFiles, totalDirs, sentDirs)
 	return &protocol.AsyncResponse{Index: ac.Index}
-}
-
-func normalizeExcludeVFSPaths(paths []string) []string {
-	out := make([]string, 0, len(paths))
-	seen := make(map[string]struct{}, len(paths))
-	for _, p := range paths {
-		p = path.Clean("/" + strings.TrimSpace(filepath.ToSlash(p)))
-		if p == "/" || p == "." || p == "" {
-			continue
-		}
-		if _, ok := seen[p]; ok {
-			continue
-		}
-		seen[p] = struct{}{}
-		out = append(out, p)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func isExcludedVFSPath(p string, excluded []string) bool {
-	p = path.Clean("/" + strings.TrimSpace(filepath.ToSlash(p)))
-	if p == "/" || p == "." || p == "" {
-		return false
-	}
-	for _, root := range excluded {
-		if p == root || strings.HasPrefix(p, root+"/") {
-			return true
-		}
-	}
-	return false
 }
 
 // handleSFVFile - slave parses an SFV file and sends the entries to master.

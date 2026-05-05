@@ -509,7 +509,6 @@ func startSlave(cfg *core.Config) {
 		MasterHost:  masterHost,
 		MasterPort:  masterPort,
 		Roots:       roots,
-		ExcludeVFSPaths: cfg.ExcludeVFSPaths,
 		PasvPortMin: pasvMin,
 		PasvPortMax: pasvMax,
 		TLSEnabled:  cfg.TLSEnabled,
