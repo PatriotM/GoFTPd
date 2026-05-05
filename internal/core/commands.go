@@ -1473,6 +1473,14 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					fmt.Fprintf(s.Conn, "550 File not found on any slave.\r\n")
 					return false
 				}
+				if activeUploadForPath(filePath) {
+					fmt.Fprintf(s.Conn, "550 No Permission To Download A File Currently Being Uploaded.\r\n")
+					return false
+				}
+				if shouldTreatDownloadAsMissing(s.Config, bridge, filePath) {
+					fmt.Fprintf(s.Conn, "550 File is incomplete or failed checksum verification.\r\n")
+					return false
+				}
 				if restOffset > fileSize {
 					fmt.Fprintf(s.Conn, "550 Resume offset beyond end of file.\r\n")
 					return false
@@ -2179,12 +2187,51 @@ func raceCRCKey(name string) string {
 	return strings.ToLower(name)
 }
 
+func activeUploadForPath(filePath string) bool {
+	cleanPath := path.Clean(filePath)
+	for _, snap := range listActiveSessions() {
+		if snap.TransferDirection != "upload" {
+			continue
+		}
+		if path.Clean(snap.TransferPath) == cleanPath {
+			return true
+		}
+	}
+	return false
+}
+
 func cachedExpectedCRC(sfvEntries map[string]uint32, fileName string) (uint32, bool) {
 	if sfvEntries == nil {
 		return 0, false
 	}
 	crc, ok := sfvEntries[raceCRCKey(fileName)]
 	return crc, ok
+}
+
+func shouldTreatDownloadAsMissing(cfg *Config, bridge MasterBridge, filePath string) bool {
+	if cfg == nil || bridge == nil {
+		return false
+	}
+	dirPath := path.Dir(filePath)
+	expectedCRC, exists := cachedExpectedCRC(bridge.GetSFVData(dirPath), path.Base(filePath))
+	if !exists || expectedCRC == 0 {
+		return false
+	}
+	checksum, err := bridge.ChecksumFile(filePath)
+	if err != nil || checksum == expectedCRC {
+		return false
+	}
+	if zipscript.ShouldDeleteBadCRCForDir(cfg.Zipscript, dirPath) {
+		if err := bridge.DeleteFile(filePath); err != nil && cfg.Debug {
+			log.Printf("[MASTER-ZS] download-time bad CRC delete failed for %s: %v", filePath, err)
+		}
+		_ = bridge.MarkFileMissing(filePath)
+		missingPath := filePath + "-MISSING"
+		if bridge.GetFileSize(missingPath) < 0 {
+			_ = bridge.WriteFile(missingPath, []byte{})
+		}
+	}
+	return true
 }
 
 func zipscriptMediaInfoSettings(cfg *Config) (string, int) {
