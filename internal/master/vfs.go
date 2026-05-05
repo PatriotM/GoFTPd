@@ -238,13 +238,40 @@ func (vfs *VirtualFileSystem) PurgeUnseen(slaveName string) {
 			continue
 		}
 		if file.SlaveName == slaveName && !file.Seen {
-			delete(vfs.files, path)
-			changed = true
+			changed = vfs.deletePathLocked(path) || changed
 		}
 	}
 	if changed {
-		vfs.rebuildChildrenLocked()
 		vfs.invalidateAllRaceStatesLocked()
+		vfs.markPersistDirtyLocked()
+	}
+}
+
+// PurgeUnseenChildren removes stale direct children for a remerged directory
+// immediately, instead of waiting for the slave's full remerge to complete.
+func (vfs *VirtualFileSystem) PurgeUnseenChildren(slaveName, dirPath string) {
+	vfs.mu.Lock()
+	defer vfs.mu.Unlock()
+
+	dirPath = cleanVFSPath(dirPath)
+	childPaths := vfs.children[dirPath]
+	if len(childPaths) == 0 {
+		return
+	}
+
+	changed := false
+	for childPath := range childPaths {
+		file := vfs.files[childPath]
+		if file == nil {
+			continue
+		}
+		if file.SlaveName != slaveName || file.Seen {
+			continue
+		}
+		changed = vfs.deletePathLocked(childPath) || changed
+	}
+	if changed {
+		vfs.invalidateRaceDirLocked(dirPath)
 		vfs.markPersistDirtyLocked()
 	}
 }
@@ -336,6 +363,17 @@ func (vfs *VirtualFileSystem) DeleteFile(path string) {
 	if path == "/" {
 		return
 	}
+	if !vfs.deletePathLocked(path) {
+		return
+	}
+	parent := cleanVFSPath(filepath.Dir(path))
+	vfs.touchAncestorsLocked(parent, time.Now().Unix())
+	vfs.invalidateRacePathLocked(path)
+	vfs.markPersistDirtyLocked()
+}
+
+func (vfs *VirtualFileSystem) deletePathLocked(path string) bool {
+	path = cleanVFSPath(path)
 	parent := cleanVFSPath(filepath.Dir(path))
 	removed := make([]string, 0, 8)
 	if _, ok := vfs.files[path]; ok {
@@ -343,7 +381,6 @@ func (vfs *VirtualFileSystem) DeleteFile(path string) {
 		removed = append(removed, path)
 	}
 
-	// Also delete children if directory
 	prefix := path + "/"
 	for k := range vfs.files {
 		if strings.HasPrefix(k, prefix) {
@@ -352,7 +389,7 @@ func (vfs *VirtualFileSystem) DeleteFile(path string) {
 		}
 	}
 	if len(removed) == 0 {
-		return
+		return false
 	}
 	if children := vfs.children[parent]; children != nil {
 		delete(children, path)
@@ -371,9 +408,7 @@ func (vfs *VirtualFileSystem) DeleteFile(path string) {
 			delete(vfs.dirMeta, metaPath)
 		}
 	}
-	vfs.touchAncestorsLocked(parent, time.Now().Unix())
-	vfs.invalidateRacePathLocked(path)
-	vfs.markPersistDirtyLocked()
+	return true
 }
 
 // ListDirectory returns direct children of a directory.
