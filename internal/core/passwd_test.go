@@ -22,7 +22,10 @@ func TestUpgradeLegacyPasswordHashRewritesToBcrypt(t *testing.T) {
 	dir := t.TempDir()
 	passwdPath := filepath.Join(dir, "passwd")
 	legacy := "$01020304$d631702386055e6797948aa58b4551b2ba70492a"
-	if err := os.WriteFile(passwdPath, []byte("Finity:"+legacy+":100:300:0:/site:/bin/false\n"), 0600); err != nil {
+	if err := os.WriteFile(passwdPath, []byte(
+		"glftpd:$2a$10$5s9xY0wDp6PtErspTWlyAOlU5/LtZDu5Wu.1SLcerN.aY6WpipNuC:0:5:0:/:/bin/false\n"+
+			"Finity:"+legacy+":100:300:0:/site:/bin/false\n",
+	), 0600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
@@ -44,6 +47,9 @@ func TestUpgradeLegacyPasswordHashRewritesToBcrypt(t *testing.T) {
 	}
 	if !VerifyPassword("secret", got) {
 		t.Fatalf("VerifyPassword() = false, want true for upgraded bcrypt hash")
+	}
+	if _, ok := passwds["glftpd"]; !ok {
+		t.Fatalf("expected unrelated passwd entries to remain present after upgrade")
 	}
 }
 

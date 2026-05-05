@@ -8,13 +8,19 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/crypto/pbkdf2"
 )
 
+var passwdFileMu sync.RWMutex
+
 // LoadPasswdFile reads standard /etc/passwd
 func LoadPasswdFile(path string) (map[string]string, error) {
+	passwdFileMu.RLock()
+	defer passwdFileMu.RUnlock()
+
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -154,6 +160,9 @@ func AddGroupToFile(groupName string, desc string, gid int) error {
 
 // GetUsernameByUID looks up username from UID in passwd file
 func GetUsernameByUID(uid int, config *Config) string {
+	passwdFileMu.RLock()
+	defer passwdFileMu.RUnlock()
+
 	file, err := os.Open(config.PasswdFile)
 	if err != nil {
 		return fmt.Sprintf("%d", uid)
@@ -195,7 +204,13 @@ func GetGroupnameByGID(gid int, groupMap map[string]int) string {
 // AddUserToPasswd appends a new user entry to the passwd file.
 // If the user already exists, it replaces the hash.
 func AddUserToPasswd(username, hash, path string) error {
-	existing, _ := os.ReadFile(path)
+	passwdFileMu.Lock()
+	defer passwdFileMu.Unlock()
+
+	existing, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
 	lines := strings.Split(string(existing), "\n")
 
 	found := false
@@ -249,6 +264,9 @@ func formatPasswdLine(username, hash, existingLine string) string {
 
 // RemoveUserFromPasswd removes a user entry from the passwd file.
 func RemoveUserFromPasswd(username, path string) error {
+	passwdFileMu.Lock()
+	defer passwdFileMu.Unlock()
+
 	existing, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -267,6 +285,9 @@ func RemoveUserFromPasswd(username, path string) error {
 
 // RenameUserInPasswd renames a passwd entry while preserving the existing hash and fields.
 func RenameUserInPasswd(oldUsername, newUsername, path string) error {
+	passwdFileMu.Lock()
+	defer passwdFileMu.Unlock()
+
 	existing, err := os.ReadFile(path)
 	if err != nil {
 		return err
