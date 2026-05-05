@@ -3,6 +3,7 @@ package master
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"goftpd/internal/protocol"
 )
@@ -215,21 +216,28 @@ func IssueAbort(rs *RemoteSlave, transferIndex int32, reason string) {
 
 // IssueRemerge tells the slave to scan and send its file listing.
 // ().
-func IssueRemerge(rs *RemoteSlave, path string, partialRemerge bool, skipAgeCutoff int64, masterTime int64, instantOnline bool) (string, error) {
+func IssueRemerge(rs *RemoteSlave, path string, partialRemerge bool, skipAgeCutoff int64, masterTime int64, instantOnline bool, excludePaths []string) (string, error) {
 	index, err := rs.FetchIndex()
 	if err != nil {
 		return "", err
 	}
+	args := []string{
+		path,
+		fmt.Sprintf("%v", partialRemerge),
+		fmt.Sprintf("%d", skipAgeCutoff),
+		fmt.Sprintf("%d", masterTime),
+		fmt.Sprintf("%v", instantOnline),
+	}
+	for _, p := range excludePaths {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			args = append(args, p)
+		}
+	}
 	return index, rs.SendCommand(&protocol.AsyncCommand{
 		Index: index,
 		Name:  "remerge",
-		Args: []string{
-			path,
-			fmt.Sprintf("%v", partialRemerge),
-			fmt.Sprintf("%d", skipAgeCutoff),
-			fmt.Sprintf("%d", masterTime),
-			fmt.Sprintf("%v", instantOnline),
-		},
+		Args:  args,
 	})
 }
 

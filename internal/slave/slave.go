@@ -821,6 +821,7 @@ func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
 	if len(ac.Args) > 0 {
 		basePath = ac.Args[0]
 	}
+	excludePaths := normalizeExcludeVFSPaths(ac.Args[5:])
 
 	log.Printf("[Slave] Starting remerge from %s across %d roots", basePath, len(s.roots))
 
@@ -873,6 +874,12 @@ func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
 			// Get VFS-relative path
 			relPath, _ := filepath.Rel(root, fullPath)
 			relPath = "/" + filepath.ToSlash(relPath)
+			if isExcludedVFSPath(relPath, excludePaths) {
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
 			// Parent dir in VFS
 			parentDir := filepath.ToSlash(filepath.Dir(relPath))
 			if parentDir == "." {
@@ -916,6 +923,37 @@ func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
 
 	log.Printf("[Slave] Remerge complete: %d files, %d dirs across %d sent directories", totalFiles, totalDirs, sentDirs)
 	return &protocol.AsyncResponse{Index: ac.Index}
+}
+
+func normalizeExcludeVFSPaths(paths []string) []string {
+	out := make([]string, 0, len(paths))
+	seen := make(map[string]struct{}, len(paths))
+	for _, p := range paths {
+		p = path.Clean("/" + strings.TrimSpace(filepath.ToSlash(p)))
+		if p == "/" || p == "." || p == "" {
+			continue
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func isExcludedVFSPath(p string, excluded []string) bool {
+	p = path.Clean("/" + strings.TrimSpace(filepath.ToSlash(p)))
+	if p == "/" || p == "." || p == "" {
+		return false
+	}
+	for _, root := range excluded {
+		if p == root || strings.HasPrefix(p, root+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // handleSFVFile - slave parses an SFV file and sends the entries to master.

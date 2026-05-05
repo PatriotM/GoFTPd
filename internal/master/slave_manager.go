@@ -48,6 +48,9 @@ type SlaveManager struct {
 	bootstrapDirs   []string
 	bootstrapDirsMu sync.RWMutex
 
+	excludePaths   []string
+	excludePathsMu sync.RWMutex
+
 	// Virtual File System: master-side file index
 	vfs *VirtualFileSystem
 
@@ -212,7 +215,26 @@ func (sm *SlaveManager) SetHiddenPaths(paths []string) {
 }
 
 func (sm *SlaveManager) SetExcludePaths(paths []string) {
+	sm.excludePathsMu.Lock()
+	defer sm.excludePathsMu.Unlock()
+
+	seen := make(map[string]bool, len(paths))
+	sm.excludePaths = sm.excludePaths[:0]
+	for _, p := range paths {
+		p = normalizeBootstrapDir(p)
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		sm.excludePaths = append(sm.excludePaths, p)
+	}
 	sm.vfs.SetExcludePaths(paths)
+}
+
+func (sm *SlaveManager) getExcludePaths() []string {
+	sm.excludePathsMu.RLock()
+	defer sm.excludePathsMu.RUnlock()
+	return append([]string(nil), sm.excludePaths...)
 }
 
 func (sm *SlaveManager) SetBootstrapDirs(paths []string) {
@@ -692,7 +714,7 @@ func (sm *SlaveManager) initializeSlaveAfterConnect(rs *RemoteSlave) {
 	// Mark current files unseen before remerge so stale entries can be purged.
 	sm.vfs.MarkAllUnseen(rs.name)
 
-	index, err := IssueRemerge(rs, "/", false, 0, time.Now().UnixMilli(), false)
+	index, err := IssueRemerge(rs, "/", false, 0, time.Now().UnixMilli(), false, sm.getExcludePaths())
 	if err != nil {
 		log.Printf("[SlaveManager] Failed to issue remerge to %s: %v", rs.name, err)
 		// Don't take offline — slave is still usable, just no file index yet
