@@ -165,6 +165,45 @@ func TestVFSRaceStatsRefreshAfterDelete(t *testing.T) {
 	}
 }
 
+func TestVFSRaceStatsIgnoreChecksumMismatches(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/site/X265/release", VFSFile{IsDir: true, Seen: true})
+	vfs.SetSFVData("/site/X265/release", "release.sfv", map[string]uint32{
+		"good.r00": 1,
+		"bad.r01":  2,
+	})
+	vfs.AddFile("/site/X265/release/good.r00", VFSFile{
+		Size:     100,
+		Seen:     true,
+		Owner:    "n0pe",
+		Group:    "Admin",
+		XferTime: 1000,
+		Checksum: 1,
+	})
+	vfs.AddFile("/site/X265/release/bad.r01", VFSFile{
+		Size:     200,
+		Seen:     true,
+		Owner:    "n0pe",
+		Group:    "Admin",
+		XferTime: 1000,
+		Checksum: 999,
+	})
+
+	users, groups, totalBytes, present, total := vfs.GetRaceStats("/site/X265/release")
+	if total != 2 || present != 1 {
+		t.Fatalf("expected only checksum-valid file to count, got present=%d total=%d", present, total)
+	}
+	if totalBytes != 100 {
+		t.Fatalf("expected only good file bytes to count, got %d", totalBytes)
+	}
+	if len(users) != 1 || users[0].Files != 1 {
+		t.Fatalf("expected one valid user file, got %+v", users)
+	}
+	if len(groups) != 1 || groups[0].Files != 1 {
+		t.Fatalf("expected one valid group file, got %+v", groups)
+	}
+}
+
 func TestVFSDeleteDirRemovesSubtreeAndMetadataWithoutRebuild(t *testing.T) {
 	vfs := NewVirtualFileSystem()
 	vfs.AddFile("/site/TV/release", VFSFile{IsDir: true, Seen: true})

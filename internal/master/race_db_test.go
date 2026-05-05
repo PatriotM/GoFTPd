@@ -217,3 +217,45 @@ func TestRaceDBGetImmediateReleaseProgressReturnsDirectChildrenOnly(t *testing.T
 		t.Fatalf("nested release should not be returned: %+v", progress)
 	}
 }
+
+func TestRaceDBGetRaceStatsIgnoresChecksumMismatches(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "race.db")
+	rdb, err := NewRaceDB(dbPath)
+	if err != nil {
+		t.Fatalf("NewRaceDB failed: %v", err)
+	}
+	defer rdb.Close()
+
+	releasePath := "/site/X265/Bad.Release-GRP"
+	if err := rdb.SaveSFV(releasePath, "release.sfv", map[string]uint32{
+		"good.r00": 1,
+		"bad.r01":  2,
+	}); err != nil {
+		t.Fatalf("SaveSFV failed: %v", err)
+	}
+	if err := rdb.RecordUpload(releasePath+"/good.r00", "u1", "G1", 100, 1000, 1); err != nil {
+		t.Fatalf("RecordUpload good failed: %v", err)
+	}
+	if err := rdb.RecordUpload(releasePath+"/bad.r01", "u1", "G1", 200, 1000, 999); err != nil {
+		t.Fatalf("RecordUpload bad failed: %v", err)
+	}
+
+	users, groups, totalBytes, present, total := rdb.GetRaceStats(releasePath)
+	if total != 2 || present != 1 {
+		t.Fatalf("expected only checksum-valid file to count, got present=%d total=%d", present, total)
+	}
+	if totalBytes != 100 {
+		t.Fatalf("expected only good file bytes to count, got %d", totalBytes)
+	}
+	if len(users) != 1 || users[0].Files != 1 {
+		t.Fatalf("expected one valid user file, got %+v", users)
+	}
+	if len(groups) != 1 || groups[0].Files != 1 {
+		t.Fatalf("expected one valid group file, got %+v", groups)
+	}
+
+	progress := rdb.GetImmediateReleaseProgress("/site/X265")
+	if got := progress[releasePath]; got.Total != 2 || got.Present != 1 {
+		t.Fatalf("expected immediate progress to ignore checksum mismatch, got %+v", got)
+	}
+}

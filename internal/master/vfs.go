@@ -1216,9 +1216,12 @@ func (vfs *VirtualFileSystem) computeRaceStateLocked(dirPath string) *VFSRaceCac
 	cache := &VFSRaceCache{
 		Total: len(meta.SFVEntries),
 	}
-	for sfvFile := range meta.SFVEntries {
+	for sfvFile, expectedCRC := range meta.SFVEntries {
 		f := presentFiles[raceFileKey(sfvFile)]
 		if f == nil {
+			continue
+		}
+		if expectedCRC != 0 && f.Checksum != expectedCRC {
 			continue
 		}
 		cache.Present++

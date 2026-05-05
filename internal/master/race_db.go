@@ -405,6 +405,7 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
               ON p.release_id = e.release_id
              AND p.is_present = 1
              AND p.filename = e.filename
+             AND p.checksum = e.expected_crc32
             WHERE e.release_id = ?
               AND e.is_expected = 1
             GROUP BY e.filename
@@ -417,14 +418,13 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 	userRows, err := r.db.Query(`
         SELECT uploader, grp, COUNT(*), COALESCE(SUM(size_bytes),0), COALESCE(SUM(duration_ms),0)
         FROM release_files p
+        JOIN release_files e
+          ON e.release_id = p.release_id
+         AND e.is_expected = 1
+         AND e.filename = p.filename
         WHERE p.release_id = ?
           AND p.is_present = 1
-          AND EXISTS (
-              SELECT 1 FROM release_files e
-              WHERE e.release_id = p.release_id
-                AND e.is_expected = 1
-                AND e.filename = p.filename
-          )
+          AND p.checksum = e.expected_crc32
         GROUP BY uploader, grp
         ORDER BY COALESCE(SUM(size_bytes),0) DESC, COUNT(*) DESC, uploader ASC
     `, releaseID)
@@ -470,6 +470,7 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
                   WHERE e.release_id = release_files.release_id
                     AND e.is_expected = 1
                     AND e.filename = release_files.filename
+                    AND release_files.checksum = e.expected_crc32
               )
               AND duration_ms > 0
             ORDER BY (CAST(size_bytes AS REAL) / CAST(duration_ms AS REAL)) DESC
@@ -492,6 +493,7 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
                   WHERE e.release_id = release_files.release_id
                     AND e.is_expected = 1
                     AND e.filename = release_files.filename
+                    AND release_files.checksum = e.expected_crc32
               )
               AND duration_ms > 0
             ORDER BY (CAST(size_bytes AS REAL) / CAST(duration_ms AS REAL)) ASC
@@ -514,14 +516,13 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 	groupRows, err := r.db.Query(`
         SELECT grp, COUNT(*), COALESCE(SUM(size_bytes),0), COALESCE(SUM(duration_ms),0)
         FROM release_files p
+        JOIN release_files e
+          ON e.release_id = p.release_id
+         AND e.is_expected = 1
+         AND e.filename = p.filename
         WHERE p.release_id = ?
           AND p.is_present = 1
-          AND EXISTS (
-              SELECT 1 FROM release_files e
-              WHERE e.release_id = p.release_id
-                AND e.is_expected = 1
-                AND e.filename = p.filename
-          )
+          AND p.checksum = e.expected_crc32
         GROUP BY grp
         ORDER BY COALESCE(SUM(size_bytes),0) DESC, COUNT(*) DESC, grp ASC
     `, releaseID)
@@ -584,6 +585,7 @@ func (r *RaceDB) GetImmediateReleaseProgress(parentDir string) map[string]core.R
               ON p.release_id = e.release_id
              AND p.is_present = 1
              AND p.filename = e.filename
+             AND p.checksum = e.expected_crc32
             WHERE e.is_expected = 1
             GROUP BY e.release_id
         )
