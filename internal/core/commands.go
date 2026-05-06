@@ -1576,8 +1576,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				s.beginTransfer("upload", filePath)
 				defer s.endTransfer()
 
-				sslClientMode := !s.SSCN
-				fileSize, checksum, xferMs, err := bridge.SlaveConnectAndReceive(filePath, portAddr, s.User.Name, s.User.PrimaryGroup, restOffset, s.DataTLS, sslClientMode, s.currentTransferTypeByte())
+				fileSize, checksum, xferMs, err := bridge.SlaveConnectAndReceive(filePath, portAddr, s.User.Name, s.User.PrimaryGroup, restOffset, s.DataTLS, false, s.currentTransferTypeByte())
 				_ = xferMs
 
 				if err != nil {
@@ -2088,8 +2087,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					s.beginTransfer("download", filePath)
 					defer s.endTransfer()
 
-					sslClientMode := !s.SSCN
-					transferChecksum, xferMs, err := bridge.SlaveConnectAndSend(filePath, portAddr, restOffset, s.DataTLS, sslClientMode, s.currentTransferTypeByte())
+					transferChecksum, xferMs, err := bridge.SlaveConnectAndSend(filePath, portAddr, restOffset, s.DataTLS, false, s.currentTransferTypeByte())
 					if err != nil {
 						log.Printf("[Passthrough] PORT download failed: %v", err)
 						writeTransferFailure(s.Conn, "Download", err)
