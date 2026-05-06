@@ -55,6 +55,7 @@ type Slave struct {
 	online        atomic.Bool
 	lastWriteTime atomic.Int64 // UnixMilli of last successful write
 	timeout       time.Duration
+	remergePaused atomic.Bool
 }
 
 // writeObject sends an object to the master with mutex protection.
@@ -299,9 +300,11 @@ func (s *Slave) handleCommand(ac *protocol.AsyncCommand) interface{} {
 		return s.handleMakeDir(ac)
 
 	case "remergePause":
+		s.remergePaused.Store(true)
 		return &protocol.AsyncResponse{Index: ac.Index}
 
 	case "remergeResume":
+		s.remergePaused.Store(false)
 		return &protocol.AsyncResponse{Index: ac.Index}
 
 	case "checkSSL":
@@ -886,6 +889,9 @@ func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
 		filepath.Walk(scanRoot, func(fullPath string, info os.FileInfo, err error) error {
 			if err != nil {
 				return nil
+			}
+			for s.remergePaused.Load() && s.online.Load() {
+				time.Sleep(100 * time.Millisecond)
 			}
 
 			// Skip the root itself

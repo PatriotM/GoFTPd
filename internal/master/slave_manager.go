@@ -768,10 +768,12 @@ func (sm *SlaveManager) initializeSlaveAfterConnect(rs *RemoteSlave) {
 
 	// Wait for remerge with no timeout (0 = use default actualTimeout per response,
 	// but we pass a very long timeout so large sites can finish)
+	remergeComplete := false
 	_, err = rs.FetchResponse(index, 60*time.Minute)
 	if err != nil {
 		log.Printf("[SlaveManager] Remerge did not complete for %s: %v (slave stays online)", rs.name, err)
 	} else {
+		remergeComplete = true
 		log.Printf("[SlaveManager] Remerge complete for slave %s", rs.name)
 
 		// Purge files that were physically deleted from the slave.
@@ -784,7 +786,7 @@ func (sm *SlaveManager) initializeSlaveAfterConnect(rs *RemoteSlave) {
 		}
 	}
 	rs.remerging.Store(false)
-	if !instantOnline {
+	if !instantOnline && remergeComplete {
 		rs.SetAvailable(true)
 	}
 	sm.publishDiskStatus(rs)
