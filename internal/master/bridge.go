@@ -83,16 +83,22 @@ func (b *Bridge) StartRemergeAll() (int, []string) {
 }
 
 func (b *Bridge) GetLiveTransferStats() []core.LiveTransferStat {
+	return b.getLiveTransferStats(true)
+}
+
+func (b *Bridge) getLiveTransferStats(useCache bool) []core.LiveTransferStat {
 	if b == nil {
 		return nil
 	}
-	b.cacheMu.Lock()
-	if !b.liveTransferStatsAt.IsZero() && time.Since(b.liveTransferStatsAt) < liveTransferStatsCacheTTL {
-		cached := append([]core.LiveTransferStat(nil), b.liveTransferStatsCache...)
+	if useCache {
+		b.cacheMu.Lock()
+		if !b.liveTransferStatsAt.IsZero() && time.Since(b.liveTransferStatsAt) < liveTransferStatsCacheTTL {
+			cached := append([]core.LiveTransferStat(nil), b.liveTransferStatsCache...)
+			b.cacheMu.Unlock()
+			return cached
+		}
 		b.cacheMu.Unlock()
-		return cached
 	}
-	b.cacheMu.Unlock()
 
 	var out []core.LiveTransferStat
 	for _, slave := range b.sm.GetAllSlaves() {
@@ -1598,7 +1604,7 @@ func (b *Bridge) CacheMediaInfo(dirPath string, fields map[string]string) {
 // counting ONLY files that are listed in the cached SFV data.
 func (b *Bridge) GetVFSRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRaceGroup, int64, int, int) {
 	cleanDirPath := filepath.Clean(dirPath)
-	excludeKeys := b.liveUploadingRaceKeysForDir(cleanDirPath)
+	excludeKeys := b.liveUploadingRaceKeysForDirFresh(cleanDirPath)
 	if meta := b.sm.GetVFS().GetSFVData(cleanDirPath); meta != nil && len(meta.SFVEntries) > 0 {
 		// Prefer live VFS state for SFV-backed releases so remerge reflects what
 		// is actually on disk right now, not just what an older DB snapshot said.
@@ -1644,7 +1650,7 @@ func (b *Bridge) GetImmediateReleaseProgress(dirPath string) map[string]core.Rel
 	}
 	cleanDirPath := filepath.Clean(dirPath)
 	if out := b.sm.GetVFS().GetImmediateChildDirProgress(cleanDirPath); len(out) > 0 {
-		uploadsByDir := b.liveUploadingRaceKeysByDir(cleanDirPath)
+		uploadsByDir := b.liveUploadingRaceKeysByDir(cleanDirPath, false)
 		for childPath, excludeKeys := range uploadsByDir {
 			stat, ok := out[childPath]
 			if !ok {
@@ -1724,22 +1730,27 @@ func (b *Bridge) GetVerifiedSFVPresentFiles(dirPath string) map[string]bool {
 		return nil
 	}
 	cleanDirPath := filepath.Clean(dirPath)
-	return b.sm.GetVFS().GetVerifiedSFVPresentFilesFiltered(cleanDirPath, b.liveUploadingRaceKeysForDir(cleanDirPath))
+	return b.sm.GetVFS().GetVerifiedSFVPresentFilesFiltered(cleanDirPath, b.liveUploadingRaceKeysForDirFresh(cleanDirPath))
 }
 
 func (b *Bridge) liveUploadingRaceKeysForDir(dirPath string) map[string]bool {
-	byDir := b.liveUploadingRaceKeysByDir(filepath.Clean(dirPath))
+	byDir := b.liveUploadingRaceKeysByDir(filepath.Clean(dirPath), true)
 	return byDir[filepath.Clean(dirPath)]
 }
 
-func (b *Bridge) liveUploadingRaceKeysByDir(rootDir string) map[string]map[string]bool {
+func (b *Bridge) liveUploadingRaceKeysForDirFresh(dirPath string) map[string]bool {
+	byDir := b.liveUploadingRaceKeysByDir(filepath.Clean(dirPath), false)
+	return byDir[filepath.Clean(dirPath)]
+}
+
+func (b *Bridge) liveUploadingRaceKeysByDir(rootDir string, useCache bool) map[string]map[string]bool {
 	if b == nil {
 		return nil
 	}
 	rootDir = filepath.Clean(rootDir)
 	rootPrefix := strings.TrimRight(filepath.ToSlash(rootDir), "/") + "/"
 	out := make(map[string]map[string]bool)
-	for _, stat := range b.GetLiveTransferStats() {
+	for _, stat := range b.getLiveTransferStats(useCache) {
 		if stat.Direction != "upload" {
 			continue
 		}
