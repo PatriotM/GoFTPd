@@ -33,17 +33,18 @@ const (
 // Slave is the slave daemon,
 // It connects to a master, sends its name, then enters a command/response loop.
 type Slave struct {
-	name        string
-	masterHost  string
-	masterPort  int
-	roots       []string // local filesystem roots (1, slave.root.2)
-	pasvPortMin int
-	pasvPortMax int
-	pasvNext    uint32
-	tlsEnabled  bool
-	tlsCert     string
-	tlsKey      string
-	bindIP      string
+	name                 string
+	masterHost           string
+	masterPort           int
+	roots                []string // local filesystem roots (1, slave.root.2)
+	pasvPortMin          int
+	pasvPortMax          int
+	pasvNext             uint32
+	tlsEnabled           bool
+	tlsCert              string
+	tlsKey               string
+	bindIP               string
+	ignorePartialRemerge bool
 
 	conn            net.Conn
 	stream          *protocol.ObjectStream
@@ -70,17 +71,18 @@ func (s *Slave) writeObject(obj interface{}) error {
 
 // SlaveConfig holds slave configuration loaded from YAML
 type SlaveConfig struct {
-	Name        string   `yaml:"name"`
-	MasterHost  string   `yaml:"master_host"`
-	MasterPort  int      `yaml:"master_port"`
-	Roots       []string `yaml:"roots"` // e.g. ["/data/site", "/data2/site"]
-	PasvPortMin int      `yaml:"pasv_port_min"`
-	PasvPortMax int      `yaml:"pasv_port_max"`
-	TLSEnabled  bool     `yaml:"tls_enabled"`
-	TLSCert     string   `yaml:"tls_cert"`
-	TLSKey      string   `yaml:"tls_key"`
-	BindIP      string   `yaml:"bind_ip"`
-	Timeout     int      `yaml:"timeout"` // seconds, default 60
+	Name                 string   `yaml:"name"`
+	MasterHost           string   `yaml:"master_host"`
+	MasterPort           int      `yaml:"master_port"`
+	Roots                []string `yaml:"roots"` // e.g. ["/data/site", "/data2/site"]
+	PasvPortMin          int      `yaml:"pasv_port_min"`
+	PasvPortMax          int      `yaml:"pasv_port_max"`
+	TLSEnabled           bool     `yaml:"tls_enabled"`
+	TLSCert              string   `yaml:"tls_cert"`
+	TLSKey               string   `yaml:"tls_key"`
+	BindIP               string   `yaml:"bind_ip"`
+	Timeout              int      `yaml:"timeout"` // seconds, default 60
+	IgnorePartialRemerge bool     `yaml:"ignore_partial_remerge"`
 }
 
 func NewSlave(cfg SlaveConfig) *Slave {
@@ -92,17 +94,18 @@ func NewSlave(cfg SlaveConfig) *Slave {
 		cfg.Roots = []string{"./site"}
 	}
 	return &Slave{
-		name:        cfg.Name,
-		masterHost:  cfg.MasterHost,
-		masterPort:  cfg.MasterPort,
-		roots:       cfg.Roots,
-		pasvPortMin: cfg.PasvPortMin,
-		pasvPortMax: cfg.PasvPortMax,
-		tlsEnabled:  cfg.TLSEnabled,
-		tlsCert:     cfg.TLSCert,
-		tlsKey:      cfg.TLSKey,
-		bindIP:      cfg.BindIP,
-		timeout:     timeout,
+		name:                 cfg.Name,
+		masterHost:           cfg.MasterHost,
+		masterPort:           cfg.MasterPort,
+		roots:                cfg.Roots,
+		pasvPortMin:          cfg.PasvPortMin,
+		pasvPortMax:          cfg.PasvPortMax,
+		tlsEnabled:           cfg.TLSEnabled,
+		tlsCert:              cfg.TLSCert,
+		tlsKey:               cfg.TLSKey,
+		bindIP:               cfg.BindIP,
+		timeout:              timeout,
+		ignorePartialRemerge: cfg.IgnorePartialRemerge,
 	}
 }
 
@@ -826,7 +829,7 @@ func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
 		basePath = ac.Args[0]
 	}
 	instantOnline := len(ac.Args) > 4 && strings.EqualFold(strings.TrimSpace(ac.Args[4]), "true")
-	partialRemerge := len(ac.Args) > 1 && strings.EqualFold(strings.TrimSpace(ac.Args[1]), "true") && !instantOnline
+	partialRemerge := len(ac.Args) > 1 && strings.EqualFold(strings.TrimSpace(ac.Args[1]), "true") && !s.ignorePartialRemerge && !instantOnline
 	skipAgeCutoff := int64(0)
 	if partialRemerge && len(ac.Args) > 2 {
 		if cutoff, err := strconv.ParseInt(strings.TrimSpace(ac.Args[2]), 10, 64); err == nil {

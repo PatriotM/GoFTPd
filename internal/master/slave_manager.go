@@ -248,7 +248,7 @@ func (sm *SlaveManager) SetEnableRemergeChecksums(enabled bool) {
 func (sm *SlaveManager) SetRemergeMode(mode string) {
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	switch mode {
-	case "instant", "connect", "disconnect":
+	case "instant":
 		sm.remergeMode.Store(mode)
 	default:
 		sm.remergeMode.Store("off")

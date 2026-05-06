@@ -75,6 +75,8 @@ slave:
                                 # Set explicitly if the slave sits behind NAT.
   timeout:       60             # Slave-side inactivity timeout for master traffic.
                                 # Keep this aligned with master.heartbeat_timeout.
+  ignore_partial_remerge: false # If true, the slave ignores partial remerge requests
+                                # and always performs a full scan.
 
 
 # =============================================================================

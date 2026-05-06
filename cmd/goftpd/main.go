@@ -504,22 +504,24 @@ func startSlave(cfg *core.Config) {
 	pasvMax := intFromCfg(slaveCfg, "pasv_port_max", 0)
 	bindIP, _ := slaveCfg["bind_ip"].(string)
 	timeout := intFromCfg(slaveCfg, "timeout", 60)
+	ignorePartialRemerge := boolFromCfg(slaveCfg, "ignore_partial_remerge", false)
 
 	log.Printf("[STARTUP] Slave mode [name=%s] [master=%s:%d] [roots=%v] [bind_ip=%s] [pasv=%d-%d]",
 		name, masterHost, masterPort, roots, bindIP, pasvMin, pasvMax)
 
 	s := slave.NewSlave(slave.SlaveConfig{
-		Name:        name,
-		MasterHost:  masterHost,
-		MasterPort:  masterPort,
-		Roots:       roots,
-		PasvPortMin: pasvMin,
-		PasvPortMax: pasvMax,
-		TLSEnabled:  cfg.TLSEnabled,
-		TLSCert:     cfg.TLSCert,
-		TLSKey:      cfg.TLSKey,
-		BindIP:      bindIP,
-		Timeout:     timeout,
+		Name:                 name,
+		MasterHost:           masterHost,
+		MasterPort:           masterPort,
+		Roots:                roots,
+		PasvPortMin:          pasvMin,
+		PasvPortMax:          pasvMax,
+		TLSEnabled:           cfg.TLSEnabled,
+		TLSCert:              cfg.TLSCert,
+		TLSKey:               cfg.TLSKey,
+		BindIP:               bindIP,
+		Timeout:              timeout,
+		IgnorePartialRemerge: ignorePartialRemerge,
 	})
 
 	// Boot blocks until disconnected
