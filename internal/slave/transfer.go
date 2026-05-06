@@ -142,7 +142,7 @@ func (t *Transfer) ReceiveFile(path string, position int64) protocol.TransferSta
 
 	for {
 		if t.abortReason != "" {
-			os.Remove(fullPath)
+			cleanupFailedReceive(file, fullPath, position)
 			return t.errorStatus("aborted: " + t.abortReason)
 		}
 
@@ -157,7 +157,7 @@ func (t *Transfer) ReceiveFile(path string, position int64) protocol.TransferSta
 			if err == io.EOF {
 				break
 			}
-			os.Remove(fullPath)
+			cleanupFailedReceive(file, fullPath, position)
 			return t.errorStatus(fmt.Sprintf("read error: %v", err))
 		}
 	}
@@ -170,6 +170,18 @@ func (t *Transfer) ReceiveFile(path string, position int64) protocol.TransferSta
 		Transferred:   t.transferred,
 		Checksum:      h.Sum32(),
 		Finished:      true,
+	}
+}
+
+func cleanupFailedReceive(file *os.File, fullPath string, position int64) {
+	if position <= 0 {
+		_ = os.Remove(fullPath)
+		return
+	}
+	if file != nil {
+		_ = file.Sync()
+		_ = file.Truncate(position)
+		_, _ = file.Seek(position, io.SeekStart)
 	}
 }
 

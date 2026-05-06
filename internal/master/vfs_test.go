@@ -116,11 +116,17 @@ func TestVFSRaceStatsUseCachedDirectChildren(t *testing.T) {
 	if users[0].DurationMs != 3000 {
 		t.Fatalf("expected duration 3000ms, got %d", users[0].DurationMs)
 	}
+	if users[0].Speed != 100 {
+		t.Fatalf("expected aggregate user speed 100 bytes/s, got %f", users[0].Speed)
+	}
 	if users[0].Percent != 66 {
 		t.Fatalf("expected 66 percent, got %d", users[0].Percent)
 	}
 	if len(groups) != 1 || groups[0].Name != "Admin" {
 		t.Fatalf("expected Admin group stats, got %+v", groups)
+	}
+	if groups[0].Speed != 100 {
+		t.Fatalf("expected aggregate group speed 100 bytes/s, got %f", groups[0].Speed)
 	}
 }
 
@@ -202,6 +208,11 @@ func TestVFSRaceStatsIgnoreChecksumMismatches(t *testing.T) {
 	if len(groups) != 1 || groups[0].Files != 1 {
 		t.Fatalf("expected one valid group file, got %+v", groups)
 	}
+
+	verified := vfs.GetVerifiedSFVPresentFiles("/site/X265/release")
+	if len(verified) != 1 || !verified["good.r00"] || verified["bad.r01"] {
+		t.Fatalf("expected only checksum-valid file in verified set, got %+v", verified)
+	}
 }
 
 func TestVFSDeleteDirRemovesSubtreeAndMetadataWithoutRebuild(t *testing.T) {
@@ -233,6 +244,74 @@ func TestVFSDeleteDirRemovesSubtreeAndMetadataWithoutRebuild(t *testing.T) {
 	children := vfs.ListDirectory("/site/TV")
 	if len(children) != 0 {
 		t.Fatalf("expected parent directory to have no children after delete, got %d", len(children))
+	}
+}
+
+func TestVFSDeleteSFVClearsParentSFVMetadata(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/X265/release", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/X265/release/release.sfv", VFSFile{Seen: true, Size: 10})
+	vfs.SetSFVData("/X265/release", "release.sfv", map[string]uint32{"file.r00": 1})
+	vfs.SetMediaInfo("/X265/release", map[string]string{"codec": "AVC"})
+
+	vfs.DeleteFile("/X265/release/release.sfv")
+
+	meta := vfs.GetSFVData("/X265/release")
+	if meta == nil {
+		t.Fatalf("expected parent metadata to remain for mediainfo")
+	}
+	if meta.SFVName != "" || len(meta.SFVEntries) != 0 {
+		t.Fatalf("expected sfv metadata to be cleared after deleting sfv, got %+v", meta)
+	}
+	if meta.MediaInfo["codec"] != "AVC" {
+		t.Fatalf("expected unrelated mediainfo to remain, got %+v", meta.MediaInfo)
+	}
+}
+
+func TestVFSDeleteLastMediaFileClearsParentMediaInfo(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/MP3/release", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/MP3/release/01-track.mp3", VFSFile{Seen: true, Size: 10})
+	vfs.SetMediaInfo("/MP3/release", map[string]string{"artist": "Example"})
+
+	vfs.DeleteFile("/MP3/release/01-track.mp3")
+
+	if got := vfs.GetMediaInfo("/MP3/release"); got != nil {
+		t.Fatalf("expected mediainfo to clear after deleting last media file, got %+v", got)
+	}
+}
+
+func TestVFSRenameLastMediaFileClearsParentMediaInfo(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/FLAC/release", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/FLAC/release/01-track.flac", VFSFile{Seen: true, Size: 10})
+	vfs.SetMediaInfo("/FLAC/release", map[string]string{"artist": "Example"})
+
+	vfs.RenameFile("/FLAC/release/01-track.flac", "/FLAC/release/01-track.txt")
+
+	if got := vfs.GetMediaInfo("/FLAC/release"); got != nil {
+		t.Fatalf("expected mediainfo to clear after renaming away the last media file, got %+v", got)
+	}
+}
+
+func TestVFSRenameSFVAwayClearsParentSFVMetadata(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/X264/release", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/X264/release/release.sfv", VFSFile{Seen: true, Size: 10})
+	vfs.SetSFVData("/X264/release", "release.sfv", map[string]uint32{"file.r00": 1})
+	vfs.SetMediaInfo("/X264/release", map[string]string{"codec": "AVC"})
+
+	vfs.RenameFile("/X264/release/release.sfv", "/X264/release/release.txt")
+
+	meta := vfs.GetSFVData("/X264/release")
+	if meta == nil {
+		t.Fatalf("expected parent metadata to remain for mediainfo")
+	}
+	if meta.SFVName != "" || len(meta.SFVEntries) != 0 {
+		t.Fatalf("expected sfv metadata to clear after renaming sfv away, got %+v", meta)
+	}
+	if meta.MediaInfo["codec"] != "AVC" {
+		t.Fatalf("expected unrelated mediainfo to remain, got %+v", meta.MediaInfo)
 	}
 }
 
@@ -421,5 +500,199 @@ func TestVFSResolvePathFollowsSymlinkSegments(t *testing.T) {
 	want := "/FLAC/2026-04-27/Release-GRP/file.r01"
 	if got != want {
 		t.Fatalf("expected resolved path %s, got %s", want, got)
+	}
+}
+
+func TestVFSAddFilePreservesVerifiedTransferDataAcrossRemerge(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+
+	vfs.AddFile("/X265/release/file.r00", VFSFile{
+		Size:         476800000,
+		LastModified: 1714930000,
+		Seen:         true,
+		SlaveName:    "LOCAL",
+		Checksum:     12345,
+		XferTime:     5000,
+	})
+
+	vfs.AddFile("/X265/release/file.r00", VFSFile{
+		Size:         476800000,
+		LastModified: 1714930000,
+		Seen:         true,
+		SlaveName:    "LOCAL",
+	})
+
+	got := vfs.GetFile("/X265/release/file.r00")
+	if got == nil {
+		t.Fatalf("expected file to remain present")
+	}
+	if got.Checksum != 12345 {
+		t.Fatalf("expected checksum to survive unchanged remerge, got %d", got.Checksum)
+	}
+	if got.XferTime != 5000 {
+		t.Fatalf("expected xfertime to survive unchanged remerge, got %d", got.XferTime)
+	}
+}
+
+func TestVFSImmediateChildDirProgressUsesLiveVerifiedFiles(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/X265/release", VFSFile{IsDir: true, Seen: true})
+	vfs.SetSFVData("/X265/release", "release.sfv", map[string]uint32{
+		"good.r00": 1,
+		"bad.r01":  2,
+	})
+	vfs.AddFile("/X265/release/good.r00", VFSFile{
+		Size:         100,
+		Seen:         true,
+		Checksum:     1,
+		LastModified: 100,
+	})
+	vfs.AddFile("/X265/release/bad.r01", VFSFile{
+		Size:         100,
+		Seen:         true,
+		Checksum:     0,
+		LastModified: 100,
+	})
+
+	progress := vfs.GetImmediateChildDirProgress("/X265")
+	stat, ok := progress["/X265/release"]
+	if !ok {
+		t.Fatalf("expected release progress entry, got %+v", progress)
+	}
+	if stat.Present != 1 || stat.Total != 2 || !stat.HasSFV {
+		t.Fatalf("expected live verified progress 1/2 with sfv, got %+v", stat)
+	}
+}
+
+func TestVFSUpdateFileVerificationRefreshesRaceTruth(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/X265/release", VFSFile{IsDir: true, Seen: true})
+	vfs.SetSFVData("/X265/release", "release.sfv", map[string]uint32{
+		"file1.r00": 1,
+	})
+	vfs.AddFile("/X265/release/file1.r00", VFSFile{
+		Size:     100,
+		Seen:     true,
+		Owner:    "n0pe",
+		Group:    "Admin",
+		XferTime: 0,
+		Checksum: 0,
+	})
+
+	_, _, _, presentBefore, totalBefore := vfs.GetRaceStats("/X265/release")
+	if presentBefore != 0 || totalBefore != 1 {
+		t.Fatalf("expected file to be unverified before checksum refresh, got present=%d total=%d", presentBefore, totalBefore)
+	}
+
+	if !vfs.UpdateFileVerification("/X265/release/file1.r00", 1) {
+		t.Fatalf("expected verification update to succeed")
+	}
+
+	verified := vfs.GetVerifiedSFVPresentFiles("/X265/release")
+	if len(verified) != 1 || !verified["file1.r00"] {
+		t.Fatalf("expected verified set to include refreshed file, got %+v", verified)
+	}
+
+	_, _, _, presentAfter, totalAfter := vfs.GetRaceStats("/X265/release")
+	if presentAfter != 1 || totalAfter != 1 {
+		t.Fatalf("expected file to count after checksum refresh, got present=%d total=%d", presentAfter, totalAfter)
+	}
+}
+
+func TestVFSRaceStatsIgnoreVerifiedFilesWithoutXferTime(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/X265/release", VFSFile{IsDir: true, Seen: true})
+	vfs.SetSFVData("/X265/release", "release.sfv", map[string]uint32{
+		"old.r00":  1,
+		"live.r01": 2,
+	})
+	vfs.AddFile("/X265/release/old.r00", VFSFile{
+		Size:     100,
+		Seen:     true,
+		Checksum: 1,
+		XferTime: 0,
+		Owner:    "olduser",
+		Group:    "Admin",
+	})
+	vfs.AddFile("/X265/release/live.r01", VFSFile{
+		Size:     200,
+		Seen:     true,
+		Checksum: 2,
+		XferTime: 2000,
+		Owner:    "liveuser",
+		Group:    "Admin",
+	})
+
+	users, groups, totalBytes, present, total := vfs.GetRaceStats("/X265/release")
+	if present != 2 || total != 2 {
+		t.Fatalf("expected both verified files to count toward completeness, got present=%d total=%d", present, total)
+	}
+	if totalBytes != 300 {
+		t.Fatalf("expected total bytes to still reflect verified payload, got %d", totalBytes)
+	}
+	if len(users) != 1 || users[0].Name != "liveuser" {
+		t.Fatalf("expected only xfertime-backed user stats, got %+v", users)
+	}
+	if len(groups) != 1 || groups[0].Files != 1 || groups[0].Bytes != 200 {
+		t.Fatalf("expected group stats to ignore xfertime-less files, got %+v", groups)
+	}
+}
+
+func TestVFSVerifiedPresentFilesFilteredExcludeUploading(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/X265/release", VFSFile{IsDir: true, Seen: true})
+	vfs.SetSFVData("/X265/release", "release.sfv", map[string]uint32{
+		"file1.r00": 1,
+		"file2.r01": 2,
+	})
+	vfs.AddFile("/X265/release/file1.r00", VFSFile{Seen: true, Checksum: 1})
+	vfs.AddFile("/X265/release/file2.r01", VFSFile{Seen: true, Checksum: 2})
+
+	verified := vfs.GetVerifiedSFVPresentFilesFiltered("/X265/release", map[string]bool{
+		"file2.r01": true,
+	})
+	if len(verified) != 1 || !verified["file1.r00"] || verified["file2.r01"] {
+		t.Fatalf("expected uploading file to be excluded from verified set, got %+v", verified)
+	}
+}
+
+func TestVFSRaceStatsFilteredExcludeUploading(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/X265/release", VFSFile{IsDir: true, Seen: true})
+	vfs.SetSFVData("/X265/release", "release.sfv", map[string]uint32{
+		"done.r00": 1,
+		"live.r01": 2,
+	})
+	vfs.AddFile("/X265/release/done.r00", VFSFile{
+		Size:     100,
+		Seen:     true,
+		Checksum: 1,
+		XferTime: 1000,
+		Owner:    "doneuser",
+		Group:    "Admin",
+	})
+	vfs.AddFile("/X265/release/live.r01", VFSFile{
+		Size:     200,
+		Seen:     true,
+		Checksum: 2,
+		XferTime: 1000,
+		Owner:    "liveuser",
+		Group:    "Admin",
+	})
+
+	users, groups, totalBytes, present, total := vfs.GetRaceStatsFiltered("/X265/release", map[string]bool{
+		"live.r01": true,
+	})
+	if present != 1 || total != 2 {
+		t.Fatalf("expected uploading file to stay out of present count, got present=%d total=%d", present, total)
+	}
+	if totalBytes != 100 {
+		t.Fatalf("expected only completed verified bytes, got %d", totalBytes)
+	}
+	if len(users) != 1 || users[0].Name != "doneuser" {
+		t.Fatalf("expected only completed uploader stats, got %+v", users)
+	}
+	if len(groups) != 1 || groups[0].Files != 1 || groups[0].Bytes != 100 {
+		t.Fatalf("expected only completed group stats, got %+v", groups)
 	}
 }

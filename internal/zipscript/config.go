@@ -7,6 +7,8 @@ type Config struct {
 	Sections     SectionsConfig     `yaml:"sections"`
 	Race         RaceConfig         `yaml:"race"`
 	SFV          SFVConfig          `yaml:"sfv"`
+	Zip          ZipConfig          `yaml:"zip"`
+	List         ListConfig         `yaml:"list"`
 	Incomplete   IncompleteConfig   `yaml:"incomplete"`
 	AllowedFiles AllowedFilesConfig `yaml:"allowed_files"`
 	Audio        AudioConfig        `yaml:"audio"`
@@ -37,14 +39,26 @@ type RaceConfig struct {
 	MusicCompleteGenre bool  `yaml:"music_complete_genre"`
 	AnnounceNoRace     bool  `yaml:"announce_norace"`
 	AnnounceSubdirs    *bool `yaml:"announce_subdirs"`
+	CWDRaceStats       *bool `yaml:"cwd_race_stats"`
+	STORRaceStats      *bool `yaml:"stor_race_stats"`
+	CWDZipRaceStats    *bool `yaml:"cwd_zip_race_stats"`
+	STORZipRaceStats   *bool `yaml:"stor_zip_race_stats"`
 }
 
 type SFVConfig struct {
-	ForceFirst     bool `yaml:"force_first"`
-	DenyDoubleSFV  bool `yaml:"deny_double_sfv"`
-	DeleteBadCRC   bool `yaml:"delete_bad_crc"`
-	IgnoreZeroSize bool `yaml:"ignore_zero_size"`
-	AllowResume    bool `yaml:"allow_resume"`
+	ForceFirst        bool     `yaml:"force_first"`
+	DenyDoubleSFV     bool     `yaml:"deny_double_sfv"`
+	DeleteBadCRC      bool     `yaml:"delete_bad_crc"`
+	IgnoreZeroSize    bool     `yaml:"ignore_zero_size"`
+	AllowResume       bool     `yaml:"allow_resume"`
+	PathCheck         []string `yaml:"path_check"`
+	PathIgnore        []string `yaml:"path_ignore"`
+	Users             []string `yaml:"users"`
+	DenySubdir        bool     `yaml:"deny_subdir"`
+	DenySubdirInclude string   `yaml:"deny_subdir_include"`
+	DenySubdirExclude string   `yaml:"deny_subdir_exclude"`
+	AllowNoExt        *bool    `yaml:"allow_no_ext"`
+	RestrictFiles     *bool    `yaml:"restrict_files"`
 }
 
 type IncompleteConfig struct {
@@ -54,6 +68,17 @@ type IncompleteConfig struct {
 	NFOIndicator          string `yaml:"nfo_indicator"`
 	CDIndicator           string `yaml:"cd_indicator"`
 	MarkEmptyDirsOnRescan bool   `yaml:"mark_empty_dirs_on_rescan"`
+}
+
+type ZipConfig struct {
+	IntegrityCheck *bool `yaml:"integrity_check"`
+	CWDDIZInfo     *bool `yaml:"cwd_diz_info"`
+}
+
+type ListConfig struct {
+	StatusBarEnabled   *bool `yaml:"statusbar_enabled"`
+	StatusBarDirectory *bool `yaml:"statusbar_directory"`
+	MissingFiles       *bool `yaml:"missing_files_enabled"`
 }
 
 type AllowedFilesConfig struct {
@@ -76,6 +101,10 @@ type AudioConfig struct {
 	YearPath                string          `yaml:"year_path"`
 	GroupPath               string          `yaml:"group_path"`
 	Sort                    AudioSortConfig `yaml:"sort"`
+	CWDMP3Info              *bool           `yaml:"cwd_mp3_info"`
+	STORMP3Info             *bool           `yaml:"stor_mp3_info"`
+	CWDFLACInfo             *bool           `yaml:"cwd_flac_info"`
+	STORFLACInfo            *bool           `yaml:"stor_flac_info"`
 }
 
 type AudioSortConfig struct {
@@ -166,5 +195,74 @@ func (c *Config) ApplyDefaults() {
 	if c.Audio.Sort.SeparateBySection == nil {
 		enabled := true
 		c.Audio.Sort.SeparateBySection = &enabled
+	}
+	if c.SFV.AllowNoExt == nil {
+		enabled := true
+		c.SFV.AllowNoExt = &enabled
+	}
+	if c.SFV.RestrictFiles == nil {
+		enabled := true
+		c.SFV.RestrictFiles = &enabled
+	}
+	if c.Zip.IntegrityCheck == nil {
+		enabled := true
+		c.Zip.IntegrityCheck = &enabled
+	}
+	if c.Zip.CWDDIZInfo == nil {
+		enabled := true
+		c.Zip.CWDDIZInfo = &enabled
+	}
+	if c.List.StatusBarEnabled == nil {
+		enabled := true
+		c.List.StatusBarEnabled = &enabled
+	}
+	if c.List.StatusBarDirectory == nil {
+		enabled := true
+		c.List.StatusBarDirectory = &enabled
+	}
+	if c.List.MissingFiles == nil {
+		enabled := true
+		c.List.MissingFiles = &enabled
+	}
+	if c.Race.CWDRaceStats == nil {
+		enabled := true
+		c.Race.CWDRaceStats = &enabled
+	}
+	if c.Race.STORRaceStats == nil {
+		enabled := true
+		c.Race.STORRaceStats = &enabled
+	}
+	if c.Race.CWDZipRaceStats == nil {
+		enabled := true
+		c.Race.CWDZipRaceStats = &enabled
+	}
+	if c.Race.STORZipRaceStats == nil {
+		enabled := true
+		c.Race.STORZipRaceStats = &enabled
+	}
+	if c.Audio.CWDMP3Info == nil {
+		enabled := true
+		c.Audio.CWDMP3Info = &enabled
+	}
+	if c.Audio.STORMP3Info == nil {
+		enabled := true
+		c.Audio.STORMP3Info = &enabled
+	}
+	if c.Audio.CWDFLACInfo == nil {
+		enabled := true
+		c.Audio.CWDFLACInfo = &enabled
+	}
+	if c.Audio.STORFLACInfo == nil {
+		enabled := true
+		c.Audio.STORFLACInfo = &enabled
+	}
+	if len(c.SFV.PathCheck) == 0 {
+		c.SFV.PathCheck = []string{"*"}
+	}
+	if len(c.SFV.PathIgnore) == 0 {
+		c.SFV.PathIgnore = []string{"/PRE/*", "/REQUESTS/*", "*/Subs", "*/Cover", "*/Covers", "/SPEEDTEST/*"}
+	}
+	if len(c.SFV.Users) == 0 {
+		c.SFV.Users = []string{"*"}
 	}
 }

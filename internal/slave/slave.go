@@ -279,6 +279,9 @@ func (s *Slave) handleCommand(ac *protocol.AsyncCommand) interface{} {
 	case "readZipEntry":
 		return s.handleReadZipEntry(ac)
 
+	case "zipIntegrity":
+		return s.handleZipIntegrity(ac)
+
 	case "mediainfo":
 		return s.handleMediaInfo(ac)
 
@@ -1090,6 +1093,60 @@ func (s *Slave) handleReadZipEntry(ac *protocol.AsyncCommand) interface{} {
 	}
 
 	return &protocol.AsyncResponseError{Index: ac.Index, Message: "file not found: " + archivePath}
+}
+
+func (s *Slave) handleZipIntegrity(ac *protocol.AsyncCommand) interface{} {
+	if len(ac.Args) < 1 {
+		return &protocol.AsyncResponseError{Index: ac.Index, Message: "zipIntegrity: missing archive path"}
+	}
+	archivePath := ac.Args[0]
+
+	for _, root := range s.roots {
+		fullPath := filepath.Join(root, archivePath)
+		info, err := os.Stat(fullPath)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		ok, err := validateZipIntegrity(fullPath)
+		if err != nil {
+			return &protocol.AsyncResponseError{Index: ac.Index, Message: fmt.Sprintf("zip integrity failed: %v", err)}
+		}
+		return &protocol.AsyncResponseZipIntegrity{Index: ac.Index, OK: ok}
+	}
+
+	return &protocol.AsyncResponseError{Index: ac.Index, Message: "file not found: " + archivePath}
+}
+
+func validateZipIntegrity(fullPath string) (bool, error) {
+	zr, err := zip.OpenReader(fullPath)
+	if err != nil {
+		return false, err
+	}
+	defer zr.Close()
+
+	files := 0
+	for _, f := range zr.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		files++
+		rc, err := f.Open()
+		if err != nil {
+			return false, err
+		}
+		_, copyErr := io.Copy(io.Discard, rc)
+		closeErr := rc.Close()
+		if copyErr != nil {
+			return false, copyErr
+		}
+		if closeErr != nil {
+			return false, closeErr
+		}
+	}
+	if files == 0 {
+		return false, fmt.Errorf("zip file empty")
+	}
+	return true, nil
 }
 
 func (s *Slave) handleMediaInfo(ac *protocol.AsyncCommand) interface{} {

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 func (s *Session) HandleSiteChmod(args []string) bool {
@@ -20,11 +21,26 @@ func (s *Session) HandleSiteChmod(args []string) bool {
 }
 
 func (s *Session) HandleSiteXDupe(args []string) bool {
-	if len(args) > 0 {
-		fmt.Fprintf(s.Conn, "200 XDUPE %s activated.\r\n", args[0])
-	} else {
-		fmt.Fprintf(s.Conn, "200 XDUPE 3 activated.\r\n")
+	if len(args) == 0 {
+		if s.XDupeMode == 0 {
+			fmt.Fprintf(s.Conn, "200 Extended dupe mode is disabled.\r\n")
+		} else {
+			fmt.Fprintf(s.Conn, "200 Extended dupe mode %d is enabled.\r\n", s.XDupeMode)
+		}
+		return false
 	}
+
+	mode, err := strconv.Atoi(strings.TrimSpace(args[0]))
+	if err != nil {
+		fmt.Fprintf(s.Conn, "501 Syntax error.\r\n")
+		return false
+	}
+	if mode < 0 || mode > 4 {
+		fmt.Fprintf(s.Conn, "504 Command not implemented for that parameter.\r\n")
+		return false
+	}
+	s.XDupeMode = mode
+	fmt.Fprintf(s.Conn, "200 Activated extended dupe mode %d.\r\n", mode)
 	return false
 }
 

@@ -17,10 +17,11 @@ const (
 
 // RemoteSlave represents a connected slave as seen from the master.
 type RemoteSlave struct {
-	name    string
-	conn    net.Conn
-	stream  *protocol.ObjectStream
-	writeMu sync.Mutex // protects stream writes
+	name      string
+	conn      net.Conn
+	stream    *protocol.ObjectStream
+	writeMu   sync.Mutex // protects stream writes
+	onOffline func(name string)
 
 	// Async index pool ( / _indexWithCommands)
 	indexPool      chan string
@@ -55,7 +56,7 @@ type RemoteSlave struct {
 }
 
 // NewRemoteSlave creates a new remote slave from an accepted connection.
-func NewRemoteSlave(name string, conn net.Conn, stream *protocol.ObjectStream, heartbeatTimeout time.Duration) *RemoteSlave {
+func NewRemoteSlave(name string, conn net.Conn, stream *protocol.ObjectStream, heartbeatTimeout time.Duration, onOffline func(name string)) *RemoteSlave {
 	if heartbeatTimeout <= 0 {
 		heartbeatTimeout = 60 * time.Second
 	}
@@ -63,6 +64,7 @@ func NewRemoteSlave(name string, conn net.Conn, stream *protocol.ObjectStream, h
 		name:             name,
 		conn:             conn,
 		stream:           stream,
+		onOffline:        onOffline,
 		indexPool:        make(chan string, 256),
 		commandNotify:    make(chan struct{}, 256),
 		properties:       make(map[string]string),
@@ -367,6 +369,9 @@ func (rs *RemoteSlave) SetOffline(reason string) {
 	rs.remerging.Store(false)
 	if rs.conn != nil {
 		rs.conn.Close()
+	}
+	if rs.onOffline != nil {
+		rs.onOffline(rs.name)
 	}
 
 	// [Added] Instantly unblocks any FetchResponse calls waiting for data from this dead slave

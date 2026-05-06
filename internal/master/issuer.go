@@ -283,6 +283,14 @@ func IssueReadZipEntry(rs *RemoteSlave, archivePath, entryName string) (string, 
 	return index, rs.SendCommand(&protocol.AsyncCommand{Index: index, Name: "readZipEntry", Args: []string{archivePath, entryName}})
 }
 
+func IssueZipIntegrity(rs *RemoteSlave, archivePath string) (string, error) {
+	index, err := rs.FetchIndex()
+	if err != nil {
+		return "", err
+	}
+	return index, rs.SendCommand(&protocol.AsyncCommand{Index: index, Name: "zipIntegrity", Args: []string{archivePath}})
+}
+
 // IssueWriteFile asks the slave to write a small file.
 func IssueWriteFile(rs *RemoteSlave, path string, content string) (string, error) {
 	index, err := rs.FetchIndex()

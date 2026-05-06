@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,6 +25,12 @@ import (
 type Bridge struct {
 	sm     *SlaveManager
 	raceDB *RaceDB
+}
+
+var zipPayloadNameRE = regexp.MustCompile(`(?i)\.(zip|z\d\d)$`)
+
+func isZipMainArchivePath(filePath string) bool {
+	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(path.Base(filePath))), ".zip")
 }
 
 // NewBridge creates a new Bridge adapter.
@@ -342,12 +349,30 @@ func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group s
 	checksum := h.Sum32()
 	slaveConn.Close()
 
+	status, statusErr := slave.WaitTransferStatus(transferResp.Info.TransferIndex, 2*time.Hour)
 	if err != nil {
+		if statusErr == nil && status.Error != "" {
+			b.reconcileFailedUploadState(filePath, slave)
+			return status.Transferred, status.Checksum, fmt.Errorf("%s", status.Error)
+		}
+		if statusErr != nil {
+			b.reconcileFailedUploadState(filePath, slave)
+		}
 		log.Printf("[Bridge] Upload bridge error: %v (wrote %d bytes)", err, written)
 		return written, checksum, fmt.Errorf("upload bridge: %w", err)
 	}
+	if statusErr != nil {
+		b.reconcileFailedUploadState(filePath, slave)
+		return written, checksum, statusErr
+	}
+	if status.Error != "" {
+		b.reconcileFailedUploadState(filePath, slave)
+		return status.Transferred, status.Checksum, fmt.Errorf("%s", status.Error)
+	}
 
-	finalSize := written
+	finalSize := status.Transferred
+	xferTime = status.Elapsed
+	checksum = status.Checksum
 	if position > 0 {
 		finalSize += position
 		finalChecksum, err := b.ChecksumFile(filePath)
@@ -389,26 +414,26 @@ func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group s
 //  3. Connect from master to slave's data port
 //  4. Tell slave to SEND the file
 //  5. Bridge data: read from slave, write to clientData
-func (b *Bridge) DownloadFile(filePath string, clientData net.Conn, position int64) error {
+func (b *Bridge) DownloadFile(filePath string, clientData net.Conn, position int64) (uint32, error) {
 	slave := b.sm.SelectSlaveForDownload(filePath)
 	if slave == nil {
-		return fmt.Errorf("file not found on any available slave: %s", filePath)
+		return 0, fmt.Errorf("file not found on any available slave: %s", filePath)
 	}
 
 	// Tell slave to listen
 	listenIdx, err := IssueListen(slave, false, false)
 	if err != nil {
-		return fmt.Errorf("issue listen to %s: %w", slave.Name(), err)
+		return 0, fmt.Errorf("issue listen to %s: %w", slave.Name(), err)
 	}
 
 	resp, err := slave.FetchResponse(listenIdx, 60*time.Second)
 	if err != nil {
-		return fmt.Errorf("slave %s listen failed: %w", slave.Name(), err)
+		return 0, fmt.Errorf("slave %s listen failed: %w", slave.Name(), err)
 	}
 
 	transferResp, ok := resp.(*protocol.AsyncResponseTransfer)
 	if !ok {
-		return fmt.Errorf("unexpected response from slave")
+		return 0, fmt.Errorf("unexpected response from slave")
 	}
 
 	slaveAddr := fmt.Sprintf("%s:%d", slave.GetPASVIP(), transferResp.Info.Port)
@@ -416,7 +441,7 @@ func (b *Bridge) DownloadFile(filePath string, clientData net.Conn, position int
 
 	slaveConn, err := net.DialTimeout("tcp", slaveAddr, 10*time.Second)
 	if err != nil {
-		return fmt.Errorf("connect to slave data port: %w", err)
+		return 0, fmt.Errorf("connect to slave data port: %w", err)
 	}
 
 	// Tell slave to send the file
@@ -424,26 +449,45 @@ func (b *Bridge) DownloadFile(filePath string, clientData net.Conn, position int
 		transferResp.Info.TransferIndex, 0, 0)
 	if err != nil {
 		slaveConn.Close()
-		return fmt.Errorf("issue send: %w", err)
+		return 0, fmt.Errorf("issue send: %w", err)
 	}
 
 	_, err = slave.FetchResponse(sendIdx, 60*time.Second)
 	if err != nil {
 		slaveConn.Close()
-		return fmt.Errorf("send ack: %w", err)
+		b.reconcileUnavailableDownloadState(filePath, slave)
+		return 0, fmt.Errorf("send ack: %w", err)
 	}
 
 	// Bridge: slave -> client
-	written, err := io.Copy(clientData, slaveConn)
+	var checksum uint32
+	var writer io.Writer = clientData
+	if position == 0 {
+		h := crc32.NewIEEE()
+		writer = io.MultiWriter(clientData, h)
+		defer func() {
+			checksum = h.Sum32()
+		}()
+	}
+	written, err := io.Copy(writer, slaveConn)
 	slaveConn.Close()
+	status, statusErr := slave.WaitTransferStatus(transferResp.Info.TransferIndex, 2*time.Hour)
 
 	if err != nil {
 		log.Printf("[Bridge] Download bridge error: %v (wrote %d bytes)", err, written)
-		return fmt.Errorf("download bridge: %w", err)
+		return 0, fmt.Errorf("download bridge: %w", err)
+	}
+	if statusErr != nil {
+		b.reconcileUnavailableDownloadState(filePath, slave)
+		return 0, statusErr
+	}
+	if status.Error != "" {
+		b.reconcileUnavailableDownloadState(filePath, slave)
+		return 0, fmt.Errorf("%s", status.Error)
 	}
 
 	log.Printf("[Bridge] Downloaded %s from slave %s (%d bytes, offset=%d)", filePath, slave.Name(), written, position)
-	return nil
+	return checksum, nil
 }
 
 // DeleteFile deletes from all slaves and VFS.
@@ -453,6 +497,7 @@ func (b *Bridge) DeleteFile(filePath string) error {
 	if err != nil {
 		return err
 	}
+	b.cleanupZipDizAfterDelete(filePath)
 	if b.raceDB != nil {
 		isDir := vfsFile != nil && vfsFile.IsDir
 		if derr := b.raceDB.DeletePath(filepath.Clean(filePath), isDir); derr != nil {
@@ -462,17 +507,48 @@ func (b *Bridge) DeleteFile(filePath string) error {
 	return nil
 }
 
-// RenameFile renames on all slaves and VFS.
-func (b *Bridge) RenameFile(from, toDir, toName string) {
+func (b *Bridge) cleanupZipDizAfterDelete(filePath string) {
+	if b == nil || b.sm == nil {
+		return
+	}
+	if !isZipMainArchivePath(filePath) {
+		return
+	}
+	dirPath := path.Clean(path.Dir(filePath))
+	entries := b.ListDir(dirPath)
+	for _, entry := range entries {
+		if entry.IsDir || entry.IsSymlink {
+			continue
+		}
+		if strings.HasSuffix(strings.ToLower(strings.TrimSpace(entry.Name)), ".zip") {
+			return
+		}
+	}
+	dizPath := path.Join(dirPath, "file_id.diz")
+	if b.sm.GetVFS().FileExists(dizPath) {
+		if err := b.sm.DeleteFile(dizPath); err != nil && !strings.Contains(strings.ToLower(err.Error()), "not found") {
+			log.Printf("[Bridge] zip diz cleanup failed for %s: %v", dirPath, err)
+		}
+	}
+}
+
+// RenameFile renames on the owning slave and VFS.
+func (b *Bridge) RenameFile(from, toDir, toName string) error {
 	vfsFile := b.sm.GetVFS().GetFile(from)
 	toPath := filepath.Join(toDir, toName)
-	b.sm.RenameFile(from, toDir, toName)
+	if err := b.sm.RenameFile(from, toDir, toName); err != nil {
+		return err
+	}
+	if isZipMainArchivePath(from) && !isZipMainArchivePath(toPath) {
+		b.cleanupZipDizAfterDelete(from)
+	}
 	if b.raceDB != nil {
 		isDir := vfsFile != nil && vfsFile.IsDir
 		if err := b.raceDB.RenamePath(filepath.Clean(from), filepath.Clean(toPath), isDir); err != nil {
 			log.Printf("[Bridge] Race DB rename sync failed from %s to %s: %v", from, toPath, err)
 		}
 	}
+	return nil
 }
 
 func (b *Bridge) RelocatePath(from, toDir, toName string) error {
@@ -645,6 +721,61 @@ func (b *Bridge) makeDirOnSlave(slave *RemoteSlave, dirPath string) error {
 	return nil
 }
 
+func (b *Bridge) resolveOwningSlave(path string) (*RemoteSlave, *VFSFile, error) {
+	if b == nil || b.sm == nil {
+		return nil, nil, fmt.Errorf("master not initialized")
+	}
+	vfsPath := filepath.ToSlash(filepath.Clean(path))
+	file := b.sm.GetVFS().GetFile(vfsPath)
+	if file == nil {
+		return nil, nil, fmt.Errorf("path not found: %s", vfsPath)
+	}
+	if strings.TrimSpace(file.SlaveName) == "" {
+		return nil, file, nil
+	}
+	if b.sm.IsSlaveReadOnly(file.SlaveName) {
+		return nil, file, fmt.Errorf("path is on read-only slave: %s", vfsPath)
+	}
+	slave := b.sm.GetSlave(file.SlaveName)
+	if slave == nil || !slave.IsAvailable() {
+		return nil, file, fmt.Errorf("owning slave unavailable: %s", file.SlaveName)
+	}
+	return slave, file, nil
+}
+
+func (b *Bridge) selectWritableSlaveForCreate(path string) (*RemoteSlave, error) {
+	if b == nil || b.sm == nil {
+		return nil, fmt.Errorf("master not initialized")
+	}
+	vfsPath := filepath.ToSlash(filepath.Clean(path))
+	if slave, file, err := b.resolveOwningSlave(vfsPath); file != nil {
+		if err != nil {
+			return nil, err
+		}
+		if slave != nil {
+			return slave, nil
+		}
+		return nil, fmt.Errorf("path has no owning slave: %s", vfsPath)
+	}
+	parent := filepath.ToSlash(filepath.Clean(filepath.Dir(vfsPath)))
+	if parent != "." && parent != "/" {
+		if slave, file, err := b.resolveOwningSlave(parent); file != nil {
+			if err != nil {
+				return nil, err
+			}
+			if slave != nil {
+				return slave, nil
+			}
+			return nil, fmt.Errorf("parent path has no owning slave: %s", parent)
+		}
+	}
+	slave := b.sm.SelectSlaveForUpload(vfsPath)
+	if slave == nil {
+		return nil, fmt.Errorf("no available slave")
+	}
+	return slave, nil
+}
+
 func (b *Bridge) deletePathOnSlave(slave *RemoteSlave, filePath string) error {
 	index, err := IssueDelete(slave, filePath)
 	if err != nil {
@@ -732,54 +863,88 @@ func (b *Bridge) copyFileBetweenSlaves(sourceSlave, destSlave *RemoteSlave, from
 	return nil
 }
 
-// MakeDir creates a directory in the VFS and physically on the slave.
-func (b *Bridge) MakeDir(dirPath, owner, group string) {
-	// 1. Create in Master VFS
-	b.sm.MakeDirectory(dirPath, owner, group)
-
-	// 2. Tell the slave to actually create the folder on its physical disk.
-	// This ensures empty directories survive the 'remerge' process on restart.
-	slave := b.sm.SelectSlaveForUpload(dirPath)
-
-	if slave != nil {
-		index, err := IssueMakeDir(slave, dirPath)
-		if err == nil {
-			_, _ = slave.FetchResponse(index, 30*time.Second)
+// MakeDir creates a directory on a selected slave and then records it in VFS.
+func (b *Bridge) MakeDir(dirPath, owner, group string) error {
+	var slave *RemoteSlave
+	if parent := b.sm.GetVFS().GetFile(path.Dir(dirPath)); parent != nil && strings.TrimSpace(parent.SlaveName) != "" {
+		slave = b.sm.GetSlave(parent.SlaveName)
+		if slave != nil && (!slave.IsAvailable() || b.sm.IsSlaveReadOnly(slave.Name())) {
+			slave = nil
 		}
 	}
+	if slave == nil {
+		slave = b.sm.SelectSlaveForUpload(dirPath)
+	}
+	if slave == nil {
+		return fmt.Errorf("no available slave for mkdir: %s", dirPath)
+	}
+	if err := b.makeDirOnSlave(slave, dirPath); err != nil {
+		return err
+	}
+	b.sm.MakeDirectoryOnSlave(dirPath, owner, group, slave.Name())
+	return nil
 }
 
 func (b *Bridge) Symlink(linkPath, targetPath string) error {
-	b.sm.GetVFS().AddSymlink(linkPath, targetPath)
-	var lastErr error
-	for _, slave := range b.sm.GetWritableAvailableSlaves() {
+	linkPath = filepath.ToSlash(filepath.Clean(linkPath))
+	targetPath = filepath.ToSlash(filepath.Clean(targetPath))
+	targetResolved := b.ResolvePath(targetPath)
+
+	slave, targetFile, err := b.resolveOwningSlave(targetResolved)
+	if err != nil {
+		return err
+	}
+	if targetFile == nil {
+		return fmt.Errorf("symlink target not found: %s", targetPath)
+	}
+	if slave != nil {
+		parentDir := filepath.ToSlash(filepath.Clean(filepath.Dir(linkPath)))
+		if parentDir != "." && parentDir != "/" {
+			if err := b.makeDirOnSlave(slave, parentDir); err != nil {
+				return err
+			}
+		}
 		targetArg := strings.TrimPrefix(filepath.ToSlash(filepath.Clean(targetPath)), "/")
 		index, err := IssueSymlink(slave, linkPath, targetArg)
 		if err != nil {
-			lastErr = err
-			continue
+			return err
 		}
-		if _, err := slave.FetchResponse(index, 30*time.Second); err != nil {
-			lastErr = err
+		resp, err := slave.FetchResponse(index, 30*time.Second)
+		if err != nil {
+			return err
+		}
+		if errResp, ok := resp.(*protocol.AsyncResponseError); ok {
+			return fmt.Errorf("%s", errResp.Message)
 		}
 	}
-	return lastErr
+	b.sm.GetVFS().AddSymlink(linkPath, targetPath)
+	return nil
 }
 
 func (b *Bridge) Chmod(path string, mode uint32) error {
-	b.sm.GetVFS().Chmod(path, mode)
-	var lastErr error
-	for _, slave := range b.sm.GetWritableAvailableSlaves() {
+	path = filepath.ToSlash(filepath.Clean(path))
+	slave, file, err := b.resolveOwningSlave(path)
+	if err != nil {
+		return err
+	}
+	if file == nil {
+		return fmt.Errorf("path not found: %s", path)
+	}
+	if slave != nil {
 		index, err := IssueChmod(slave, path, mode)
 		if err != nil {
-			lastErr = err
-			continue
+			return err
 		}
-		if _, err := slave.FetchResponse(index, 30*time.Second); err != nil {
-			lastErr = err
+		resp, err := slave.FetchResponse(index, 30*time.Second)
+		if err != nil {
+			return err
+		}
+		if errResp, ok := resp.(*protocol.AsyncResponseError); ok {
+			return fmt.Errorf("%s", errResp.Message)
 		}
 	}
-	return lastErr
+	b.sm.GetVFS().Chmod(path, mode)
+	return nil
 }
 
 // GetFileSize returns file size, or -1 if not found.
@@ -789,6 +954,26 @@ func (b *Bridge) GetFileSize(filePath string) int64 {
 		return -1
 	}
 	return f.Size
+}
+
+func (b *Bridge) GetPathEntry(filePath string) (core.MasterFileEntry, bool) {
+	f := b.sm.GetVFS().GetFile(filePath)
+	if f == nil {
+		return core.MasterFileEntry{}, false
+	}
+	return core.MasterFileEntry{
+		Name:       filepath.Base(f.Path),
+		Size:       f.Size,
+		IsDir:      f.IsDir,
+		IsSymlink:  f.IsSymlink,
+		LinkTarget: f.LinkTarget,
+		Mode:       f.Mode,
+		ModTime:    f.LastModified,
+		Owner:      f.Owner,
+		Group:      f.Group,
+		Slave:      f.SlaveName,
+		XferTime:   f.XferTime,
+	}, true
 }
 
 func (b *Bridge) ResolvePath(filePath string) string {
@@ -803,33 +988,55 @@ func (b *Bridge) FileExists(filePath string) bool {
 	return b.sm.GetVFS().FileExists(filePath)
 }
 
+func (b *Bridge) GetKnownChecksum(filePath string) (uint32, bool) {
+	f := b.sm.GetVFS().GetFile(filePath)
+	if f == nil || f.IsDir || f.Checksum == 0 {
+		return 0, false
+	}
+	return f.Checksum, true
+}
+
 // ReadFile reads a small file from a slave (for .message/.imdb display).
 func (b *Bridge) ReadFile(filePath string) ([]byte, error) {
-	slave := b.sm.SelectSlaveForDownload(filePath)
-	if slave == nil {
-		return nil, fmt.Errorf("file not found: %s", filePath)
+	candidates, candidateErr := b.candidateSlavesForPath(filePath)
+	if candidateErr != nil {
+		return nil, candidateErr
 	}
+	var lastErr error
+	for _, slave := range candidates {
+		index, err := IssueReadFile(slave, filePath)
+		if err != nil {
+			lastErr = fmt.Errorf("issue readFile to %s: %w", slave.Name(), err)
+			continue
+		}
 
-	index, err := IssueReadFile(slave, filePath)
-	if err != nil {
-		return nil, fmt.Errorf("issue readFile: %w", err)
+		resp, err := slave.FetchResponse(index, 30*time.Second)
+		if err != nil {
+			lastErr = fmt.Errorf("%s: %w", slave.Name(), err)
+			continue
+		}
+		if errResp, ok := resp.(*protocol.AsyncResponseError); ok {
+			lastErr = fmt.Errorf("%s: %s", slave.Name(), errResp.Message)
+			continue
+		}
+		if fc, ok := resp.(*protocol.AsyncResponseFileContent); ok {
+			return fc.Content, nil
+		}
+		lastErr = fmt.Errorf("%s: unexpected response type: %T", slave.Name(), resp)
 	}
-
-	resp, err := slave.FetchResponse(index, 30*time.Second)
-	if err != nil {
-		return nil, err
+	if lastErr != nil {
+		return nil, lastErr
 	}
-
-	if fc, ok := resp.(*protocol.AsyncResponseFileContent); ok {
-		return fc.Content, nil
-	}
-
-	return nil, fmt.Errorf("unexpected response type: %T", resp)
+	return nil, fmt.Errorf("file not found: %s", filePath)
 }
 
 func (b *Bridge) ReadZipEntry(archivePath, entryName string) ([]byte, error) {
+	candidates, candidateErr := b.candidateSlavesForPath(archivePath)
+	if candidateErr != nil {
+		return nil, candidateErr
+	}
 	var lastErr error
-	for _, slave := range b.candidateSlavesForPath(archivePath) {
+	for _, slave := range candidates {
 		index, err := IssueReadZipEntry(slave, archivePath, entryName)
 		if err != nil {
 			lastErr = fmt.Errorf("issue readZipEntry to %s: %w", slave.Name(), err)
@@ -856,6 +1063,39 @@ func (b *Bridge) ReadZipEntry(archivePath, entryName string) ([]byte, error) {
 	return nil, fmt.Errorf("file not found: %s", archivePath)
 }
 
+func (b *Bridge) CheckZipIntegrity(archivePath string) (bool, error) {
+	candidates, candidateErr := b.candidateSlavesForPath(archivePath)
+	if candidateErr != nil {
+		return false, candidateErr
+	}
+	var lastErr error
+	for _, slave := range candidates {
+		index, err := IssueZipIntegrity(slave, archivePath)
+		if err != nil {
+			lastErr = fmt.Errorf("issue zipIntegrity to %s: %w", slave.Name(), err)
+			continue
+		}
+
+		resp, err := slave.FetchResponse(index, 2*time.Minute)
+		if err != nil {
+			lastErr = fmt.Errorf("%s: %w", slave.Name(), err)
+			continue
+		}
+		if errResp, ok := resp.(*protocol.AsyncResponseError); ok {
+			lastErr = fmt.Errorf("%s: %s", slave.Name(), errResp.Message)
+			continue
+		}
+		if zr, ok := resp.(*protocol.AsyncResponseZipIntegrity); ok {
+			return zr.OK, nil
+		}
+		lastErr = fmt.Errorf("%s: unexpected response type: %T", slave.Name(), resp)
+	}
+	if lastErr != nil {
+		return false, lastErr
+	}
+	return false, fmt.Errorf("file not found: %s", archivePath)
+}
+
 func (b *Bridge) ProbeMediaInfo(filePath, binary string, timeoutSeconds int) (map[string]string, error) {
 	if strings.TrimSpace(binary) == "" {
 		binary = "mediainfo"
@@ -863,8 +1103,12 @@ func (b *Bridge) ProbeMediaInfo(filePath, binary string, timeoutSeconds int) (ma
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = 20
 	}
+	candidates, candidateErr := b.candidateSlavesForPath(filePath)
+	if candidateErr != nil {
+		return nil, candidateErr
+	}
 	var lastErr error
-	for _, slave := range b.candidateSlavesForPath(filePath) {
+	for _, slave := range candidates {
 		index, err := IssueMediaInfo(slave, filePath, binary, timeoutSeconds)
 		if err != nil {
 			lastErr = fmt.Errorf("issue mediainfo to %s: %w", slave.Name(), err)
@@ -892,8 +1136,12 @@ func (b *Bridge) ProbeMediaInfo(filePath, binary string, timeoutSeconds int) (ma
 
 // GetSFVInfo asks a slave to parse an SFV file and return the entries.
 func (b *Bridge) GetSFVInfo(sfvPath string) ([]core.SFVEntryInfo, error) {
+	candidates, candidateErr := b.candidateSlavesForPath(sfvPath)
+	if candidateErr != nil {
+		return nil, candidateErr
+	}
 	var lastErr error
-	for _, slave := range b.candidateSlavesForPath(sfvPath) {
+	for _, slave := range candidates {
 		index, err := IssueSFVFile(slave, sfvPath)
 		if err != nil {
 			lastErr = fmt.Errorf("issue sfvFile to %s: %w", slave.Name(), err)
@@ -928,15 +1176,10 @@ func (b *Bridge) GetSFVInfo(sfvPath string) ([]core.SFVEntryInfo, error) {
 
 // WriteFile writes a small file to a slave.
 func (b *Bridge) WriteFile(filePath string, content []byte) error {
-	slave := b.sm.SelectSlaveForDownload(filePath)
-	if slave != nil && b.sm.IsSlaveReadOnly(slave.Name()) {
-		slave = nil
-	}
-	if slave == nil {
-		slave = b.sm.SelectSlaveForUpload(filePath)
-	}
-	if slave == nil {
-		return fmt.Errorf("no available slave")
+	filePath = filepath.ToSlash(filepath.Clean(filePath))
+	slave, err := b.selectWritableSlaveForCreate(filePath)
+	if err != nil {
+		return err
 	}
 
 	index, err := IssueWriteFile(slave, filePath, string(content))
@@ -944,9 +1187,12 @@ func (b *Bridge) WriteFile(filePath string, content []byte) error {
 		return fmt.Errorf("issue writeFile: %w", err)
 	}
 
-	_, err = slave.FetchResponse(index, 30*time.Second)
+	resp, err := slave.FetchResponse(index, 30*time.Second)
 	if err != nil {
 		return err
+	}
+	if errResp, ok := resp.(*protocol.AsyncResponseError); ok {
+		return fmt.Errorf("%s", errResp.Message)
 	}
 
 	// Add to VFS
@@ -965,23 +1211,22 @@ func (b *Bridge) CreateSparseFile(filePath string, size int64, owner, group stri
 	if size < 0 {
 		return fmt.Errorf("invalid sparse file size: %d", size)
 	}
-	slave := b.sm.SelectSlaveForDownload(filePath)
-	if slave != nil && b.sm.IsSlaveReadOnly(slave.Name()) {
-		slave = nil
-	}
-	if slave == nil {
-		slave = b.sm.SelectSlaveForUpload(filePath)
-	}
-	if slave == nil {
-		return fmt.Errorf("no available slave")
+	filePath = filepath.ToSlash(filepath.Clean(filePath))
+	slave, err := b.selectWritableSlaveForCreate(filePath)
+	if err != nil {
+		return err
 	}
 
 	index, err := IssueCreateSparseFile(slave, filePath, size)
 	if err != nil {
 		return fmt.Errorf("issue createSparseFile: %w", err)
 	}
-	if _, err := slave.FetchResponse(index, 30*time.Second); err != nil {
+	resp, err := slave.FetchResponse(index, 30*time.Second)
+	if err != nil {
 		return err
+	}
+	if errResp, ok := resp.(*protocol.AsyncResponseError); ok {
+		return fmt.Errorf("%s", errResp.Message)
 	}
 
 	b.sm.GetVFS().AddFile(filePath, VFSFile{
@@ -997,8 +1242,12 @@ func (b *Bridge) CreateSparseFile(filePath string, size int64, owner, group stri
 }
 
 func (b *Bridge) ChecksumFile(filePath string) (uint32, error) {
+	candidates, candidateErr := b.candidateSlavesForPath(filePath)
+	if candidateErr != nil {
+		return 0, candidateErr
+	}
 	var lastErr error
-	for _, slave := range b.candidateSlavesForPath(filePath) {
+	for _, slave := range candidates {
 		index, err := IssueChecksum(slave, filePath)
 		if err != nil {
 			lastErr = fmt.Errorf("issue checksum to %s: %w", slave.Name(), err)
@@ -1024,13 +1273,28 @@ func (b *Bridge) ChecksumFile(filePath string) (uint32, error) {
 	return 0, fmt.Errorf("file not found: %s", filePath)
 }
 
-func (b *Bridge) candidateSlavesForPath(filePath string) []*RemoteSlave {
+func (b *Bridge) candidateSlavesForPath(filePath string) ([]*RemoteSlave, error) {
+	cleanPath := filepath.ToSlash(filepath.Clean(filePath))
+	pathsToCheck := []string{cleanPath}
+	if resolved := b.ResolvePath(cleanPath); resolved != "" && resolved != cleanPath {
+		pathsToCheck = append(pathsToCheck, resolved)
+	}
+	for _, candidatePath := range pathsToCheck {
+		slave, file, err := b.resolveOwningSlave(candidatePath)
+		if file == nil {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if slave != nil {
+			return []*RemoteSlave{slave}, nil
+		}
+		return nil, fmt.Errorf("path has no owning slave: %s", cleanPath)
+	}
+
 	out := make([]*RemoteSlave, 0, 1)
 	seen := map[string]bool{}
-	if slave := b.sm.SelectSlaveForDownload(filePath); slave != nil {
-		out = append(out, slave)
-		seen[slave.Name()] = true
-	}
 	for _, slave := range b.sm.GetAvailableSlaves() {
 		if slave == nil || seen[slave.Name()] {
 			continue
@@ -1038,7 +1302,7 @@ func (b *Bridge) candidateSlavesForPath(filePath string) []*RemoteSlave {
 		out = append(out, slave)
 		seen[slave.Name()] = true
 	}
-	return out
+	return out, nil
 }
 
 func (b *Bridge) MarkFileMissing(filePath string) error {
@@ -1049,11 +1313,57 @@ func (b *Bridge) MarkFileMissing(filePath string) error {
 	return nil
 }
 
+func (b *Bridge) reconcileFailedUploadState(filePath string, slave *RemoteSlave) {
+	if b == nil || slave == nil {
+		return
+	}
+	index, err := IssueChecksum(slave, filePath)
+	if err != nil {
+		return
+	}
+	resp, err := slave.FetchResponse(index, 30*time.Second)
+	if err != nil {
+		return
+	}
+	if _, ok := resp.(*protocol.AsyncResponseChecksum); ok {
+		return
+	}
+	if errResp, ok := resp.(*protocol.AsyncResponseError); ok && isDefinitiveMissingResponse(errResp.Message) {
+		_ = b.MarkFileMissing(filePath)
+	}
+}
+
+func (b *Bridge) reconcileUnavailableDownloadState(filePath string, slave *RemoteSlave) {
+	if b == nil || slave == nil {
+		return
+	}
+	index, err := IssueChecksum(slave, filePath)
+	if err != nil {
+		return
+	}
+	resp, err := slave.FetchResponse(index, 30*time.Second)
+	if err != nil {
+		return
+	}
+	if _, ok := resp.(*protocol.AsyncResponseChecksum); ok {
+		return
+	}
+	if errResp, ok := resp.(*protocol.AsyncResponseError); ok && isDefinitiveMissingResponse(errResp.Message) {
+		_ = b.MarkFileMissing(filePath)
+	}
+}
+
+func isDefinitiveMissingResponse(message string) bool {
+	lower := strings.ToLower(strings.TrimSpace(message))
+	return strings.Contains(lower, "file not found")
+}
+
 func (b *Bridge) SyncPresentFile(filePath string, checksum uint32) error {
 	f := b.sm.GetVFS().GetFile(filePath)
 	if f == nil || f.IsDir {
 		return fmt.Errorf("file not found: %s", filePath)
 	}
+	b.sm.GetVFS().UpdateFileVerification(filePath, checksum)
 	if b.raceDB != nil {
 		return b.raceDB.RecordUpload(filePath, f.Owner, f.Group, f.Size, f.XferTime, checksum)
 	}
@@ -1132,9 +1442,7 @@ func (v *VFSAdapter) MkdirAll(dirPath string, perm os.FileMode) error {
 	}
 
 	// Triggers VFS creation AND network broadcast to the slave
-	v.b.MakeDir(dirPath, owner, group)
-
-	return nil
+	return v.b.MakeDir(dirPath, owner, group)
 }
 
 func (v *VFSAdapter) Symlink(oldname, newname string) error {
@@ -1199,13 +1507,17 @@ func (b *Bridge) CacheMediaInfo(dirPath string, fields map[string]string) {
 // counting ONLY files that are listed in the cached SFV data.
 func (b *Bridge) GetVFSRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRaceGroup, int64, int, int) {
 	cleanDirPath := filepath.Clean(dirPath)
-	if b.raceDB != nil {
+	excludeKeys := b.liveUploadingRaceKeysForDir(cleanDirPath)
+	if meta := b.sm.GetVFS().GetSFVData(cleanDirPath); meta != nil && len(meta.SFVEntries) > 0 {
+		// Prefer live VFS state for SFV-backed releases so remerge reflects what
+		// is actually on disk right now, not just what an older DB snapshot said.
+	} else if b.raceDB != nil {
 		users, groups, totalBytes, present, total := b.raceDB.GetRaceStats(cleanDirPath)
 		if total > 0 || present > 0 || totalBytes > 0 || len(users) > 0 || len(groups) > 0 || b.raceDB.HasRelease(cleanDirPath) {
 			return users, groups, totalBytes, present, total
 		}
 	}
-	users, groups, totalBytes, present, total := b.sm.GetVFS().GetRaceStats(dirPath)
+	users, groups, totalBytes, present, total := b.sm.GetVFS().GetRaceStatsFiltered(dirPath, excludeKeys)
 
 	coreUsers := make([]core.VFSRaceUser, len(users))
 	for i, u := range users {
@@ -1236,10 +1548,32 @@ func (b *Bridge) GetVFSRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFS
 }
 
 func (b *Bridge) GetImmediateReleaseProgress(dirPath string) map[string]core.ReleaseProgressStat {
-	if b == nil || b.raceDB == nil {
+	if b == nil || b.sm == nil {
 		return nil
 	}
-	return b.raceDB.GetImmediateReleaseProgress(filepath.Clean(dirPath))
+	cleanDirPath := filepath.Clean(dirPath)
+	if out := b.sm.GetVFS().GetImmediateChildDirProgress(cleanDirPath); len(out) > 0 {
+		uploadsByDir := b.liveUploadingRaceKeysByDir(cleanDirPath)
+		for childPath, excludeKeys := range uploadsByDir {
+			stat, ok := out[childPath]
+			if !ok {
+				continue
+			}
+			meta := b.sm.GetVFS().GetSFVData(childPath)
+			if meta == nil || len(meta.SFVEntries) == 0 {
+				continue
+			}
+			stat.Present = len(b.sm.GetVFS().GetVerifiedSFVPresentFilesFiltered(childPath, excludeKeys))
+			stat.Total = len(meta.SFVEntries)
+			stat.HasSFV = stat.Total > 0
+			out[childPath] = stat
+		}
+		return out
+	}
+	if b.raceDB == nil {
+		return nil
+	}
+	return b.raceDB.GetImmediateReleaseProgress(cleanDirPath)
 }
 
 func (b *Bridge) GetImmediateReleaseChildFacts(dirPath string) map[string]core.ReleaseChildFacts {
@@ -1292,6 +1626,48 @@ func (b *Bridge) GetSFVData(dirPath string) map[string]uint32 {
 		return nil
 	}
 	return meta.SFVEntries
+}
+
+func (b *Bridge) GetVerifiedSFVPresentFiles(dirPath string) map[string]bool {
+	if b == nil || b.sm == nil {
+		return nil
+	}
+	cleanDirPath := filepath.Clean(dirPath)
+	return b.sm.GetVFS().GetVerifiedSFVPresentFilesFiltered(cleanDirPath, b.liveUploadingRaceKeysForDir(cleanDirPath))
+}
+
+func (b *Bridge) liveUploadingRaceKeysForDir(dirPath string) map[string]bool {
+	byDir := b.liveUploadingRaceKeysByDir(filepath.Clean(dirPath))
+	return byDir[filepath.Clean(dirPath)]
+}
+
+func (b *Bridge) liveUploadingRaceKeysByDir(rootDir string) map[string]map[string]bool {
+	if b == nil {
+		return nil
+	}
+	rootDir = filepath.Clean(rootDir)
+	rootPrefix := strings.TrimRight(filepath.ToSlash(rootDir), "/") + "/"
+	out := make(map[string]map[string]bool)
+	for _, stat := range b.GetLiveTransferStats() {
+		if stat.Direction != "upload" {
+			continue
+		}
+		cleanPath := filepath.Clean(stat.Path)
+		parentDir := filepath.Clean(filepath.Dir(cleanPath))
+		parentSlash := filepath.ToSlash(parentDir)
+		if parentDir != rootDir && !strings.HasPrefix(parentSlash+"/", rootPrefix) {
+			continue
+		}
+		key := raceFileKey(filepath.Base(cleanPath))
+		if out[parentDir] == nil {
+			out[parentDir] = make(map[string]bool)
+		}
+		out[parentDir][key] = true
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func (b *Bridge) GetDirMediaInfo(dirPath string) map[string]string {
@@ -1396,9 +1772,11 @@ func (b *Bridge) SlaveReceivePassthrough(filePath string, transferIdx int32, sla
 	// Wait for transfer to complete — poll the RemoteTransfer status
 	status, err := slave.WaitTransferStatus(transferIdx, 2*time.Hour)
 	if err != nil {
+		b.reconcileFailedUploadState(filePath, slave)
 		return 0, 0, 0, err
 	}
 	if status.Error != "" {
+		b.reconcileFailedUploadState(filePath, slave)
 		return status.Transferred, status.Checksum, status.Elapsed, fmt.Errorf("%s", status.Error)
 	}
 
@@ -1449,14 +1827,17 @@ func (b *Bridge) SlaveSendPassthrough(filePath string, transferIdx int32, slaveN
 
 	_, err = slave.FetchResponse(sendIdx, 60*time.Second)
 	if err != nil {
+		b.reconcileUnavailableDownloadState(filePath, slave)
 		return fmt.Errorf("send ack: %w", err)
 	}
 
 	status, err := slave.WaitTransferStatus(transferIdx, 2*time.Hour)
 	if err != nil {
+		b.reconcileUnavailableDownloadState(filePath, slave)
 		return err
 	}
 	if status.Error != "" {
+		b.reconcileUnavailableDownloadState(filePath, slave)
 		return fmt.Errorf("%s", status.Error)
 	}
 
@@ -1519,7 +1900,12 @@ func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group strin
 
 	status, err := slave.WaitTransferStatus(transferResp.Info.TransferIndex, 2*time.Hour)
 	if err != nil {
+		b.reconcileFailedUploadState(filePath, slave)
 		return 0, 0, 0, err
+	}
+	if status.Error != "" {
+		b.reconcileFailedUploadState(filePath, slave)
+		return status.Transferred, status.Checksum, status.Elapsed, fmt.Errorf("%s", status.Error)
 	}
 
 	finalSize := status.Transferred

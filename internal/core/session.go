@@ -74,6 +74,7 @@ type Session struct {
 	PassthruSlave   interface{} // slave selected for passthrough (avoids import cycle)
 	PassthruXferIdx int32       // slave transfer index for passthrough
 	RestOffset      int64       // REST offset applied to the next STOR/RETR
+	XDupeMode       int         // SITE XDUPE mode for duplicate listings on STOR
 
 	stateMu           sync.RWMutex
 	LastCommandAt     time.Time

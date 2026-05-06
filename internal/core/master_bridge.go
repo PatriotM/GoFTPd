@@ -21,16 +21,17 @@ type MasterBridge interface {
 
 	// DownloadFile routes a download from a slave to the FTP client data connection.
 	// The bridge finds which slave has the file, tells it to send, then bridges data.
-	DownloadFile(filePath string, clientData net.Conn, position int64) error
+	// For full-file RETR, it returns the streamed CRC32 checksum when available.
+	DownloadFile(filePath string, clientData net.Conn, position int64) (uint32, error)
 
 	// DeleteFile deletes a file on all slaves and from the VFS.
 	DeleteFile(filePath string) error
 
-	// RenameFile renames on all slaves and in VFS.
-	RenameFile(from, toDir, toName string)
+	// RenameFile renames on the owning slave and in VFS.
+	RenameFile(from, toDir, toName string) error
 
-	// MakeDir creates a directory in the VFS.
-	MakeDir(dirPath, owner, group string)
+	// MakeDir creates a directory on the owning/selected slave and in the VFS.
+	MakeDir(dirPath, owner, group string) error
 
 	// Symlink creates or replaces a symbolic link in VFS/slaves.
 	Symlink(linkPath, targetPath string) error
@@ -45,6 +46,9 @@ type MasterBridge interface {
 	// GetFileSize returns file size from VFS, or -1 if not found.
 	GetFileSize(filePath string) int64
 
+	// GetPathEntry returns a single VFS entry for an exact path.
+	GetPathEntry(filePath string) (MasterFileEntry, bool)
+
 	// FileExists checks if a path exists in the VFS.
 	FileExists(filePath string) bool
 
@@ -55,6 +59,7 @@ type MasterBridge interface {
 	// ReadFile reads a small file from a slave (for .message/.imdb display).
 	ReadFile(filePath string) ([]byte, error)
 	ReadZipEntry(archivePath, entryName string) ([]byte, error)
+	CheckZipIntegrity(archivePath string) (bool, error)
 
 	// GetSFVInfo asks a slave to parse an SFV file and return filename→CRC32 entries.
 	GetSFVInfo(sfvPath string) ([]SFVEntryInfo, error)
@@ -64,6 +69,9 @@ type MasterBridge interface {
 
 	// ChecksumFile returns the CRC32 of a file from the slave that owns it.
 	ChecksumFile(filePath string) (uint32, error)
+
+	// GetKnownChecksum returns the cached VFS CRC32 for a file if known.
+	GetKnownChecksum(filePath string) (uint32, bool)
 
 	// MarkFileMissing removes a file from VFS/RaceDB presence without requiring it to exist.
 	MarkFileMissing(filePath string) error
@@ -95,6 +103,10 @@ type MasterBridge interface {
 	// GetSFVData returns cached SFV entries for a directory (filename->CRC32 map).
 	// Returns nil if no SFV is cached for this directory.
 	GetSFVData(dirPath string) map[string]uint32
+
+	// GetVerifiedSFVPresentFiles returns the expected SFV filenames that are
+	// currently present and checksum-valid according to live VFS state.
+	GetVerifiedSFVPresentFiles(dirPath string) map[string]bool
 
 	// GetDirMediaInfo returns cached release-level mediainfo fields for a directory.
 	GetDirMediaInfo(dirPath string) map[string]string

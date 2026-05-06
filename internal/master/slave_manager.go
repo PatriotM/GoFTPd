@@ -60,6 +60,8 @@ type SlaveManager struct {
 	securityHook   func(ip, remoteAddr, action, reason string, strikes, limit int, bannedUntil time.Time)
 	authMu         sync.Mutex
 	authState      map[string]*slaveAuthState
+	remergeCRCJobs sync.Map
+	remergeSFVJobs sync.Map
 }
 
 type slaveAuthState struct {
@@ -376,7 +378,9 @@ func (sm *SlaveManager) handleSlaveConnection(conn net.Conn) {
 		return
 	}
 
-	rs := NewRemoteSlave(slaveName, conn, stream, sm.heartbeatTimeout)
+	rs := NewRemoteSlave(slaveName, conn, stream, sm.heartbeatTimeout, func(name string) {
+		sm.vfs.ClearSlave(name)
+	})
 	sm.slaves[slaveName] = rs
 	sm.slavesMu.Unlock()
 
@@ -747,6 +751,7 @@ func (sm *SlaveManager) initializeSlaveAfterConnect(rs *RemoteSlave) {
 func (sm *SlaveManager) ProcessRemerge(rs *RemoteSlave, resp *protocol.AsyncResponseRemerge) {
 	log.Printf("[SlaveManager] Remerge from %s: dir=%s files=%d", rs.name, resp.Path, len(resp.Files))
 
+	sfvPaths := make([]string, 0, 1)
 	for _, inode := range resp.Files {
 		path := resp.Path
 		if path == "/" {
@@ -782,12 +787,121 @@ func (sm *SlaveManager) ProcessRemerge(rs *RemoteSlave, resp *protocol.AsyncResp
 			Group:        group,
 			Seen:         true,
 		})
+		if !inode.IsDir && strings.HasSuffix(strings.ToLower(inode.Name), ".sfv") {
+			sfvPaths = append(sfvPaths, path)
+		}
+		if sm.shouldRefreshRemergeChecksum(path, inode) {
+			sm.scheduleRemergeChecksumRefresh(rs, path)
+		}
+	}
+	for _, sfvPath := range sfvPaths {
+		sm.scheduleRemergeSFVParse(rs, sfvPath)
 	}
 
 	// Once a directory has been streamed from the slave, immediately purge any
 	// stale unseen children in that directory so clients do not try to download
 	// ghost files while the rest of the slave remerge is still running.
 	sm.vfs.PurgeUnseenChildren(rs.name, resp.Path)
+}
+
+func (sm *SlaveManager) shouldRefreshRemergeChecksum(filePath string, inode protocol.LightRemoteInode) bool {
+	if inode.IsDir || inode.IsSymlink || inode.Size <= 0 {
+		return false
+	}
+	meta := sm.vfs.GetSFVData(path.Dir(filePath))
+	if meta == nil || len(meta.SFVEntries) == 0 {
+		return false
+	}
+	if _, ok := meta.SFVEntries[strings.ToLower(path.Base(filePath))]; !ok {
+		return false
+	}
+	current := sm.vfs.GetFile(filePath)
+	return current != nil && current.Checksum == 0
+}
+
+func (sm *SlaveManager) scheduleRemergeChecksumRefresh(rs *RemoteSlave, filePath string) {
+	if rs == nil || !rs.IsOnline() {
+		return
+	}
+	jobKey := rs.Name() + "|" + filepath.Clean(filePath)
+	if _, loaded := sm.remergeCRCJobs.LoadOrStore(jobKey, struct{}{}); loaded {
+		return
+	}
+	go func() {
+		defer sm.remergeCRCJobs.Delete(jobKey)
+
+		index, err := IssueChecksum(rs, filePath)
+		if err != nil {
+			return
+		}
+		resp, err := rs.FetchResponse(index, 30*time.Second)
+		if err != nil {
+			return
+		}
+		checksumResp, ok := resp.(*protocol.AsyncResponseChecksum)
+		if !ok {
+			return
+		}
+		meta := sm.vfs.GetSFVData(path.Dir(filePath))
+		if meta != nil && len(meta.SFVEntries) > 0 {
+			if expectedCRC, exists := meta.SFVEntries[strings.ToLower(path.Base(filePath))]; exists && expectedCRC != 0 && checksumResp.Checksum != expectedCRC {
+				log.Printf("[SlaveManager] Remerge CRC mismatch for %s on %s: got %08X expected %08X — deleting",
+					filePath, rs.Name(), checksumResp.Checksum, expectedCRC)
+				if err := sm.DeleteFile(filePath); err != nil {
+					log.Printf("[SlaveManager] Failed to delete bad remerge file %s: %v", filePath, err)
+				}
+				return
+			}
+		}
+		sm.vfs.UpdateFileVerification(filePath, checksumResp.Checksum)
+	}()
+}
+
+func (sm *SlaveManager) scheduleRemergeSFVParse(rs *RemoteSlave, sfvPath string) {
+	if rs == nil || !rs.IsOnline() {
+		return
+	}
+	jobKey := rs.Name() + "|" + filepath.Clean(sfvPath)
+	if _, loaded := sm.remergeSFVJobs.LoadOrStore(jobKey, struct{}{}); loaded {
+		return
+	}
+	go func() {
+		defer sm.remergeSFVJobs.Delete(jobKey)
+
+		index, err := IssueSFVFile(rs, sfvPath)
+		if err != nil {
+			return
+		}
+		resp, err := rs.FetchResponse(index, 30*time.Second)
+		if err != nil {
+			return
+		}
+		sfvResp, ok := resp.(*protocol.AsyncResponseSFVInfo)
+		if !ok {
+			return
+		}
+
+		dirPath := path.Dir(sfvPath)
+		sfvName := path.Base(sfvPath)
+		sfvMap := make(map[string]uint32, len(sfvResp.Entries))
+		for _, entry := range sfvResp.Entries {
+			sfvMap[strings.ToLower(path.Base(entry.FileName))] = entry.CRC32
+		}
+		sm.vfs.SetSFVData(dirPath, sfvName, sfvMap)
+
+		for _, child := range sm.vfs.ListDirectory(dirPath) {
+			if child == nil || child.IsDir || child.Size <= 0 {
+				continue
+			}
+			nameKey := strings.ToLower(path.Base(child.Path))
+			if _, ok := sfvMap[nameKey]; !ok {
+				continue
+			}
+			if child.Checksum == 0 {
+				sm.scheduleRemergeChecksumRefresh(rs, child.Path)
+			}
+		}
+	}()
 }
 
 // --- Slave Access ---
@@ -1138,19 +1252,6 @@ func isIgnorableDeleteError(err error) bool {
 	lower := strings.ToLower(strings.TrimSpace(err.Error()))
 	return strings.Contains(lower, "delete failed: path not found on slave") ||
 		strings.Contains(lower, "file not found")
-}
-
-// RenameOnAllSlaves renames on all slaves ().
-func (sm *SlaveManager) RenameOnAllSlaves(from, toDir, toName string) {
-	for _, rs := range sm.GetWritableAvailableSlaves() {
-		go func(slave *RemoteSlave) {
-			index, err := IssueRename(slave, from, toDir, toName)
-			if err != nil {
-				return
-			}
-			slave.FetchResponse(index, 30*time.Second)
-		}(rs)
-	}
 }
 
 func (sm *SlaveManager) Stop() {

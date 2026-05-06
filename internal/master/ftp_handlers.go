@@ -3,6 +3,7 @@ package master
 import (
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"goftpd/internal/protocol"
@@ -32,7 +33,7 @@ type MasterTransferState struct {
 	Transfer      *RemoteTransfer
 	TransferIndex int32
 	IsPASV        bool
-	IsUpload      bool  // true = STOR, false = RETR
+	IsUpload      bool // true = STOR, false = RETR
 }
 
 // SetupPASVForUpload selects a slave and tells it to listen.
@@ -213,35 +214,69 @@ func (sm *SlaveManager) DeleteFile(path string) error {
 	if file == nil {
 		return fmt.Errorf("file not found: %s", path)
 	}
+	if file.IsSymlink || strings.TrimSpace(file.SlaveName) == "" {
+		sm.vfs.DeleteFile(path)
+		return nil
+	}
 	if sm.IsSlaveReadOnly(file.SlaveName) {
 		return fmt.Errorf("path is on read-only slave: %s", path)
 	}
-	sm.DeleteOnAllSlaves(path)
+	rs := sm.GetSlave(file.SlaveName)
+	if rs == nil || !rs.IsAvailable() {
+		return fmt.Errorf("owning slave unavailable: %s", file.SlaveName)
+	}
+	index, err := IssueDelete(rs, path)
+	if err != nil {
+		return err
+	}
+	if _, err := rs.FetchResponse(index, 5*time.Minute); err != nil && !isIgnorableDeleteError(err) {
+		return err
+	}
+	sm.vfs.DeleteFile(path)
 	return nil
 }
 
-// RenameFile renames a file on all slaves and in VFS.
-func (sm *SlaveManager) RenameFile(from, toDir, toName string) {
+// RenameFile renames a file on its owning slave and in VFS.
+func (sm *SlaveManager) RenameFile(from, toDir, toName string) error {
 	file := sm.vfs.GetFile(from)
-	if file != nil && sm.IsSlaveReadOnly(file.SlaveName) {
-		log.Printf("[SlaveManager] Refusing rename of read-only path %s on slave %s", from, file.SlaveName)
-		return
+	if file == nil {
+		return fmt.Errorf("path not found: %s", from)
 	}
-	sm.RenameOnAllSlaves(from, toDir, toName)
 	to := toDir
 	if to == "/" {
 		to = "/" + toName
 	} else {
 		to = toDir + "/" + toName
 	}
+	if file.IsSymlink && strings.TrimSpace(file.SlaveName) == "" {
+		sm.vfs.RenameFile(from, to)
+		return nil
+	}
+	if sm.IsSlaveReadOnly(file.SlaveName) {
+		log.Printf("[SlaveManager] Refusing rename of read-only path %s on slave %s", from, file.SlaveName)
+		return fmt.Errorf("path is on read-only slave: %s", from)
+	}
+	rs := sm.GetSlave(file.SlaveName)
+	if rs == nil || !rs.IsAvailable() {
+		return fmt.Errorf("owning slave unavailable: %s", file.SlaveName)
+	}
+	index, err := IssueRename(rs, from, toDir, toName)
+	if err != nil {
+		return err
+	}
+	if _, err := rs.FetchResponse(index, 30*time.Second); err != nil {
+		return err
+	}
 	sm.vfs.RenameFile(from, to)
+	return nil
 }
 
-// MakeDirectory creates a directory in the VFS (virtual only, slaves create on upload).
-func (sm *SlaveManager) MakeDirectory(path, owner, group string) {
+// MakeDirectoryOnSlave records a directory in VFS after it was created on a slave.
+func (sm *SlaveManager) MakeDirectoryOnSlave(path, owner, group, slaveName string) {
 	sm.vfs.AddFile(path, VFSFile{
 		Path:         path,
 		IsDir:        true,
+		SlaveName:    slaveName,
 		LastModified: time.Now().Unix(),
 		Owner:        owner,
 		Group:        group,
