@@ -356,13 +356,13 @@ announce.COMPLETE = "%b{%c01{COMPLETE:}} %c01{[}%section_colored%c01{]} %c%sec_c
 
 announce.STATS_HOF = "%b{%c01{STATS:}} ▂▃▅▇█▓▒░۩۞۩  %b{Users Hall Of Fame}  ۩۞۩░▒▓█▇▅▃▂"
 
-announce.STATS_SPEEDS = "%b{%c01{STATS:}} %b{Slowest:} %b{%u_slowest_name} %c01{at} %b{%u_slowest_speed} %c01{-} %b{Fastest:} %b{%u_fastest_name} %c01{at} %b{%u_fastest_speed}%c01{.}"
+announce.STATS_SPEEDS = "%b{%c01{STATS:}} %b{Slowest:} %c%sec_c4{%u_slowest_name} %c01{at} %b{%c14{%u_slowest_speed}} %c01{-} %b{Fastest:} %c%sec_c4{%u_fastest_name} %c01{at} %b{%c14{%u_fastest_speed}}%c01{.}"
 
-announce.STATS_USER = "%b{%c01{STATS:}} %b{[%{u_rank}]} %b{%{u_name}} %c01{/} %b{%{u_group}} %c01{-} %b{%{u_files}}f %c01{-} %b{%{u_mb}MB} %c01{-} %b{%{u_pct}%} %c01{-} %b{%{u_speed}} %c01{[ }%b{ALUP #%{u_alup}} %c01{] [ }%b{WKUP #%{u_wkup}} %c01{]}"
+announce.STATS_USER = "%b{%c01{STATS:}} %b{[%{u_rank}]} %c%sec_c4{%{u_name}} %c01{/} %c%sec_c5{%{u_group}} %c01{-} %b{%{u_files}}f %c01{-} %b{%{u_mb}MB} %c01{-} %b{%{u_pct}%} %c01{-} %b{%c14{%{u_speed}}} %c01{[ }%b{ALUP #%{u_alup}} %c01{] [ }%b{WKUP #%{u_wkup}} %c01{]}"
 
-announce.STATS_GROUP_HEADER = "%b{%c01{STATS:}} %b{[ GroupTop ]}"
+announce.STATS_GROUP_HEADER = "%b{%c01{STATS:}} %c%sec_c4{[ GroupTop ]}"
 
-announce.STATS_GROUP = "%b{%c01{STATS:}} %b{[%{g_rank}]} %b{%{g_name}} %c01{-} %b{%{g_files}}f %c01{-} %b{%{g_mb}MB} %c01{-} %b{%{g_pct}%} %c01{-} %b{%{g_speed}}"
+announce.STATS_GROUP = "%b{%c01{STATS:}} %b{[%{g_rank}]} %c%sec_c4{%{g_name}} %c01{-} %b{%{g_files}}f %c01{-} %b{%{g_mb}MB} %c01{-} %b{%{g_pct}%} %c01{-} %b{%c14{%{g_speed}}}"
 
 announce.STATS_END = "%b{%c01{STATS:}} -----------====>>>>           %b{END}          <<<<====-----------"
 
