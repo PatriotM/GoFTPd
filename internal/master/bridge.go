@@ -33,6 +33,12 @@ type Bridge struct {
 	liveTransferStatsAt    time.Time
 }
 
+func configureBridgeDataSocket(conn net.Conn) {
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		_ = tcpConn.SetNoDelay(true)
+	}
+}
+
 type cachedReadFileResult struct {
 	content []byte
 	errText string
@@ -359,6 +365,7 @@ func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group s
 	if err != nil {
 		return 0, 0, fmt.Errorf("connect to slave data port: %w", err)
 	}
+	configureBridgeDataSocket(slaveConn)
 
 	// Tell slave to receive the file
 	recvIdx, err := IssueReceive(slave, filePath, transferType, position, "master",
@@ -478,6 +485,7 @@ func (b *Bridge) DownloadFile(filePath string, clientData net.Conn, position int
 	if err != nil {
 		return 0, fmt.Errorf("connect to slave data port: %w", err)
 	}
+	configureBridgeDataSocket(slaveConn)
 
 	// Tell slave to send the file
 	sendIdx, err := IssueSend(slave, filePath, transferType, position, "master",

@@ -78,6 +78,8 @@ type Session struct {
 	XDupeMode       int         // SITE XDUPE mode for duplicate listings on STOR
 
 	stateMu           sync.RWMutex
+	lastDataConnActive bool
+	nextDataTLSClientMode bool
 	LastCommandAt     time.Time
 	TransferDirection string
 	TransferPath      string
@@ -240,7 +242,7 @@ func (s *Session) getRawDataConn() (net.Conn, error) {
 		if s.Config.Debug {
 			log.Printf("Waiting for PASV connection on listener...")
 		}
-		s.DataListen.(*net.TCPListener).SetDeadline(time.Now().Add(30 * time.Second))
+		s.DataListen.(*net.TCPListener).SetDeadline(time.Now().Add(10 * time.Second))
 		conn, err := s.DataListen.Accept()
 		s.DataListen.Close()
 		s.DataListen = nil
@@ -249,8 +251,11 @@ func (s *Session) getRawDataConn() (net.Conn, error) {
 			if s.Config.Debug {
 				log.Printf("PASV Accept error: %v", err)
 			}
+			s.lastDataConnActive = false
 			return nil, err
 		}
+		configureDataSocket(conn)
+		s.lastDataConnActive = false
 		return conn, nil
 	}
 
@@ -259,12 +264,24 @@ func (s *Session) getRawDataConn() (net.Conn, error) {
 		if s.Config.Debug {
 			log.Printf("Dialing PORT connection to %s", s.ActiveAddr)
 		}
-		conn, err := net.DialTimeout("tcp", s.ActiveAddr, 10*time.Second)
+		dialer := &net.Dialer{Timeout: 10 * time.Second}
+		conn, err := dialer.Dial("tcp", s.ActiveAddr)
 		s.ActiveAddr = ""
+		s.lastDataConnActive = true
+		if err == nil {
+			configureDataSocket(conn)
+		}
 		return conn, err
 	}
 
+	s.lastDataConnActive = false
 	return nil, fmt.Errorf("no data connection method specified")
+}
+
+func configureDataSocket(conn net.Conn) {
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		_ = tcpConn.SetNoDelay(true)
+	}
 }
 
 // upgradeDataTLS applies encryption to the data connection if PROT P is enabled.
@@ -275,6 +292,9 @@ func (s *Session) upgradeDataTLS(conn net.Conn, tlsConfig *tls.Config) (net.Conn
 		}
 		return conn, nil
 	}
+	defer func() {
+		s.nextDataTLSClientMode = false
+	}()
 
 	if s.Config.Debug {
 		log.Printf("Starting TLS handshake on data connection from %s", conn.RemoteAddr())
@@ -282,7 +302,14 @@ func (s *Session) upgradeDataTLS(conn net.Conn, tlsConfig *tls.Config) (net.Conn
 
 	conn.SetDeadline(time.Now().Add(10 * time.Second))
 
-	tlsConn := tls.Server(conn, tlsConfig.Clone())
+	tlsCfg := tlsConfig.Clone()
+	var tlsConn *tls.Conn
+	if (s.lastDataConnActive && s.SSCN) || (!s.lastDataConnActive && s.nextDataTLSClientMode) {
+		tlsCfg.InsecureSkipVerify = true
+		tlsConn = tls.Client(conn, tlsCfg)
+	} else {
+		tlsConn = tls.Server(conn, tlsCfg)
+	}
 	if err := tlsConn.Handshake(); err != nil {
 		if s.Config.Debug {
 			log.Printf("Data TLS Handshake error: %v", err)

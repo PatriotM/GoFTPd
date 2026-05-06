@@ -14,6 +14,7 @@ func (s *Session) clearPreparedTransferState() {
 	s.PretCmd = ""
 	s.PretArg = ""
 	s.RestOffset = 0
+	s.nextDataTLSClientMode = false
 }
 
 func (s *Session) clearPassiveTransferSetup() {
@@ -26,6 +27,7 @@ func (s *Session) clearPassiveTransferSetup() {
 	}
 	s.PassthruSlave = nil
 	s.PassthruXferIdx = 0
+	s.nextDataTLSClientMode = false
 }
 
 func (s *Session) clearActiveTransferSetup() {

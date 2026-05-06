@@ -114,7 +114,8 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			return false
 		}
 		if len(args) == 0 {
-			fmt.Fprintf(s.Conn, "501 Syntax error\r\n")
+			s.DataTLS = false
+			fmt.Fprintf(s.Conn, "200 Command OK\r\n")
 			return false
 		}
 		if len(strings.TrimSpace(args[0])) != 1 {
@@ -142,11 +143,17 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			fmt.Fprintf(s.Conn, "500 SSCN only works for encrypted transfers\r\n")
 			return false
 		}
-		if len(args) > 0 && strings.ToUpper(args[0]) == "ON" {
-			s.SSCN = true
+		if len(args) > 0 {
+			switch strings.ToUpper(args[0]) {
+			case "ON":
+				s.SSCN = true
+			case "OFF":
+				s.SSCN = false
+			}
+		}
+		if s.SSCN {
 			fmt.Fprintf(s.Conn, "220 SSCN:CLIENT METHOD\r\n")
 		} else {
-			s.SSCN = false
 			fmt.Fprintf(s.Conn, "220 SSCN:SERVER METHOD\r\n")
 		}
 
@@ -164,6 +171,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			return false
 		}
 		if !hasPretForPassive(s) {
+			s.clearPreparedTransferState()
 			fmt.Fprintf(s.Conn, "500 You need to use a client supporting PRET (PRE Transfer) to use PASV\r\n")
 			return false
 		}
@@ -203,6 +211,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				if s.Config.Debug {
 					log.Printf("[CPSV] Passthrough to slave %s: %s (port: %d)", slaveName, strings.TrimSpace(response), port)
 				}
+				s.SSCN = false
 				fmt.Fprintf(s.Conn, response)
 				return false
 			}
@@ -224,6 +233,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		}
 		s.DataListen = l
 		s.PassthruSlave = nil
+		s.nextDataTLSClientMode = true
 		ip, err := ftpPassiveIPv4(s.Config.PublicIP)
 		if err != nil {
 			fmt.Fprintf(s.Conn, "500 Invalid passive address configuration.\r\n")
@@ -233,6 +243,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			}
 			return false
 		}
+		s.SSCN = false
 		fmt.Fprintf(s.Conn, "227 Entering Passive Mode (%s,%d,%d)\r\n", ip, port/256, port%256)
 		return false
 
@@ -819,6 +830,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		}
 		s.clearActiveTransferSetup()
 		if !hasPretForPassive(s) {
+			s.clearPreparedTransferState()
 			fmt.Fprintf(s.Conn, "500 You need to use a client supporting PRET (PRE Transfer) to use PASV\r\n")
 			return false
 		}
@@ -885,6 +897,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		s.DataListen = l
 		s.PassthruSlave = nil
 		s.PassthruXferIdx = 0
+		s.nextDataTLSClientMode = false
 		ip, err := ftpPassiveIPv4(s.Config.PublicIP)
 		if err != nil {
 			fmt.Fprintf(s.Conn, "500 Invalid passive address configuration.\r\n")
@@ -1576,7 +1589,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				s.beginTransfer("upload", filePath)
 				defer s.endTransfer()
 
-				fileSize, checksum, xferMs, err := bridge.SlaveConnectAndReceive(filePath, portAddr, s.User.Name, s.User.PrimaryGroup, restOffset, s.DataTLS, false, s.currentTransferTypeByte())
+				fileSize, checksum, xferMs, err := bridge.SlaveConnectAndReceive(filePath, portAddr, s.User.Name, s.User.PrimaryGroup, restOffset, s.DataTLS, s.SSCN, s.currentTransferTypeByte())
 				_ = xferMs
 
 				if err != nil {
@@ -2087,7 +2100,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					s.beginTransfer("download", filePath)
 					defer s.endTransfer()
 
-					transferChecksum, xferMs, err := bridge.SlaveConnectAndSend(filePath, portAddr, restOffset, s.DataTLS, false, s.currentTransferTypeByte())
+					transferChecksum, xferMs, err := bridge.SlaveConnectAndSend(filePath, portAddr, restOffset, s.DataTLS, s.SSCN, s.currentTransferTypeByte())
 					if err != nil {
 						log.Printf("[Passthrough] PORT download failed: %v", err)
 						writeTransferFailure(s.Conn, "Download", err)
@@ -2279,7 +2292,8 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			checksumHash = crc32.NewIEEE()
 			reader = io.TeeReader(file, checksumHash)
 		}
-		_, err = io.Copy(dataConn, reader)
+		var out io.Writer = dataConn
+		_, err = io.Copy(out, reader)
 		xferMs := time.Since(start).Milliseconds()
 		dataConn.Close()
 		if err != nil {

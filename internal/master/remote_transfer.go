@@ -1,7 +1,9 @@
 package master
 
 import (
+	"fmt"
 	"sync"
+	"time"
 
 	"goftpd/internal/protocol"
 )
@@ -21,6 +23,7 @@ func NewRemoteTransfer(info protocol.ConnectInfo, slave *RemoteSlave) *RemoteTra
 	return &RemoteTransfer{
 		connectInfo: info,
 		slave:       slave,
+		status:      info.Status,
 	}
 }
 
@@ -82,5 +85,21 @@ func (rt *RemoteTransfer) GetTransferSpeed() int64 {
 }
 
 func (rt *RemoteTransfer) Abort(reason string) {
+	if rt.IsFinished() {
+		return
+	}
 	IssueAbort(rt.slave, rt.connectInfo.TransferIndex, reason)
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if rt.IsFinished() {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	rt.statusMu.Lock()
+	if !rt.status.Finished && rt.status.Error == "" {
+		rt.status.Error = fmt.Sprintf("aborted: %s", reason)
+		rt.status.Finished = true
+	}
+	rt.statusMu.Unlock()
 }

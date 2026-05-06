@@ -568,6 +568,7 @@ func (s *Slave) handleListen(ac *protocol.AsyncCommand) interface{} {
 		Info: protocol.ConnectInfo{
 			Port:          port,
 			TransferIndex: idx,
+			Status:        t.currentStatus(false, ""),
 		},
 	}
 }
@@ -589,54 +590,17 @@ func (s *Slave) handleConnect(ac *protocol.AsyncCommand) interface{} {
 	if len(ac.Args) < 1 {
 		return &protocol.AsyncResponseError{Index: ac.Index, Message: "connect: missing address"}
 	}
-	// Args[0] = "ip:port", Args[1] = "encrypted", Args[2] = "sslClientMode"
 	address := ac.Args[0]
 
-	conn, err := net.DialTimeout("tcp", address, 10*time.Second)
-	if err != nil {
-		return &protocol.AsyncResponseError{Index: ac.Index, Message: fmt.Sprintf("connect failed: %v", err)}
-	}
-
-	// TLS wrap if encrypted flag is set (for FXP)
-	// Args[2] = sslClientHandshake: "true" = slave acts as TLS CLIENT, "false" = slave acts as TLS SERVER
-	var finalConn net.Conn = conn
-	if len(ac.Args) > 1 && ac.Args[1] == "true" {
-		sslClientMode := len(ac.Args) > 2 && ac.Args[2] == "true"
-		if sslClientMode {
-			// Slave acts as TLS CLIENT (normal outbound)
-			tlsConfig := &tls.Config{
-				InsecureSkipVerify: true,
-			}
-			tlsConn := tls.Client(conn, tlsConfig)
-			if err := tlsConn.Handshake(); err != nil {
-				conn.Close()
-				return &protocol.AsyncResponseError{Index: ac.Index, Message: fmt.Sprintf("TLS client handshake failed: %v", err)}
-			}
-			finalConn = tlsConn
-			log.Printf("[Slave] TLS client connect to %s successful", address)
-		} else {
-			// Slave acts as TLS SERVER (CPSV FXP — other site is TLS client)
-			cert, err := tls.LoadX509KeyPair(s.tlsCert, s.tlsKey)
-			if err != nil {
-				conn.Close()
-				return &protocol.AsyncResponseError{Index: ac.Index, Message: fmt.Sprintf("load TLS cert: %v", err)}
-			}
-			tlsConfig := &tls.Config{
-				Certificates: []tls.Certificate{cert},
-			}
-			tlsConn := tls.Server(conn, tlsConfig)
-			if err := tlsConn.Handshake(); err != nil {
-				conn.Close()
-				return &protocol.AsyncResponseError{Index: ac.Index, Message: fmt.Sprintf("TLS server handshake failed: %v", err)}
-			}
-			finalConn = tlsConn
-			log.Printf("[Slave] TLS server connect to %s successful", address)
+	idx := atomic.AddInt32(&s.nextTransferIdx, 1)
+	port := 0
+	if _, portStr, splitErr := net.SplitHostPort(address); splitErr == nil {
+		if parsedPort, convErr := strconv.Atoi(portStr); convErr == nil {
+			port = parsedPort
 		}
 	}
-
-	idx := atomic.AddInt32(&s.nextTransferIdx, 1)
-	port := conn.RemoteAddr().(*net.TCPAddr).Port
-	t := NewTransfer(nil, finalConn, idx, s, false, false)
+	t := NewTransfer(nil, nil, idx, s, len(ac.Args) > 1 && ac.Args[1] == "true", len(ac.Args) > 2 && ac.Args[2] == "true")
+	t.SetActiveAddress(address)
 	s.transfers.Store(idx, t)
 
 	return &protocol.AsyncResponseTransfer{
@@ -644,6 +608,7 @@ func (s *Slave) handleConnect(ac *protocol.AsyncCommand) interface{} {
 		Info: protocol.ConnectInfo{
 			Port:          port,
 			TransferIndex: idx,
+			Status:        t.currentStatus(false, ""),
 		},
 	}
 }
@@ -658,9 +623,22 @@ func (s *Slave) handleReceive(ac *protocol.AsyncCommand) interface{} {
 
 	var transferIdx int32
 	var position int64
+	var minSpeed int64
+	var maxSpeed int64
+	var transferType byte = 'I'
+	if len(ac.Args) > 0 && strings.TrimSpace(ac.Args[0]) != "" {
+		transferType = strings.ToUpper(strings.TrimSpace(ac.Args[0]))[0]
+	}
 	fmt.Sscanf(ac.Args[1], "%d", &position)
 	fmt.Sscanf(ac.Args[2], "%d", &transferIdx)
+	expectedPeer := ac.Args[3]
 	path := ac.Args[4]
+	if len(ac.Args) > 5 {
+		fmt.Sscanf(ac.Args[5], "%d", &minSpeed)
+	}
+	if len(ac.Args) > 6 {
+		fmt.Sscanf(ac.Args[6], "%d", &maxSpeed)
+	}
 
 	val, ok := s.transfers.Load(transferIdx)
 	if !ok {
@@ -668,12 +646,14 @@ func (s *Slave) handleReceive(ac *protocol.AsyncCommand) interface{} {
 	}
 	t := val.(*Transfer)
 	t.SetPath(path)
+	t.SetSpeedLimits(minSpeed, maxSpeed)
+	t.SetTransferMode(transferType)
 
 	// Acknowledge to master that we're starting (: sendResponse(new AsyncResponse(ac.getIndex())))
 	s.writeObject(&protocol.AsyncResponse{Index: ac.Index})
 
 	// Actually receive the file - this blocks until done
-	status := t.ReceiveFile(path, position)
+	status := t.ReceiveFile(path, position, expectedPeer)
 	return &protocol.AsyncResponseTransferStatus{Status: status}
 }
 
@@ -687,9 +667,22 @@ func (s *Slave) handleSend(ac *protocol.AsyncCommand) interface{} {
 
 	var transferIdx int32
 	var position int64
+	var minSpeed int64
+	var maxSpeed int64
+	var transferType byte = 'I'
+	if len(ac.Args) > 0 && strings.TrimSpace(ac.Args[0]) != "" {
+		transferType = strings.ToUpper(strings.TrimSpace(ac.Args[0]))[0]
+	}
 	fmt.Sscanf(ac.Args[1], "%d", &position)
 	fmt.Sscanf(ac.Args[2], "%d", &transferIdx)
+	expectedPeer := ac.Args[3]
 	path := ac.Args[4]
+	if len(ac.Args) > 5 {
+		fmt.Sscanf(ac.Args[5], "%d", &minSpeed)
+	}
+	if len(ac.Args) > 6 {
+		fmt.Sscanf(ac.Args[6], "%d", &maxSpeed)
+	}
 
 	val, ok := s.transfers.Load(transferIdx)
 	if !ok {
@@ -697,12 +690,14 @@ func (s *Slave) handleSend(ac *protocol.AsyncCommand) interface{} {
 	}
 	t := val.(*Transfer)
 	t.SetPath(path)
+	t.SetSpeedLimits(minSpeed, maxSpeed)
+	t.SetTransferMode(transferType)
 
 	// Acknowledge to master
 	s.writeObject(&protocol.AsyncResponse{Index: ac.Index})
 
 	// Actually send the file
-	status := t.SendFile(path, position)
+	status := t.SendFile(path, position, expectedPeer)
 	return &protocol.AsyncResponseTransferStatus{Status: status}
 }
 
@@ -1535,6 +1530,18 @@ func (s *Slave) getFileFromRootsWithRoot(relPath string) (string, string, error)
 
 // getDirForUpload selects a root for a new upload (picks root with most free space).
 func (s *Slave) getDirForUpload(relPath string) (string, error) {
+	cleanRel := filepath.Clean(relPath)
+	dirPart := filepath.Dir(cleanRel)
+	for _, root := range s.roots {
+		existingDir := filepath.Join(root, dirPart)
+		if info, err := os.Stat(existingDir); err == nil && info.IsDir() {
+			if err := os.MkdirAll(existingDir, 0755); err != nil {
+				return "", err
+			}
+			return filepath.Join(root, cleanRel), nil
+		}
+	}
+
 	var bestRoot string
 	var bestAvail int64
 
@@ -1550,11 +1557,10 @@ func (s *Slave) getDirForUpload(relPath string) (string, error) {
 		return "", fmt.Errorf("no root available")
 	}
 
-	dirPart := filepath.Dir(relPath)
 	fullDir := filepath.Join(bestRoot, dirPart)
 	os.MkdirAll(fullDir, 0755)
 
-	return filepath.Join(bestRoot, relPath), nil
+	return filepath.Join(bestRoot, cleanRel), nil
 }
 
 func (s *Slave) selectRootForRelocate(sourceRoot string) (string, error) {
