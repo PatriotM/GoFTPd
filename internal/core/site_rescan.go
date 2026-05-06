@@ -93,6 +93,9 @@ func (s *Session) HandleSiteRescan(args []string) bool {
 
 	if exists && !targetEntry.IsDir {
 		fmt.Fprintf(s.Conn, "200- Starting zipscript rescan for %s\r\n", opts.Target)
+		if !opts.Quiet {
+			fmt.Fprintf(s.Conn, "200- [1/1] Scanning %s\r\n", opts.Target)
+		}
 		result := s.rescanSingleFile(bridge, opts.Target, opts)
 		writeRescanResult(s, result)
 		fmt.Fprintf(s.Conn, "200 Rescan complete: 1 file checked.\r\n")
@@ -106,7 +109,10 @@ func (s *Session) HandleSiteRescan(args []string) bool {
 	}
 
 	fmt.Fprintf(s.Conn, "200- Starting zipscript rescan for %s\r\n", opts.Target)
-	for _, release := range releases {
+	for i, release := range releases {
+		if !opts.Quiet {
+			fmt.Fprintf(s.Conn, "200- [%d/%d] Scanning %s\r\n", i+1, len(releases), release)
+		}
 		result := s.rescanRelease(bridge, release, opts)
 		writeRescanResult(s, result)
 	}
