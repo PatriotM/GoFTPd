@@ -31,6 +31,7 @@ func TestRemoteSlaveOfflineClearsVFSFiles(t *testing.T) {
 
 func TestShouldRefreshRemergeChecksumForTrackedUnverifiedPayload(t *testing.T) {
 	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
+	sm.SetEnableRemergeChecksums(true)
 	sm.vfs.AddFile("/X265/release", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
 	sm.vfs.SetSFVData("/X265/release", "release.sfv", map[string]uint32{
 		"file.r00": 1,
@@ -53,6 +54,24 @@ func TestShouldRefreshRemergeChecksumForTrackedUnverifiedPayload(t *testing.T) {
 
 	if sm.shouldRefreshRemergeChecksum("/X265/release/file.nfo", protocol.LightRemoteInode{Name: "file.nfo", Size: 100}) {
 		t.Fatalf("expected untracked side file to skip remerge checksum refresh")
+	}
+}
+
+func TestShouldRefreshRemergeChecksumDisabledByDefault(t *testing.T) {
+	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
+	sm.vfs.AddFile("/X265/release", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.SetSFVData("/X265/release", "release.sfv", map[string]uint32{
+		"file.r00": 1,
+	})
+	sm.vfs.AddFile("/X265/release/file.r00", VFSFile{
+		Size:      100,
+		Seen:      true,
+		SlaveName: "LOCAL",
+		Checksum:  0,
+	})
+
+	if sm.shouldRefreshRemergeChecksum("/X265/release/file.r00", protocol.LightRemoteInode{Name: "file.r00", Size: 100}) {
+		t.Fatalf("expected remerge checksum refresh to stay disabled by default")
 	}
 }
 

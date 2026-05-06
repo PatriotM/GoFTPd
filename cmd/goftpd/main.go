@@ -173,6 +173,8 @@ func main() {
 		sm.SetProtectedDirs(protectedVFSDirs(cfg))
 		sm.SetHiddenPaths(cfg.HiddenVFSPaths)
 		sm.SetExcludePaths(cfg.ExcludeVFSPaths)
+		sm.SetRemergeMode(stringFromCfg(cfg.Master, "remerge_mode", "off"))
+		sm.SetEnableRemergeChecksums(boolFromCfg(cfg.Master, "remerge_checksums", false))
 		if err := sm.Start(); err != nil {
 			log.Fatalf("SlaveManager failed: %v", err)
 		}
@@ -211,6 +213,8 @@ func main() {
 			sm.SetProtectedDirs(protectedVFSDirs(c))
 			sm.SetHiddenPaths(c.HiddenVFSPaths)
 			sm.SetExcludePaths(c.ExcludeVFSPaths)
+			sm.SetRemergeMode(stringFromCfg(c.Master, "remerge_mode", "off"))
+			sm.SetEnableRemergeChecksums(boolFromCfg(c.Master, "remerge_checksums", false))
 			if err := sm.ConfigureAuthAllowlist(stringSliceFromCfg(c.Master, "slave_allowlist")); err != nil {
 				log.Printf("[REHASH] invalid master.slave_allowlist: %v", err)
 			}
@@ -543,6 +547,21 @@ func intFromCfg(m map[string]interface{}, key string, def int) int {
 	default:
 		return def
 	}
+}
+
+func boolFromCfg(m map[string]interface{}, key string, def bool) bool {
+	if m == nil {
+		return def
+	}
+	v, ok := m[key]
+	if !ok {
+		return def
+	}
+	b, ok := v.(bool)
+	if !ok {
+		return def
+	}
+	return b
 }
 
 func stringSliceFromCfg(m map[string]interface{}, key string) []string {

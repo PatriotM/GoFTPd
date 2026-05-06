@@ -825,6 +825,21 @@ func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
 	if len(ac.Args) > 0 {
 		basePath = ac.Args[0]
 	}
+	instantOnline := len(ac.Args) > 4 && strings.EqualFold(strings.TrimSpace(ac.Args[4]), "true")
+	partialRemerge := len(ac.Args) > 1 && strings.EqualFold(strings.TrimSpace(ac.Args[1]), "true") && !instantOnline
+	skipAgeCutoff := int64(0)
+	if partialRemerge && len(ac.Args) > 2 {
+		if cutoff, err := strconv.ParseInt(strings.TrimSpace(ac.Args[2]), 10, 64); err == nil {
+			skipAgeCutoff = cutoff
+			if len(ac.Args) > 3 {
+				if masterTime, err := strconv.ParseInt(strings.TrimSpace(ac.Args[3]), 10, 64); err == nil && cutoff != 0 {
+					skipAgeCutoff += time.Now().UnixMilli() - masterTime
+				}
+			}
+		} else {
+			partialRemerge = false
+		}
+	}
 	excludePaths := normalizeExcludeVFSPaths(ac.Args[5:])
 
 	log.Printf("[Slave] Starting remerge from %s across %d roots", basePath, len(s.roots))
@@ -882,6 +897,9 @@ func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
 				if info.IsDir() {
 					return filepath.SkipDir
 				}
+				return nil
+			}
+			if partialRemerge && !info.IsDir() && info.ModTime().UnixMilli() < skipAgeCutoff {
 				return nil
 			}
 			// Parent dir in VFS

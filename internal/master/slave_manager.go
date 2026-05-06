@@ -54,6 +54,8 @@ type SlaveManager struct {
 	// Virtual File System: master-side file index
 	vfs *VirtualFileSystem
 
+	remergeMode atomic.Value
+
 	listener       net.Listener
 	running        atomic.Bool
 	diskStatusHook func(name string, status protocol.DiskStatus, online, available bool, sections []string)
@@ -63,6 +65,8 @@ type SlaveManager struct {
 	remergeCRCJobs sync.Map
 	remergeSFVJobs sync.Map
 	remergeCRCSem  chan struct{}
+
+	enableRemergeChecksums atomic.Bool
 }
 
 type slaveAuthState struct {
@@ -94,7 +98,7 @@ func NewSlaveManager(host string, port int, tlsEnabled bool, tlsCert, tlsKey str
 	if heartbeatTimeout <= 0 {
 		heartbeatTimeout = 60 * time.Second
 	}
-	return &SlaveManager{
+	sm := &SlaveManager{
 		listenHost:       host,
 		listenPort:       port,
 		tlsEnabled:       tlsEnabled,
@@ -107,6 +111,8 @@ func NewSlaveManager(host string, port int, tlsEnabled bool, tlsCert, tlsKey str
 		authState:        make(map[string]*slaveAuthState),
 		remergeCRCSem:    make(chan struct{}, 16),
 	}
+	sm.remergeMode.Store("off")
+	return sm
 }
 
 func (sm *SlaveManager) SetDiskStatusHook(fn func(name string, status protocol.DiskStatus, online, available bool, sections []string)) {
@@ -233,6 +239,29 @@ func (sm *SlaveManager) SetExcludePaths(paths []string) {
 		sm.excludePaths = append(sm.excludePaths, p)
 	}
 	sm.vfs.SetExcludePaths(paths)
+}
+
+func (sm *SlaveManager) SetEnableRemergeChecksums(enabled bool) {
+	sm.enableRemergeChecksums.Store(enabled)
+}
+
+func (sm *SlaveManager) SetRemergeMode(mode string) {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	switch mode {
+	case "instant", "connect", "disconnect":
+		sm.remergeMode.Store(mode)
+	default:
+		sm.remergeMode.Store("off")
+	}
+}
+
+func (sm *SlaveManager) GetRemergeMode() string {
+	if raw := sm.remergeMode.Load(); raw != nil {
+		if mode, ok := raw.(string); ok && strings.TrimSpace(mode) != "" {
+			return mode
+		}
+	}
+	return "off"
 }
 
 func (sm *SlaveManager) getExcludePaths() []string {
@@ -706,25 +735,34 @@ func splitRemoteAddr(addr net.Addr) (ip string, raw string) {
 // immediately and remerge runs in the background. Files appear in LIST
 // as they are indexed.
 func (sm *SlaveManager) initializeSlaveAfterConnect(rs *RemoteSlave) {
-	log.Printf("[SlaveManager] Starting remerge for slave %s (instant online)", rs.name)
+	mode := sm.GetRemergeMode()
+	instantOnline := mode == "instant"
+	log.Printf("[SlaveManager] Starting remerge for slave %s (mode=%s)", rs.name, mode)
 
-	// Mark available BEFORE remerge so FTP clients can connect immediately.
-	// Files will appear in listings as the remerge progresses.
 	rs.remerging.Store(true)
-	rs.SetAvailable(true)
-	sm.publishDiskStatus(rs)
-	log.Printf("[SlaveManager] Slave %s is now AVAILABLE (remerge running in background)", rs.name)
+	if instantOnline {
+		rs.SetAvailable(true)
+		sm.publishDiskStatus(rs)
+		log.Printf("[SlaveManager] Slave %s is now AVAILABLE (remerge running in background)", rs.name)
+	} else {
+		rs.SetAvailable(false)
+		sm.publishDiskStatus(rs)
+	}
 
 	sm.ensureBootstrapDirsOnSlave(rs)
 
 	// Mark current files unseen before remerge so stale entries can be purged.
 	sm.vfs.MarkAllUnseen(rs.name)
 
-	index, err := IssueRemerge(rs, "/", false, 0, time.Now().UnixMilli(), false, sm.getExcludePaths())
+	index, err := IssueRemerge(rs, "/", false, 0, time.Now().UnixMilli(), instantOnline, sm.getExcludePaths())
 	if err != nil {
 		log.Printf("[SlaveManager] Failed to issue remerge to %s: %v", rs.name, err)
-		// Don't take offline â€” slave is still usable, just no file index yet
+		// Don't take offline - slave is still connected, just no file index yet.
 		rs.remerging.Store(false)
+		if !instantOnline {
+			rs.SetAvailable(false)
+			sm.publishDiskStatus(rs)
+		}
 		return
 	}
 
@@ -746,6 +784,9 @@ func (sm *SlaveManager) initializeSlaveAfterConnect(rs *RemoteSlave) {
 		}
 	}
 	rs.remerging.Store(false)
+	if !instantOnline {
+		rs.SetAvailable(true)
+	}
 	sm.publishDiskStatus(rs)
 }
 
@@ -807,6 +848,9 @@ func (sm *SlaveManager) ProcessRemerge(rs *RemoteSlave, resp *protocol.AsyncResp
 }
 
 func (sm *SlaveManager) shouldRefreshRemergeChecksum(filePath string, inode protocol.LightRemoteInode) bool {
+	if !sm.enableRemergeChecksums.Load() {
+		return false
+	}
 	if inode.IsDir || inode.IsSymlink || inode.Size <= 0 {
 		return false
 	}

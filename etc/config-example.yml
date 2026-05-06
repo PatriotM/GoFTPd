@@ -49,6 +49,14 @@ master:
                                 # within the fail window, the IP is temporarily banned.
   slave_auth_fail_window_seconds: 900
   slave_auth_ban_seconds: 3600
+  remerge_mode: "off"          # "off" waits for the remerge to finish before the
+                                # slave becomes available. "instant" brings the
+                                # slave online immediately and fills the VFS in
+                                # the background.
+  remerge_checksums: false      # If true, ask slaves for CRCs during remerge only for
+                                # files missing a stored checksum in the VFS.
+                                # Leave this off for imported/legacy trees unless you
+                                # explicitly want that extra verification pass.
 
 
 # =============================================================================
