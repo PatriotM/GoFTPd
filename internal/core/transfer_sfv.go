@@ -157,36 +157,3 @@ func localFileCRC(localPath string) (uint32, error) {
 	}
 	return hash.Sum32(), nil
 }
-
-func localReconcileSFVEntries(cfg *Config, dirPath string, sfvEntries map[string]uint32) {
-	if cfg == nil || len(sfvEntries) == 0 {
-		return
-	}
-
-	for fileName, expectedCRC := range sfvEntries {
-		if expectedCRC == 0 {
-			continue
-		}
-
-		localPath := filepath.Join(dirPath, filepath.FromSlash(fileName))
-		info, err := os.Stat(localPath)
-		if err != nil || info.IsDir() {
-			continue
-		}
-
-		checksum, err := localFileCRC(localPath)
-		if err != nil {
-			continue
-		}
-		if checksum == expectedCRC {
-			continue
-		}
-		if checksum == 0 && info.Size() == 0 && zipscript.ShouldDeleteZeroByteForDir(cfg.Zipscript, filepath.ToSlash(dirPath)) {
-			_ = os.Remove(localPath)
-			continue
-		}
-		if zipscript.ShouldDeleteBadCRCForDir(cfg.Zipscript, filepath.ToSlash(dirPath)) {
-			_ = os.Remove(localPath)
-		}
-	}
-}
