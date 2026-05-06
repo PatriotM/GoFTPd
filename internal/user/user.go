@@ -326,8 +326,8 @@ func (u *User) deriveSlotsFromLogins() {
 		return
 	}
 	var uploadSlots, downloadSlots int
-	fmt.Sscanf(fields[2], "%d", &uploadSlots)
-	fmt.Sscanf(fields[3], "%d", &downloadSlots)
+	fmt.Sscanf(fields[3], "%d", &uploadSlots)
+	fmt.Sscanf(fields[2], "%d", &downloadSlots)
 	if !u.UploadSlotsSet || u.UploadSlots == 0 {
 		u.UploadSlots = uploadSlots
 		u.UploadSlotsSet = true

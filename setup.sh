@@ -2076,9 +2076,10 @@ normalize_glftpd_user_file() {
     awk '{ sub(/\r$/, ""); print }' "${source_file}" > "${target_file}"
 
     if grep -Eq '^LOGINS[[:space:]]+' "${target_file}"; then
-        read -r _ _ _ login_upload_slots login_download_slots _rest < <(grep -E '^LOGINS[[:space:]]+' "${target_file}" | head -n1)
-        [ -z "${login_upload_slots}" ] && login_upload_slots="0"
-        [ -z "${login_download_slots}" ] && login_download_slots="0"
+        local gl_logins_upload_slots gl_logins_download_slots
+        read -r _ _ _ gl_logins_download_slots gl_logins_upload_slots _rest < <(grep -E '^LOGINS[[:space:]]+' "${target_file}" | head -n1)
+        login_upload_slots="${gl_logins_upload_slots:-0}"
+        login_download_slots="${gl_logins_download_slots:-0}"
     fi
 
     if ! grep -Eq '^HOMEDIR[[:space:]]+' "${target_file}"; then
