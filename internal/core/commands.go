@@ -1595,6 +1595,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					writeTransferFailure(s.Conn, "Upload", err)
 					return false
 				}
+				s.endTransfer()
 
 				if fileSize == 0 && zipscript.ShouldDeleteZeroByteForDir(s.Config.Zipscript, uploadDir) {
 					bridge.DeleteFile(filePath)
@@ -1761,6 +1762,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						return false
 					}
 				}
+				s.endTransfer()
 
 				if fileSize == 0 && zipscript.ShouldDeleteZeroByteForDir(s.Config.Zipscript, uploadDir) {
 					bridge.DeleteFile(filePath)
@@ -1959,6 +1961,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			writeTransferFailure(s.Conn, "Upload", err)
 			return false
 		}
+		s.endTransfer()
 		if checksumHash != nil {
 			checksum = checksumHash.Sum32()
 		}
