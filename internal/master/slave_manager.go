@@ -981,7 +981,7 @@ func (sm *SlaveManager) scheduleRemergeSFVParse(rs *RemoteSlave, sfvPath string)
 			if _, ok := sfvMap[nameKey]; !ok {
 				continue
 			}
-			if child.Checksum == 0 {
+			if sm.enableRemergeChecksums.Load() && child.Checksum == 0 {
 				sm.scheduleRemergeChecksumRefresh(rs, child.Path)
 			}
 		}
