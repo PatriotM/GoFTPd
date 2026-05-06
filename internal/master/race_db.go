@@ -514,7 +514,7 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 	}
 
 	groupRows, err := r.db.Query(`
-        SELECT grp, COUNT(*), COALESCE(SUM(size_bytes),0), COALESCE(SUM(duration_ms),0)
+        SELECT p.grp, COUNT(*), COALESCE(SUM(p.size_bytes),0), COALESCE(SUM(p.duration_ms),0)
         FROM release_files p
         JOIN release_files e
           ON e.release_id = p.release_id
@@ -523,8 +523,8 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
         WHERE p.release_id = ?
           AND p.is_present = 1
           AND p.checksum = e.expected_crc32
-        GROUP BY grp
-        ORDER BY COALESCE(SUM(size_bytes),0) DESC, COUNT(*) DESC, grp ASC
+        GROUP BY p.grp
+        ORDER BY COALESCE(SUM(p.size_bytes),0) DESC, COUNT(*) DESC, p.grp ASC
     `, releaseID)
 	if err != nil {
 		log.Printf("[RaceDB] group stats query failed for %s: %v", dirPath, err)

@@ -447,17 +447,44 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		if !strings.HasPrefix(target, "/") {
 			target = path.Join(s.CurrentDir, target)
 		}
-		s.CurrentDir = path.Clean(target)
+		targetPath := path.Clean(target)
 		if s.Config.Mode == "master" && s.MasterManager != nil {
 			if bridge, ok := s.MasterManager.(MasterBridge); ok {
-				s.CurrentDir = path.Clean(bridge.ResolvePath(s.CurrentDir))
-				parent := path.Dir(s.CurrentDir)
-				name := path.Base(s.CurrentDir)
+				targetPath = path.Clean(bridge.ResolvePath(targetPath))
+				parent := path.Dir(targetPath)
+				name := path.Base(targetPath)
 				if resolved := resolveKnownMarkerTarget(bridge, s.Config, parent, name); resolved != "" {
-					s.CurrentDir = resolved
+					targetPath = resolved
+				}
+				if targetPath != "/" {
+					entry, ok := bridge.GetPathEntry(targetPath)
+					if !ok {
+						fmt.Fprintf(s.Conn, "550 %s: no such file or directory\r\n", targetPath)
+						return false
+					}
+					if !entry.IsDir {
+						fmt.Fprintf(s.Conn, "550 %s: not a directory\r\n", targetPath)
+						return false
+					}
 				}
 			}
+		} else {
+			localPath := filepath.Join(s.Config.StoragePath, filepath.FromSlash(strings.TrimPrefix(targetPath, "/")))
+			info, err := os.Stat(localPath)
+			if err != nil {
+				if os.IsNotExist(err) {
+					fmt.Fprintf(s.Conn, "550 %s: no such file or directory\r\n", targetPath)
+				} else {
+					fmt.Fprintf(s.Conn, "550 %s: %v\r\n", targetPath, err)
+				}
+				return false
+			}
+			if !info.IsDir() {
+				fmt.Fprintf(s.Conn, "550 %s: not a directory\r\n", targetPath)
+				return false
+			}
 		}
+		s.CurrentDir = targetPath
 
 		if s.Config.Mode == "master" && s.MasterManager != nil {
 			if bridge, ok := s.MasterManager.(MasterBridge); ok {
