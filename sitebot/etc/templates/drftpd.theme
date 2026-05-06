@@ -320,51 +320,51 @@ COLOR_XXX-0DAY_3 = "14"
 COLOR_XXX-0DAY_4 = "13"
 COLOR_XXX-0DAY_5 = "07"
 
-announce.NEWDIR = "%b{%c15{NEW:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{by }%c%sec_c4{%u_name}"
+announce.NEWDIR = "%b{%c01{NEW:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{by }%c%sec_c4{%u_name}"
 
 announce.NEWDAY = "%b{%c01{NEW DAY:}} %c01{-}%section_colored%c01{- A new day has come!} %c%sec_c5{%date} %c01{has been created along with its symlink.}"
 
-announce.AUDIOINFO = "%b{%c15{FLAC}} %c01{-> }%b{%relname}%b %c01{[}%b{%genre}%b %c01{from }%b{%year}%b %c01{at sample rate }%b{%sample_rate}%b %c01{Hz, channels }%b{%channels}%b%c01{]}"
+announce.AUDIOINFO = "%b{%c01{FLAC}} %c01{-> }%b{%relname}%b %c01{[}%b{%genre}%b %c01{from }%b{%year}%b %c01{at sample rate }%b{%sample_rate}%b %c01{Hz, channels }%b{%channels}%b%c01{]}"
 
 announce.MEDIAINFO = "%b{[SAMPLE]} %b{%relname}%b %c01{::} %b{%video_format}%b %c01{: }%c05{%{width}}%c01{x}%c05{%{height}} %c01{: }%b{%audio_format}%b %c01{: }%b{%channels}%b %c01{: }%b{%duration}%b"
 
 announce.SPEEDTEST = "%b{%c01{SPEEDTEST:}} %c04{%nick} %c01{%action} %c01{a} %c05{%{size_mb}MB} %c01{file with} %c06{%speed_mbs}"
 
-announce.SFV_RAR = "%b{%c15{RACE:}} %c01{[}%section_colored%c01{]} %c01{Got SFV for }%c%sec_c3{%b{%relname}} %c01{uploaded by }%c%sec_c4{%u_name}%c01{. Now expecting }%c%sec_c5{%b{%t_filecount}} %c01{%t_file_label.}"
+announce.SFV_RAR = "%b{%c01{RACE:}} %c01{[}%section_colored%c01{]} %c01{Got SFV for }%c%sec_c3{%b{%relname}} %c01{uploaded by }%c%sec_c4{%u_name}%c01{. Now expecting }%c%sec_c5{%b{%t_filecount}} %c01{%t_file_label.}"
 
-announce.UPDATE_RAR = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%c%sec_c3{%b{%relname}} %c01{by }%b{%user}%b %c01{at }%b{%speed}%b%c01{. Expecting }%b{%size}%b %c01{in }%b{%files}%b %c01{files.}"
+announce.UPDATE_RAR = "%b{%c01{FIRST}} %c01{in }%section_colored%c01{: -> }%c%sec_c3{%b{%relname}} %c01{by }%b{%user}%b %c01{at }%b{%speed}%b%c01{. Expecting }%b{%size}%b %c01{in }%b{%files}%b %c01{files.}"
 
-announce.UPDATE_RAR_UNKNOWN = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%c%sec_c3{%b{%relname}} %c01{by }%b{%user}%b %c01{at }%b{%speed}%b."
+announce.UPDATE_RAR_UNKNOWN = "%b{%c01{FIRST}} %c01{in }%section_colored%c01{: -> }%c%sec_c3{%b{%relname}} %c01{by }%b{%user}%b %c01{at }%b{%speed}%b."
 
-announce.UPDATE_ZIP = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%c%sec_c3{%b{%relname}} %c01{by }%b{%user}%b %c01{at }%b{%speed}%b%c01{. Expecting }%b{%size}%b %c01{in }%b{%files}%b %c01{files.}"
+announce.UPDATE_ZIP = "%b{%c01{FIRST}} %c01{in }%section_colored%c01{: -> }%c%sec_c3{%b{%relname}} %c01{by }%b{%user}%b %c01{at }%b{%speed}%b%c01{. Expecting }%b{%size}%b %c01{in }%b{%files}%b %c01{files.}"
 
-announce.UPDATE_ZIP_UNKNOWN = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%c%sec_c3{%b{%relname}} %c01{by }%b{%user}%b %c01{at }%b{%speed}%b."
+announce.UPDATE_ZIP_UNKNOWN = "%b{%c01{FIRST}} %c01{in }%section_colored%c01{: -> }%c%sec_c3{%b{%relname}} %c01{by }%b{%user}%b %c01{at }%b{%speed}%b."
 
-announce.UPDATE_TRACK = "%b{%c15{FIRST}} %c01{in }%section_colored%c01{: -> }%c%sec_c3{%b{%relname}} %c01{by }%b{%user}%b %c01{at }%b{%speed}%b."
+announce.UPDATE_TRACK = "%b{%c01{FIRST}} %c01{in }%section_colored%c01{: -> }%c%sec_c3{%b{%relname}} %c01{by }%b{%user}%b %c01{at }%b{%speed}%b."
 
-announce.RACE_RAR = "%b{%c15{RACE:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{- }%c%sec_c4{%u_name} %c01{joined the race at }%c%sec_c5{%u_speed}%c01{.}"
+announce.RACE_RAR = "%b{%c01{RACE:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{- }%c%sec_c4{%u_name} %c01{joined the race at }%c%sec_c5{%u_speed}%c01{.}"
 
-announce.NEWLEADER = "%b{%c15{NEW LEADER:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{- }%c%sec_c4{%leaduser} %c01{takes the lead - }%c%sec_c5{%leadsize}%c01{/}%c%sec_c5{%leadfiles}F%c01{/}%c%sec_c5{%leadpercent}%c01{/}%c%sec_c5{%leadspeed}%c01{.}"
+announce.NEWLEADER = "%b{%c01{NEW LEADER:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{- }%c%sec_c4{%leaduser} %c01{takes the lead - }%c%sec_c5{%leadsize}%c01{/}%c%sec_c5{%leadfiles}F%c01{/}%c%sec_c5{%leadpercent}%c01{/}%c%sec_c5{%leadspeed}%c01{.}"
 
-announce.HALFWAY = "%b{%c15{HALFWAY:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{- avg speed: }%c%sec_c5{%t_avgspeed} %c01{- time left: }%c%sec_c5{%t_timeleft} %c01{- leader: }%c%sec_c4{%leaduser} %c01{[}%c%sec_c5{%leadsize}%c01{/}%c%sec_c5{%leadfiles}F%c01{/}%c%sec_c5{%leadpercent}%c01{/}%c%sec_c5{%leadspeed}%c01{] - }%c%sec_c5{%filesleft} %c01{files left.}"
+announce.HALFWAY = "%b{%c01{HALFWAY:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{- avg speed: }%c%sec_c5{%t_avgspeed} %c01{- time left: }%c%sec_c5{%t_timeleft} %c01{- leader: }%c%sec_c4{%leaduser} %c01{[}%c%sec_c5{%leadsize}%c01{/}%c%sec_c5{%leadfiles}F%c01{/}%c%sec_c5{%leadpercent}%c01{/}%c%sec_c5{%leadspeed}%c01{] - }%c%sec_c5{%filesleft} %c01{files left.}"
 
-announce.TVINFO = "%b{%c15{RACE:}} %c01{[}%section_colored%c01{]} %c01{[TvMaze] }%c07{%title}%c01{ :: }%c07{%network}%c01{ :: }%c07{%type}%c01{ :: }%c07{%genre}%c01{ :: }%c07{%language}%c01{ :: }%link"
+announce.TVINFO = "%b{%c01{RACE:}} %c01{[}%section_colored%c01{]} %c01{[TvMaze] }%c07{%title}%c01{ :: }%c07{%network}%c01{ :: }%c07{%type}%c01{ :: }%c07{%genre}%c01{ :: }%c07{%language}%c01{ :: }%link"
 
-announce.MOVIEINFO = "%b{%c15{RACE:}} %c01{[}%section_colored%c01{]} %c05{[IMDB]} %c07{%title}%c01{ (}%c07{%year}%c01{)}\n%b{%c15{RACE:}} %c01{[}%section_colored%c01{]} %c05{[IMDB]} %c01{Genres: }%c07{%genre}%c01{ :: Language: }%c07{%language}%c01{ :: Country: }%c07{%country}%c01{ :: Director: }%c07{%director}%c01{ :: Scored: }%c07{%rating}/10%c01{ with }%c07{%votes}%c01{ votes :: Runtime: }%c07{%runtime}\n%b{%c15{RACE:}} %c01{[}%section_colored%c01{]} %c05{[IMDB]} %c01{Plot: }%c07{%plot}\n%b{%c15{RACE:}} %c01{[}%section_colored%c01{]} %c05{[IMDB]} %u{%link}"
+announce.MOVIEINFO = "%b{%c01{RACE:}} %c01{[}%section_colored%c01{]} %c05{[IMDB]} %c07{%title}%c01{ (}%c07{%year}%c01{)}\n%b{%c01{RACE:}} %c01{[}%section_colored%c01{]} %c05{[IMDB]} %c01{Genres: }%c07{%genre}%c01{ :: Language: }%c07{%language}%c01{ :: Country: }%c07{%country}%c01{ :: Director: }%c07{%director}%c01{ :: Scored: }%c07{%rating}/10%c01{ with }%c07{%votes}%c01{ votes :: Runtime: }%c07{%runtime}\n%b{%c01{RACE:}} %c01{[}%section_colored%c01{]} %c05{[IMDB]} %c01{Plot: }%c07{%plot}\n%b{%c01{RACE:}} %c01{[}%section_colored%c01{]} %c05{[IMDB]} %u{%link}"
 
-announce.COMPLETE = "%b{%c15{COMPLETE:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{by }%c%sec_c5{%racers} %c01{racers - }%c%sec_c5{%size}%c01{/}%c%sec_c5{%files}%c01{/}%c%sec_c5{%t_avgspeed}%c01{/}%c%sec_c5{%t_duration}"
+announce.COMPLETE = "%b{%c01{COMPLETE:}} %c01{[}%section_colored%c01{]} %c%sec_c3{%b{%relname}} %c01{by }%c%sec_c5{%racers} %c01{racers - }%c%sec_c5{%size}%c01{/}%c%sec_c5{%files}%c01{/}%c%sec_c5{%t_avgspeed}%c01{/}%c%sec_c5{%t_duration}"
 
-announce.STATS_HOF = "%b{%c01{STATS:}} ▂▃▅▇█▓▒░۩۞۩  %c03{Users Hall Of Fame} ۩۞۩░▒▓█▇▅▃▂"
+announce.STATS_HOF = "%b{%c01{STATS:}} ▂▃▅▇█▓▒░۩۞۩  %b{Users Hall Of Fame}  ۩۞۩░▒▓█▇▅▃▂"
 
-announce.STATS_SPEEDS = "%b{%c01{STATS:}} %c01{Slowest:} %c%sec_c4{%u_slowest_name} %c01{at} %c05{%u_slowest_speed} %c01{-} %c01{Fastest:} %c%sec_c4{%u_fastest_name} %c01{at} %c05{%u_fastest_speed}%c01{.}"
+announce.STATS_SPEEDS = "%b{%c01{STATS:}} %b{Slowest:} %b{%u_slowest_name} %c01{at} %b{%u_slowest_speed} %c01{-} %b{Fastest:} %b{%u_fastest_name} %c01{at} %b{%u_fastest_speed}%c01{.}"
 
-announce.STATS_USER = "%b{%c01{STATS:}} %b{%{u_rank}}%c01{. }%b{%{u_name}}%c01{@}%c06{%{u_group}} %c01{[}%c05{%{u_mb}MB}%c01{/}%c05{%{u_files}} %c01{Files/}%c05{%{u_pct}%}%c01{/}%c05{%{u_speed}}%c01{] [ALUP #}%c05{%{u_alup}}%c01{][WKUP #}%c05{%{u_wkup}}%c01{]}"
+announce.STATS_USER = "%b{%c01{STATS:}} %b{[%{u_rank}]} %b{%{u_name}} %c01{/} %b{%{u_group}} %c01{-} %b{%{u_files}}f %c01{-} %b{%{u_mb}MB} %c01{-} %b{%{u_pct}%} %c01{-} %b{%{u_speed}} %c01{[ }%b{ALUP #%{u_alup}} %c01{] [ }%b{WKUP #%{u_wkup}} %c01{]}"
 
-announce.STATS_GROUP_HEADER = "%b{%c01{STATS:}} %c01{[ }%c15{GroupTop} %c01{]}"
+announce.STATS_GROUP_HEADER = "%b{%c01{STATS:}} %b{[ GroupTop ]}"
 
-announce.STATS_GROUP = "%b{%c01{STATS:}} %b{%{g_rank}}%c01{. }%b{%{g_name}} %c01{[}%c05{%{g_mb}MB}%c01{/}%c05{%{g_files}} %c01{Files/}%c05{%{g_pct}%}%c01{/}%c05{%{g_speed}}%c01{]}"
+announce.STATS_GROUP = "%b{%c01{STATS:}} %b{[%{g_rank}]} %b{%{g_name}} %c01{-} %b{%{g_files}}f %c01{-} %b{%{g_mb}MB} %c01{-} %b{%{g_pct}%} %c01{-} %b{%{g_speed}}"
 
-announce.STATS_END = "%b{%c01{STATS:}} -----------====>>>>           %c03{END}          <<<<====-----------"
+announce.STATS_END = "%b{%c01{STATS:}} -----------====>>>>           %b{END}          <<<<====-----------"
 
 announce.BNC = "%b{%c01{BNC:}} %c01{Checking GoFTPd status, please wait ...}"
 
