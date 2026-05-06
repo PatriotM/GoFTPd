@@ -1591,6 +1591,9 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				_ = xferMs
 
 				if err != nil {
+					if writeDuplicateUploadResponse(s, bridge, uploadDir, fileName, err) {
+						return false
+					}
 					log.Printf("[Passthrough] PORT upload failed: %v", err)
 					writeTransferFailure(s.Conn, "Upload", err)
 					return false
@@ -1736,6 +1739,9 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					s.PretArg = ""
 
 					if err != nil {
+						if writeDuplicateUploadResponse(s, bridge, uploadDir, fileName, err) {
+							return false
+						}
 						log.Printf("[Passthrough] Upload failed: %v", err)
 						writeTransferFailure(s.Conn, "Upload", err)
 						return false
@@ -3182,6 +3188,29 @@ func xdupeResponseLines(mode int, names []string) []string {
 	}
 }
 
+func isDuplicateUploadErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.HasPrefix(msg, "file ") && strings.HasSuffix(msg, " exists")
+}
+
+func writeDuplicateUploadResponse(s *Session, bridge MasterBridge, uploadDir, fileName string, err error) bool {
+	if s == nil || s.Conn == nil || bridge == nil || !isDuplicateUploadErr(err) {
+		return false
+	}
+	if s.Config != nil && s.Config.XdupeEnabled {
+		for _, line := range xdupeResponseLines(s.XDupeMode, existingFileNamesForXDupe(bridge.ListDir(uploadDir))) {
+			fmt.Fprintf(s.Conn, "553-%s\r\n", line)
+		}
+		fmt.Fprintf(s.Conn, "553 %s: file already exists (X-DUPE)\r\n", fileName)
+		return true
+	}
+	fmt.Fprintf(s.Conn, "553 %s: file already exists\r\n", fileName)
+	return true
+}
+
 func activeIncompleteIndicator(cfg *Config) string {
 	if cfg == nil {
 		return ""
@@ -3961,6 +3990,10 @@ func zipDirComplete(bridge MasterBridge, dirPath string, entries []MasterFileEnt
 }
 
 func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName string, fileSize int64, data map[string]string) ([]VFSRaceUser, int64, int, bool) {
+	type freshRaceStatsBridge interface {
+		GetVFSRaceStatsFresh(dirPath string) (users []VFSRaceUser, groups []VFSRaceGroup, totalBytes int64, present int, total int)
+	}
+
 	sfvEntries := bridge.GetSFVData(dirPath)
 	isTrackedPayload := zipscript.IsRacePayloadFileForDir(cfg.Zipscript, dirPath, fileName)
 	if sfvEntries != nil {
@@ -4012,6 +4045,9 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 	}
 	if sfvEntries != nil {
 		users, _, totalBytes, present, total := bridge.GetVFSRaceStats(dirPath)
+		if freshBridge, ok := bridge.(freshRaceStatsBridge); ok {
+			users, _, totalBytes, present, total = freshBridge.GetVFSRaceStatsFresh(dirPath)
+		}
 		if total > 0 {
 			data["relname"] = path.Base(dirPath)
 			data["t_files"] = fmt.Sprintf("%d", total)

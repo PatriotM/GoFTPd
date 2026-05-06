@@ -1604,7 +1604,7 @@ func (b *Bridge) CacheMediaInfo(dirPath string, fields map[string]string) {
 // counting ONLY files that are listed in the cached SFV data.
 func (b *Bridge) GetVFSRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRaceGroup, int64, int, int) {
 	cleanDirPath := filepath.Clean(dirPath)
-	excludeKeys := b.liveUploadingRaceKeysForDirFresh(cleanDirPath)
+	excludeKeys := b.liveUploadingRaceKeysForDir(cleanDirPath)
 	if meta := b.sm.GetVFS().GetSFVData(cleanDirPath); meta != nil && len(meta.SFVEntries) > 0 {
 		// Prefer live VFS state for SFV-backed releases so remerge reflects what
 		// is actually on disk right now, not just what an older DB snapshot said.
@@ -1614,6 +1614,39 @@ func (b *Bridge) GetVFSRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFS
 			return users, groups, totalBytes, present, total
 		}
 	}
+	users, groups, totalBytes, present, total := b.sm.GetVFS().GetRaceStatsFiltered(dirPath, excludeKeys)
+
+	coreUsers := make([]core.VFSRaceUser, len(users))
+	for i, u := range users {
+		coreUsers[i] = core.VFSRaceUser{
+			Name:       u.Name,
+			Group:      u.Group,
+			Files:      u.Files,
+			Bytes:      u.Bytes,
+			Speed:      u.Speed,
+			PeakSpeed:  u.PeakSpeed,
+			SlowSpeed:  u.SlowSpeed,
+			Percent:    u.Percent,
+			DurationMs: u.DurationMs,
+		}
+	}
+	coreGroups := make([]core.VFSRaceGroup, len(groups))
+	for i, g := range groups {
+		coreGroups[i] = core.VFSRaceGroup{
+			Name:    g.Name,
+			Files:   g.Files,
+			Bytes:   g.Bytes,
+			Speed:   g.Speed,
+			Percent: g.Percent,
+		}
+	}
+
+	return coreUsers, coreGroups, totalBytes, present, total
+}
+
+func (b *Bridge) GetVFSRaceStatsFresh(dirPath string) ([]core.VFSRaceUser, []core.VFSRaceGroup, int64, int, int) {
+	cleanDirPath := filepath.Clean(dirPath)
+	excludeKeys := b.liveUploadingRaceKeysForDirFresh(cleanDirPath)
 	users, groups, totalBytes, present, total := b.sm.GetVFS().GetRaceStatsFiltered(dirPath, excludeKeys)
 
 	coreUsers := make([]core.VFSRaceUser, len(users))
@@ -1730,7 +1763,7 @@ func (b *Bridge) GetVerifiedSFVPresentFiles(dirPath string) map[string]bool {
 		return nil
 	}
 	cleanDirPath := filepath.Clean(dirPath)
-	return b.sm.GetVFS().GetVerifiedSFVPresentFilesFiltered(cleanDirPath, b.liveUploadingRaceKeysForDirFresh(cleanDirPath))
+	return b.sm.GetVFS().GetVerifiedSFVPresentFilesFiltered(cleanDirPath, b.liveUploadingRaceKeysForDir(cleanDirPath))
 }
 
 func (b *Bridge) liveUploadingRaceKeysForDir(dirPath string) map[string]bool {
