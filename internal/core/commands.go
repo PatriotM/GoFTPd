@@ -211,7 +211,6 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				if s.Config.Debug {
 					log.Printf("[CPSV] Passthrough to slave %s: %s (port: %d)", slaveName, strings.TrimSpace(response), port)
 				}
-				s.SSCN = false
 				fmt.Fprintf(s.Conn, response)
 				return false
 			}
@@ -243,7 +242,6 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			}
 			return false
 		}
-		s.SSCN = false
 		fmt.Fprintf(s.Conn, "227 Entering Passive Mode (%s,%d,%d)\r\n", ip, port/256, port%256)
 		return false
 
