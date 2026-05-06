@@ -62,6 +62,7 @@ type SlaveManager struct {
 	authState      map[string]*slaveAuthState
 	remergeCRCJobs sync.Map
 	remergeSFVJobs sync.Map
+	remergeCRCSem  chan struct{}
 }
 
 type slaveAuthState struct {
@@ -104,6 +105,7 @@ func NewSlaveManager(host string, port int, tlsEnabled bool, tlsCert, tlsKey str
 		policies:         make(map[string]SlaveRoutePolicy),
 		vfs:              NewVirtualFileSystem(),
 		authState:        make(map[string]*slaveAuthState),
+		remergeCRCSem:    make(chan struct{}, 16),
 	}
 }
 
@@ -721,7 +723,7 @@ func (sm *SlaveManager) initializeSlaveAfterConnect(rs *RemoteSlave) {
 	index, err := IssueRemerge(rs, "/", false, 0, time.Now().UnixMilli(), false, sm.getExcludePaths())
 	if err != nil {
 		log.Printf("[SlaveManager] Failed to issue remerge to %s: %v", rs.name, err)
-		// Don't take offline — slave is still usable, just no file index yet
+		// Don't take offline â€” slave is still usable, just no file index yet
 		rs.remerging.Store(false)
 		return
 	}
@@ -829,6 +831,10 @@ func (sm *SlaveManager) scheduleRemergeChecksumRefresh(rs *RemoteSlave, filePath
 	}
 	go func() {
 		defer sm.remergeCRCJobs.Delete(jobKey)
+		if sm.remergeCRCSem != nil {
+			sm.remergeCRCSem <- struct{}{}
+			defer func() { <-sm.remergeCRCSem }()
+		}
 
 		index, err := IssueChecksum(rs, filePath)
 		if err != nil {
@@ -845,11 +851,9 @@ func (sm *SlaveManager) scheduleRemergeChecksumRefresh(rs *RemoteSlave, filePath
 		meta := sm.vfs.GetSFVData(path.Dir(filePath))
 		if meta != nil && len(meta.SFVEntries) > 0 {
 			if expectedCRC, exists := meta.SFVEntries[strings.ToLower(path.Base(filePath))]; exists && expectedCRC != 0 && checksumResp.Checksum != expectedCRC {
-				log.Printf("[SlaveManager] Remerge CRC mismatch for %s on %s: got %08X expected %08X — deleting",
+				log.Printf("[SlaveManager] Remerge CRC mismatch for %s on %s: got %08X expected %08X - keeping file and marking it unverified",
 					filePath, rs.Name(), checksumResp.Checksum, expectedCRC)
-				if err := sm.DeleteFile(filePath); err != nil {
-					log.Printf("[SlaveManager] Failed to delete bad remerge file %s: %v", filePath, err)
-				}
+				sm.vfs.UpdateFileVerification(filePath, checksumResp.Checksum)
 				return
 			}
 		}

@@ -20,6 +20,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"goftpd/internal/protocol"
 )
@@ -973,29 +974,16 @@ func (s *Slave) handleSFVFile(ac *protocol.AsyncCommand) interface{} {
 			continue
 		}
 
-		// Parse SFV: each line is "filename HEXCRC32"
+		// Parse SFV lines as "filename<ws>HEXCRC32", allowing spaces or tabs
+		// before the checksum while preserving filenames exactly.
 		var entries []protocol.SFVEntry
 		lines := strings.Split(string(data), "\n")
 		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if line == "" || strings.HasPrefix(line, ";") {
+			entry, ok := parseSFVEntryLine(line)
+			if !ok {
 				continue
 			}
-			// Find last space separator
-			sep := strings.LastIndex(line, " ")
-			if sep < 0 {
-				continue
-			}
-			fileName := strings.TrimSpace(line[:sep])
-			crcStr := strings.TrimSpace(line[sep+1:])
-			crc, err := strconv.ParseUint(crcStr, 16, 32)
-			if err != nil {
-				continue
-			}
-			entries = append(entries, protocol.SFVEntry{
-				FileName: fileName,
-				CRC32:    uint32(crc),
-			})
+			entries = append(entries, entry)
 		}
 
 		// Calculate CRC32 of the SFV file itself
@@ -1012,6 +1000,50 @@ func (s *Slave) handleSFVFile(ac *protocol.AsyncCommand) interface{} {
 	}
 
 	return &protocol.AsyncResponseError{Index: ac.Index, Message: "SFV not found: " + sfvPath}
+}
+
+func parseSFVEntryLine(line string) (protocol.SFVEntry, bool) {
+	line = strings.TrimRight(line, "\r\n")
+	if strings.TrimSpace(line) == "" {
+		return protocol.SFVEntry{}, false
+	}
+	if strings.HasPrefix(strings.TrimLeftFunc(line, unicode.IsSpace), ";") {
+		return protocol.SFVEntry{}, false
+	}
+	if len(line) < 9 {
+		return protocol.SFVEntry{}, false
+	}
+
+	end := len(line)
+	for end > 0 && unicode.IsSpace(rune(line[end-1])) {
+		end--
+	}
+	if end < 8 {
+		return protocol.SFVEntry{}, false
+	}
+
+	crcStr := line[end-8 : end]
+	crc, err := strconv.ParseUint(crcStr, 16, 32)
+	if err != nil {
+		return protocol.SFVEntry{}, false
+	}
+
+	sep := end - 8
+	if sep <= 0 || !unicode.IsSpace(rune(line[sep-1])) {
+		return protocol.SFVEntry{}, false
+	}
+	for sep > 0 && unicode.IsSpace(rune(line[sep-1])) {
+		sep--
+	}
+	fileName := strings.TrimSpace(line[:sep])
+	if fileName == "" {
+		return protocol.SFVEntry{}, false
+	}
+
+	return protocol.SFVEntry{
+		FileName: fileName,
+		CRC32:    uint32(crc),
+	}, true
 }
 
 // handleReadFile - slave reads a small file and sends content to master.
