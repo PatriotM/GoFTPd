@@ -167,7 +167,6 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			fmt.Fprintf(s.Conn, "500 You need to use a client supporting PRET (PRE Transfer) to use PASV\r\n")
 			return false
 		}
-		s.SSCN = true
 
 		if s.Config.Passthrough && s.Config.Mode == "master" && s.MasterManager != nil {
 			if bridge, ok := s.MasterManager.(MasterBridge); ok {
@@ -1577,7 +1576,8 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				s.beginTransfer("upload", filePath)
 				defer s.endTransfer()
 
-				fileSize, checksum, xferMs, err := bridge.SlaveConnectAndReceive(filePath, portAddr, s.User.Name, s.User.PrimaryGroup, restOffset, s.DataTLS, s.SSCN, s.currentTransferTypeByte())
+				sslClientMode := !s.SSCN
+				fileSize, checksum, xferMs, err := bridge.SlaveConnectAndReceive(filePath, portAddr, s.User.Name, s.User.PrimaryGroup, restOffset, s.DataTLS, sslClientMode, s.currentTransferTypeByte())
 				_ = xferMs
 
 				if err != nil {
@@ -2088,7 +2088,8 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					s.beginTransfer("download", filePath)
 					defer s.endTransfer()
 
-					transferChecksum, xferMs, err := bridge.SlaveConnectAndSend(filePath, portAddr, restOffset, s.DataTLS, s.SSCN, s.currentTransferTypeByte())
+					sslClientMode := !s.SSCN
+					transferChecksum, xferMs, err := bridge.SlaveConnectAndSend(filePath, portAddr, restOffset, s.DataTLS, sslClientMode, s.currentTransferTypeByte())
 					if err != nil {
 						log.Printf("[Passthrough] PORT download failed: %v", err)
 						writeTransferFailure(s.Conn, "Download", err)
