@@ -49,6 +49,18 @@ master:
                                 # within the fail window, the IP is temporarily banned.
   slave_auth_fail_window_seconds: 900
   slave_auth_ban_seconds: 3600
+  remerge_mode: "off"          # "off" waits for the remerge to finish before the
+                                # slave becomes available. "instant" brings the
+                                # slave online immediately and fills the VFS in
+                                # the background.
+  remerge_checksums: false      # If true, ask slaves for CRCs during remerge only for
+                                # files missing a stored checksum in the VFS.
+                                # Leave this off for imported/legacy trees unless you
+                                # explicitly want that extra verification pass.
+  remerge_pause_threshold: 250  # Pause slave-side remerge streaming when the master's
+                                # pending per-slave remerge queue grows past this size.
+  remerge_resume_threshold: 50  # Resume slave-side remerge streaming when the master's
+                                # pending per-slave remerge queue falls back to this size.
 
 
 # =============================================================================
@@ -67,6 +79,8 @@ slave:
                                 # Set explicitly if the slave sits behind NAT.
   timeout:       60             # Slave-side inactivity timeout for master traffic.
                                 # Keep this aligned with master.heartbeat_timeout.
+  ignore_partial_remerge: false # If true, the slave ignores partial remerge requests
+                                # and always performs a full scan.
 
 
 # =============================================================================
@@ -158,7 +172,7 @@ sections:
   - "/TV-2160P"
   - "/TV-720P"
   - "/TV-BLURAY"
-  - "/TV-HDRIP"
+  - "/TV-HDRiP"
   - "/TV-SD"
   - "/TV-SPORTS"
   - "/X264-HD-1080P"
@@ -295,6 +309,10 @@ zipscript:
     music_complete_genre: true # add genre/year on MP3/FLAC COMPLETE banner
     announce_norace: true      # emit COMPLETE for first payload in non-SFV dirs too
     announce_subdirs: true     # announce helper release subdirs like Sample, Proof, and Subs; set false to suppress them entirely
+    cwd_race_stats: true       # show race stats on CWD for SFV releases
+    stor_race_stats: true      # show race stats after STOR for SFV releases
+    cwd_zip_race_stats: true   # show race stats on CWD for ZIP releases
+    stor_zip_race_stats: true  # show race stats after STOR for ZIP releases
 
   hooks:
     on_complete:
@@ -326,9 +344,26 @@ zipscript:
   sfv:
     force_first: false         # pzs-ng style: allow payload before .sfv; the release is checked once the .sfv lands
     deny_double_sfv: true      # reject a second .sfv in the same release dir
+    restrict_files: true       # once an .sfv exists, payload files should be listed in it
     delete_bad_crc: true       # delete uploaded files that fail SFV CRC
     ignore_zero_size: true     # delete zero-byte uploads instead of keeping them
     allow_resume: false        # allow REST resume for STOR / RETR when enabled
+    path_check: ["*"]          # scope where sfv-first is enforced
+    path_ignore: ["/PRE/*", "/REQUESTS/*", "*/Subs", "*/Cover", "*/Covers", "/SPEEDTEST/*"] # paths excluded from sfv-first enforcement
+    users: ["*"]               # users/groups affected by sfv-first; use ["!=SiteOP", "*"] to exempt a group
+    deny_subdir: false         # refuse .sfv upload if matching subdirs already exist in the release
+    deny_subdir_include: ".*"  # regex of subdir names that should block a later .sfv upload when deny_subdir is enabled
+    deny_subdir_exclude: ""    # optional regex of subdir names to ignore for that deny_subdir check
+    allow_no_ext: true         # allow extensionless uploads when sfv-first is enabled
+
+  zip:
+    integrity_check: true      # verify uploaded .zip integrity and re-check it during SITE RESCAN
+    cwd_diz_info: true         # show file_id.diz text on CWD in ZIP releases
+
+  list:
+    statusbar_enabled: true    # enable zipscript status rows in listings
+    statusbar_directory: true  # render the status row like a directory; false makes it look like a file
+    missing_files_enabled: true # show virtual missing-file rows in listings
 
   sections:
     sfv:
@@ -367,7 +402,7 @@ zipscript:
       - "/TV-2160P/*"
       - "/TV-720P/*"
       - "/TV-BLURAY/*"
-      - "/TV-HDRIP/*"
+      - "/TV-HDRiP/*"
       - "/TV-SD/*"
       - "/TV-SPORTS/*"
       - "/X264-HD-1080P/*"
@@ -432,7 +467,7 @@ zipscript:
       - "/TV-2160P/*"
       - "/TV-720P/*"
       - "/TV-BLURAY/*"
-      - "/TV-HDRIP/*"
+      - "/TV-HDRiP/*"
       - "/TV-SD/*"
       - "/TV-SPORTS/*"
       - "/X264-HD-1080P/*"
@@ -453,11 +488,15 @@ zipscript:
     mark_empty_dirs_on_rescan: true  # empty rescanned release dirs also get incomplete markers
 
   allowed_files:
-    allowed_types: ["jpg", "jpeg", "cue", "m3u", "txt", "vob", "png", "m2ts", "ts", "log", "mkv"] # extra extensions allowed in SFV dirs
+    allowed_types: ["nfo", "jpg", "jpeg", "cue", "m3u", "txt", "vob", "png", "m2ts", "ts", "log", "mkv", "mp4", "avi", "diz", "zip"] # allowed extra file types outside SFV payload checks
     ignored_types: ["diz", "debug", "message", "imdb", "html", "url", "m3u", "metadata"] # ignored by force-first / type checks
 
   audio:
     enabled: true               # enforce audio policy on MP3 / FLAC uploads
+    cwd_mp3_info: true          # show MP3 info on CWD
+    stor_mp3_info: true         # show MP3 info after STOR
+    cwd_flac_info: true         # show FLAC info on CWD
+    stor_flac_info: true        # show FLAC info after STOR
     cbr_check: false            # require CBR and match allowed_constant_bitrates
     year_check: false           # require year to be in allowed_years
     banned_genre_check: true    # delete uploads with banned genres

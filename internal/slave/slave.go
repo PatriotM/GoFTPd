@@ -20,6 +20,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"goftpd/internal/protocol"
 )
@@ -32,17 +33,18 @@ const (
 // Slave is the slave daemon,
 // It connects to a master, sends its name, then enters a command/response loop.
 type Slave struct {
-	name        string
-	masterHost  string
-	masterPort  int
-	roots       []string // local filesystem roots (1, slave.root.2)
-	pasvPortMin int
-	pasvPortMax int
-	pasvNext    uint32
-	tlsEnabled  bool
-	tlsCert     string
-	tlsKey      string
-	bindIP      string
+	name                 string
+	masterHost           string
+	masterPort           int
+	roots                []string // local filesystem roots (1, slave.root.2)
+	pasvPortMin          int
+	pasvPortMax          int
+	pasvNext             uint32
+	tlsEnabled           bool
+	tlsCert              string
+	tlsKey               string
+	bindIP               string
+	ignorePartialRemerge bool
 
 	conn            net.Conn
 	stream          *protocol.ObjectStream
@@ -53,6 +55,7 @@ type Slave struct {
 	online        atomic.Bool
 	lastWriteTime atomic.Int64 // UnixMilli of last successful write
 	timeout       time.Duration
+	remergePaused atomic.Bool
 }
 
 // writeObject sends an object to the master with mutex protection.
@@ -69,17 +72,18 @@ func (s *Slave) writeObject(obj interface{}) error {
 
 // SlaveConfig holds slave configuration loaded from YAML
 type SlaveConfig struct {
-	Name        string   `yaml:"name"`
-	MasterHost  string   `yaml:"master_host"`
-	MasterPort  int      `yaml:"master_port"`
-	Roots       []string `yaml:"roots"` // e.g. ["/data/site", "/data2/site"]
-	PasvPortMin int      `yaml:"pasv_port_min"`
-	PasvPortMax int      `yaml:"pasv_port_max"`
-	TLSEnabled  bool     `yaml:"tls_enabled"`
-	TLSCert     string   `yaml:"tls_cert"`
-	TLSKey      string   `yaml:"tls_key"`
-	BindIP      string   `yaml:"bind_ip"`
-	Timeout     int      `yaml:"timeout"` // seconds, default 60
+	Name                 string   `yaml:"name"`
+	MasterHost           string   `yaml:"master_host"`
+	MasterPort           int      `yaml:"master_port"`
+	Roots                []string `yaml:"roots"` // e.g. ["/data/site", "/data2/site"]
+	PasvPortMin          int      `yaml:"pasv_port_min"`
+	PasvPortMax          int      `yaml:"pasv_port_max"`
+	TLSEnabled           bool     `yaml:"tls_enabled"`
+	TLSCert              string   `yaml:"tls_cert"`
+	TLSKey               string   `yaml:"tls_key"`
+	BindIP               string   `yaml:"bind_ip"`
+	Timeout              int      `yaml:"timeout"` // seconds, default 60
+	IgnorePartialRemerge bool     `yaml:"ignore_partial_remerge"`
 }
 
 func NewSlave(cfg SlaveConfig) *Slave {
@@ -91,17 +95,18 @@ func NewSlave(cfg SlaveConfig) *Slave {
 		cfg.Roots = []string{"./site"}
 	}
 	return &Slave{
-		name:        cfg.Name,
-		masterHost:  cfg.MasterHost,
-		masterPort:  cfg.MasterPort,
-		roots:       cfg.Roots,
-		pasvPortMin: cfg.PasvPortMin,
-		pasvPortMax: cfg.PasvPortMax,
-		tlsEnabled:  cfg.TLSEnabled,
-		tlsCert:     cfg.TLSCert,
-		tlsKey:      cfg.TLSKey,
-		bindIP:      cfg.BindIP,
-		timeout:     timeout,
+		name:                 cfg.Name,
+		masterHost:           cfg.MasterHost,
+		masterPort:           cfg.MasterPort,
+		roots:                cfg.Roots,
+		pasvPortMin:          cfg.PasvPortMin,
+		pasvPortMax:          cfg.PasvPortMax,
+		tlsEnabled:           cfg.TLSEnabled,
+		tlsCert:              cfg.TLSCert,
+		tlsKey:               cfg.TLSKey,
+		bindIP:               cfg.BindIP,
+		timeout:              timeout,
+		ignorePartialRemerge: cfg.IgnorePartialRemerge,
 	}
 }
 
@@ -279,6 +284,9 @@ func (s *Slave) handleCommand(ac *protocol.AsyncCommand) interface{} {
 	case "readZipEntry":
 		return s.handleReadZipEntry(ac)
 
+	case "zipIntegrity":
+		return s.handleZipIntegrity(ac)
+
 	case "mediainfo":
 		return s.handleMediaInfo(ac)
 
@@ -292,9 +300,11 @@ func (s *Slave) handleCommand(ac *protocol.AsyncCommand) interface{} {
 		return s.handleMakeDir(ac)
 
 	case "remergePause":
+		s.remergePaused.Store(true)
 		return &protocol.AsyncResponse{Index: ac.Index}
 
 	case "remergeResume":
+		s.remergePaused.Store(false)
 		return &protocol.AsyncResponse{Index: ac.Index}
 
 	case "checkSSL":
@@ -821,6 +831,22 @@ func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
 	if len(ac.Args) > 0 {
 		basePath = ac.Args[0]
 	}
+	instantOnline := len(ac.Args) > 4 && strings.EqualFold(strings.TrimSpace(ac.Args[4]), "true")
+	partialRemerge := len(ac.Args) > 1 && strings.EqualFold(strings.TrimSpace(ac.Args[1]), "true") && !s.ignorePartialRemerge && !instantOnline
+	skipAgeCutoff := int64(0)
+	if partialRemerge && len(ac.Args) > 2 {
+		if cutoff, err := strconv.ParseInt(strings.TrimSpace(ac.Args[2]), 10, 64); err == nil {
+			skipAgeCutoff = cutoff
+			if len(ac.Args) > 3 {
+				if masterTime, err := strconv.ParseInt(strings.TrimSpace(ac.Args[3]), 10, 64); err == nil && cutoff != 0 {
+					skipAgeCutoff += time.Now().UnixMilli() - masterTime
+				}
+			}
+		} else {
+			partialRemerge = false
+		}
+	}
+	excludePaths := normalizeExcludeVFSPaths(ac.Args[5:])
 
 	log.Printf("[Slave] Starting remerge from %s across %d roots", basePath, len(s.roots))
 
@@ -864,6 +890,9 @@ func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
 			if err != nil {
 				return nil
 			}
+			for s.remergePaused.Load() && s.online.Load() {
+				time.Sleep(100 * time.Millisecond)
+			}
 
 			// Skip the root itself
 			if fullPath == scanRoot {
@@ -873,6 +902,15 @@ func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
 			// Get VFS-relative path
 			relPath, _ := filepath.Rel(root, fullPath)
 			relPath = "/" + filepath.ToSlash(relPath)
+			if isExcludedVFSPath(relPath, excludePaths) {
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if partialRemerge && !info.IsDir() && info.ModTime().UnixMilli() < skipAgeCutoff {
+				return nil
+			}
 			// Parent dir in VFS
 			parentDir := filepath.ToSlash(filepath.Dir(relPath))
 			if parentDir == "." {
@@ -918,6 +956,37 @@ func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
 	return &protocol.AsyncResponse{Index: ac.Index}
 }
 
+func normalizeExcludeVFSPaths(paths []string) []string {
+	out := make([]string, 0, len(paths))
+	seen := make(map[string]struct{}, len(paths))
+	for _, p := range paths {
+		p = path.Clean("/" + strings.TrimSpace(filepath.ToSlash(p)))
+		if p == "/" || p == "." || p == "" {
+			continue
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func isExcludedVFSPath(p string, excluded []string) bool {
+	p = path.Clean("/" + strings.TrimSpace(filepath.ToSlash(p)))
+	if p == "/" || p == "." || p == "" {
+		return false
+	}
+	for _, root := range excluded {
+		if p == root || strings.HasPrefix(p, root+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 // handleSFVFile - slave parses an SFV file and sends the entries to master.
 func (s *Slave) handleSFVFile(ac *protocol.AsyncCommand) interface{} {
 	if len(ac.Args) < 1 {
@@ -932,29 +1001,16 @@ func (s *Slave) handleSFVFile(ac *protocol.AsyncCommand) interface{} {
 			continue
 		}
 
-		// Parse SFV: each line is "filename HEXCRC32"
+		// Parse SFV lines as "filename<ws>HEXCRC32", allowing spaces or tabs
+		// before the checksum while preserving filenames exactly.
 		var entries []protocol.SFVEntry
 		lines := strings.Split(string(data), "\n")
 		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if line == "" || strings.HasPrefix(line, ";") {
+			entry, ok := parseSFVEntryLine(line)
+			if !ok {
 				continue
 			}
-			// Find last space separator
-			sep := strings.LastIndex(line, " ")
-			if sep < 0 {
-				continue
-			}
-			fileName := strings.TrimSpace(line[:sep])
-			crcStr := strings.TrimSpace(line[sep+1:])
-			crc, err := strconv.ParseUint(crcStr, 16, 32)
-			if err != nil {
-				continue
-			}
-			entries = append(entries, protocol.SFVEntry{
-				FileName: fileName,
-				CRC32:    uint32(crc),
-			})
+			entries = append(entries, entry)
 		}
 
 		// Calculate CRC32 of the SFV file itself
@@ -971,6 +1027,50 @@ func (s *Slave) handleSFVFile(ac *protocol.AsyncCommand) interface{} {
 	}
 
 	return &protocol.AsyncResponseError{Index: ac.Index, Message: "SFV not found: " + sfvPath}
+}
+
+func parseSFVEntryLine(line string) (protocol.SFVEntry, bool) {
+	line = strings.TrimRight(line, "\r\n")
+	if strings.TrimSpace(line) == "" {
+		return protocol.SFVEntry{}, false
+	}
+	if strings.HasPrefix(strings.TrimLeftFunc(line, unicode.IsSpace), ";") {
+		return protocol.SFVEntry{}, false
+	}
+	if len(line) < 9 {
+		return protocol.SFVEntry{}, false
+	}
+
+	end := len(line)
+	for end > 0 && unicode.IsSpace(rune(line[end-1])) {
+		end--
+	}
+	if end < 8 {
+		return protocol.SFVEntry{}, false
+	}
+
+	crcStr := line[end-8 : end]
+	crc, err := strconv.ParseUint(crcStr, 16, 32)
+	if err != nil {
+		return protocol.SFVEntry{}, false
+	}
+
+	sep := end - 8
+	if sep <= 0 || !unicode.IsSpace(rune(line[sep-1])) {
+		return protocol.SFVEntry{}, false
+	}
+	for sep > 0 && unicode.IsSpace(rune(line[sep-1])) {
+		sep--
+	}
+	fileName := strings.TrimSpace(line[:sep])
+	if fileName == "" {
+		return protocol.SFVEntry{}, false
+	}
+
+	return protocol.SFVEntry{
+		FileName: fileName,
+		CRC32:    uint32(crc),
+	}, true
 }
 
 // handleReadFile - slave reads a small file and sends content to master.
@@ -1052,6 +1152,60 @@ func (s *Slave) handleReadZipEntry(ac *protocol.AsyncCommand) interface{} {
 	}
 
 	return &protocol.AsyncResponseError{Index: ac.Index, Message: "file not found: " + archivePath}
+}
+
+func (s *Slave) handleZipIntegrity(ac *protocol.AsyncCommand) interface{} {
+	if len(ac.Args) < 1 {
+		return &protocol.AsyncResponseError{Index: ac.Index, Message: "zipIntegrity: missing archive path"}
+	}
+	archivePath := ac.Args[0]
+
+	for _, root := range s.roots {
+		fullPath := filepath.Join(root, archivePath)
+		info, err := os.Stat(fullPath)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		ok, err := validateZipIntegrity(fullPath)
+		if err != nil {
+			return &protocol.AsyncResponseError{Index: ac.Index, Message: fmt.Sprintf("zip integrity failed: %v", err)}
+		}
+		return &protocol.AsyncResponseZipIntegrity{Index: ac.Index, OK: ok}
+	}
+
+	return &protocol.AsyncResponseError{Index: ac.Index, Message: "file not found: " + archivePath}
+}
+
+func validateZipIntegrity(fullPath string) (bool, error) {
+	zr, err := zip.OpenReader(fullPath)
+	if err != nil {
+		return false, err
+	}
+	defer zr.Close()
+
+	files := 0
+	for _, f := range zr.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		files++
+		rc, err := f.Open()
+		if err != nil {
+			return false, err
+		}
+		_, copyErr := io.Copy(io.Discard, rc)
+		closeErr := rc.Close()
+		if copyErr != nil {
+			return false, copyErr
+		}
+		if closeErr != nil {
+			return false, closeErr
+		}
+	}
+	if files == 0 {
+		return false, fmt.Errorf("zip file empty")
+	}
+	return true, nil
 }
 
 func (s *Slave) handleMediaInfo(ac *protocol.AsyncCommand) interface{} {

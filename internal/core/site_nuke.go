@@ -254,7 +254,7 @@ func (s *Session) handleSiteNukeVFS(bridge MasterBridge, target string, multipli
 		return false
 	}
 
-	uploaderBytes := VFSUploaderBytes(bridge.ListDir(dirPath))
+	uploaderBytes := DirUploaderBytes(bridge, dirPath)
 	nukeeLine := FormatNukees(BuildNukeUserStats(uploaderBytes), []string{"goftpd", s.User.Name})
 	result, err := PerformSystemNuke(bridge, s.GroupMap, dirPath, multiplier, reason, "[NUKED]-")
 	if err != nil {
@@ -289,7 +289,7 @@ func (s *Session) handleSiteUnnukeVFS(bridge MasterBridge, target string) bool {
 		return false
 	}
 
-	uploaderBytes := VFSUploaderBytes(bridge.ListDir(dirPath))
+	uploaderBytes := DirUploaderBytes(bridge, dirPath)
 	totalRestored := ApplyUnnukeCredits(s.GroupMap, uploaderBytes, s.Config.NukeMaxMultiplier)
 	originalName := strings.TrimPrefix(dirName, "[NUKED]-")
 	bridge.RenameFile(dirPath, path.Dir(dirPath), originalName)

@@ -68,5 +68,6 @@ vendor/
 .gomodcache/
 .tmp_*.test
 .tmp_drftpd/
+.tmp_pzsng_source/
 .tmp_drftpd3_case/
 .tmp_drftpd3_import_test.py

@@ -17,20 +17,21 @@ type MasterBridge interface {
 
 	// UploadFile routes an upload from the FTP client data connection to a slave.
 	// owner and group are set on the VFS entry for directory listings.
-	UploadFile(filePath string, clientData net.Conn, owner, group string, position int64) (int64, uint32, error)
+	UploadFile(filePath string, clientData net.Conn, owner, group string, position int64, transferType byte) (int64, uint32, error)
 
 	// DownloadFile routes a download from a slave to the FTP client data connection.
 	// The bridge finds which slave has the file, tells it to send, then bridges data.
-	DownloadFile(filePath string, clientData net.Conn, position int64) error
+	// For full-file RETR, it returns the streamed CRC32 checksum when available.
+	DownloadFile(filePath string, clientData net.Conn, position int64, transferType byte) (uint32, error)
 
 	// DeleteFile deletes a file on all slaves and from the VFS.
 	DeleteFile(filePath string) error
 
-	// RenameFile renames on all slaves and in VFS.
-	RenameFile(from, toDir, toName string)
+	// RenameFile renames on the owning slave and in VFS.
+	RenameFile(from, toDir, toName string) error
 
-	// MakeDir creates a directory in the VFS.
-	MakeDir(dirPath, owner, group string)
+	// MakeDir creates a directory on the owning/selected slave and in the VFS.
+	MakeDir(dirPath, owner, group string) error
 
 	// Symlink creates or replaces a symbolic link in VFS/slaves.
 	Symlink(linkPath, targetPath string) error
@@ -45,6 +46,9 @@ type MasterBridge interface {
 	// GetFileSize returns file size from VFS, or -1 if not found.
 	GetFileSize(filePath string) int64
 
+	// GetPathEntry returns a single VFS entry for an exact path.
+	GetPathEntry(filePath string) (MasterFileEntry, bool)
+
 	// FileExists checks if a path exists in the VFS.
 	FileExists(filePath string) bool
 
@@ -55,6 +59,7 @@ type MasterBridge interface {
 	// ReadFile reads a small file from a slave (for .message/.imdb display).
 	ReadFile(filePath string) ([]byte, error)
 	ReadZipEntry(archivePath, entryName string) ([]byte, error)
+	CheckZipIntegrity(archivePath string) (bool, error)
 
 	// GetSFVInfo asks a slave to parse an SFV file and return filename→CRC32 entries.
 	GetSFVInfo(sfvPath string) ([]SFVEntryInfo, error)
@@ -64,6 +69,9 @@ type MasterBridge interface {
 
 	// ChecksumFile returns the CRC32 of a file from the slave that owns it.
 	ChecksumFile(filePath string) (uint32, error)
+
+	// GetKnownChecksum returns the cached VFS CRC32 for a file if known.
+	GetKnownChecksum(filePath string) (uint32, bool)
 
 	// MarkFileMissing removes a file from VFS/RaceDB presence without requiring it to exist.
 	MarkFileMissing(filePath string) error
@@ -95,6 +103,10 @@ type MasterBridge interface {
 	// GetSFVData returns cached SFV entries for a directory (filename->CRC32 map).
 	// Returns nil if no SFV is cached for this directory.
 	GetSFVData(dirPath string) map[string]uint32
+
+	// GetVerifiedSFVPresentFiles returns the expected SFV filenames that are
+	// currently present and checksum-valid according to live VFS state.
+	GetVerifiedSFVPresentFiles(dirPath string) map[string]bool
 
 	// GetDirMediaInfo returns cached release-level mediainfo fields for a directory.
 	GetDirMediaInfo(dirPath string) map[string]string
@@ -130,8 +142,11 @@ type MasterBridge interface {
 	// RunOnSlaveCommand runs a command on the owning or requested slave.
 	RunOnSlaveCommand(dirPath, command string, args []string, env map[string]string, timeoutSeconds int, preferredSlave string) (string, error)
 
-	// Passthrough PORT: tell slave to connect out to remote address and receive file
-	SlaveConnectAndReceive(filePath, remoteAddr, owner, group string, position int64) (int64, uint32, int64, error)
+	// Passthrough PORT: tell slave to connect out to remote address and receive file.
+	SlaveConnectAndReceive(filePath, remoteAddr, owner, group string, position int64, encrypted bool, sslClientMode bool, transferType byte) (int64, uint32, int64, error)
+
+	// Passthrough PORT: tell the owning slave to connect out to remote address and send file.
+	SlaveConnectAndSend(filePath, remoteAddr string, position int64, encrypted bool, sslClientMode bool, transferType byte) (uint32, int64, error)
 
 	// Passthrough: ask a slave to listen and return its IP:port + transfer index.
 	// sslClientMode selects the TLS role for secure FXP passive sockets.
@@ -142,10 +157,10 @@ type MasterBridge interface {
 	SlaveListenForDownloadPassthrough(filePath string, encrypted bool, sslClientMode bool) (slaveIP string, port int, transferIdx int32, slaveName string, err error)
 
 	// Passthrough: tell slave to receive a file, wait for completion, return size/checksum
-	SlaveReceivePassthrough(filePath string, transferIdx int32, slaveName string, owner, group string, position int64) (int64, uint32, int64, error)
+	SlaveReceivePassthrough(filePath string, transferIdx int32, slaveName string, owner, group string, position int64, transferType byte) (int64, uint32, int64, error)
 
-	// Passthrough: tell slave to send a file, wait for completion
-	SlaveSendPassthrough(filePath string, transferIdx int32, slaveName string, position int64) error
+	// Passthrough: tell slave to send a file, wait for completion.
+	SlaveSendPassthrough(filePath string, transferIdx int32, slaveName string, position int64, transferType byte) (checksum uint32, elapsedMs int64, err error)
 }
 
 // MasterFileEntry is a file/dir entry returned by MasterBridge.ListDir.

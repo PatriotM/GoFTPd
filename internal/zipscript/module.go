@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"goftpd/internal/user"
 )
 
 type MediaInfoProvider interface {
@@ -34,6 +36,22 @@ var scenePayloadExts = map[string]bool{
 	"jpeg": true,
 	"png":  true,
 	"gif":  true,
+}
+
+var defaultAllowedOutsideSFVExts = map[string]bool{
+	"nfo":  true,
+	"txt":  true,
+	"jpg":  true,
+	"jpeg": true,
+	"png":  true,
+	"diz":  true,
+	"avi":  true,
+	"vob":  true,
+	"m2ts": true,
+	"mkv":  true,
+	"mp4":  true,
+	"zip":  true,
+	"m3u":  true,
 }
 
 func Enabled(cfg Config) bool {
@@ -197,18 +215,22 @@ func MarkEmptyDirsOnRescan(cfg Config) bool {
 	return cfg.Enabled && cfg.Incomplete.Enabled && cfg.Incomplete.MarkEmptyDirsOnRescan
 }
 
-func ValidateUpload(cfg Config, dirPath, fileName string, existingNames []string, sfvEntries map[string]uint32) error {
+func ValidateUpload(cfg Config, uploadUser *user.User, dirPath, fileName string, existingNames []string, existingDirs []string, sfvEntries map[string]uint32) error {
 	if !UsesRace(cfg, dirPath) {
 		return nil
 	}
 
 	lowerName := strings.ToLower(strings.TrimSpace(fileName))
 	isSFV := strings.HasSuffix(lowerName, ".sfv")
+	if isSFV && denySFVForExistingSubdirs(cfg, existingDirs) {
+		return errors.New("zipscript: cannot upload .sfv while matching subdirs already exist in this release")
+	}
 	listedInSFV := false
 	if sfvEntries != nil {
 		_, listedInSFV = sfvEntries[raceEntryKey(fileName)]
 	}
 	isPayload := IsRacePayloadFileForDir(cfg, dirPath, fileName) || listedInSFV
+	allowedOutsideSFV := AllowedOutsideSFVForDir(cfg, dirPath, fileName)
 	if UsesZip(cfg, dirPath) {
 		if strings.EqualFold(path.Base(strings.ReplaceAll(strings.TrimSpace(fileName), "\\", "/")), "file_id.diz") {
 			return errors.New("zipscript: diz-file is not allowed here")
@@ -218,22 +240,24 @@ func ValidateUpload(cfg Config, dirPath, fileName string, existingNames []string
 		}
 		return nil
 	}
-	hasDirSFV := len(sfvEntries) > 0
+	hasReadableSFV := sfvEntries != nil
+	hasNamedSFV := false
+	sfvFirstEnforced := sfvFirstAppliesToUpload(cfg, uploadUser, dirPath)
 	for _, name := range existingNames {
 		if strings.HasSuffix(strings.ToLower(strings.TrimSpace(name)), ".sfv") {
-			hasDirSFV = true
-			if isSFV && cfg.SFV.DenyDoubleSFV {
+			hasNamedSFV = true
+			if isSFV && cfg.SFV.DenyDoubleSFV && hasReadableSFV {
 				return errors.New("zipscript: .sfv already exists in this release")
 			}
 		}
 	}
 
-	if !hasDirSFV && cfg.SFV.ForceFirst && isPayload && !isSFV {
+	if !hasReadableSFV && !hasNamedSFV && cfg.SFV.ForceFirst && sfvFirstEnforced && isPayload && !allowedOutsideSFV && !isSFV {
 		return errors.New("zipscript: upload the .sfv before payload files in this release")
 	}
 
-	if hasDirSFV && !isSFV && isPayload {
-		if !listedInSFV {
+	if hasReadableSFV && sfvFirstEnforced && !isSFV && isPayload && !allowedOutsideSFV {
+		if sfvRestrictFiles(cfg) && !listedInSFV {
 			return fmt.Errorf("zipscript: %q is not listed in the .sfv", fileName)
 		}
 	}
@@ -247,6 +271,154 @@ func ValidateUpload(cfg Config, dirPath, fileName string, existingNames []string
 	}
 
 	return nil
+}
+
+func sfvFirstAppliesToUpload(cfg Config, uploadUser *user.User, dirPath string) bool {
+	if !cfg.Enabled || !cfg.SFV.ForceFirst {
+		return false
+	}
+	cleanPath := normalizePath(dirPath)
+	if !scopePathMatchesAny(cleanPath, cfg.SFV.PathCheck) {
+		return false
+	}
+	if scopePathMatchesAny(cleanPath, cfg.SFV.PathIgnore) {
+		return false
+	}
+	return sfvUserMatches(uploadUser, cfg.SFV.Users)
+}
+
+func sfvUserMatches(uploadUser *user.User, specs []string) bool {
+	if len(specs) == 0 {
+		return true
+	}
+	allow := false
+	for _, spec := range specs {
+		spec = strings.TrimSpace(spec)
+		if spec == "" {
+			continue
+		}
+		if spec == "*" {
+			allow = true
+			continue
+		}
+		if strings.HasPrefix(spec, "!=") {
+			target := strings.TrimSpace(spec[2:])
+			if target != "" && userMatchesToken(uploadUser, target) {
+				return false
+			}
+			continue
+		}
+		if userMatchesToken(uploadUser, spec) {
+			allow = true
+		}
+	}
+	return allow
+}
+
+func userMatchesToken(uploadUser *user.User, token string) bool {
+	if uploadUser == nil {
+		return false
+	}
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return false
+	}
+	if strings.EqualFold(uploadUser.Name, token) {
+		return true
+	}
+	if strings.EqualFold(uploadUser.PrimaryGroup, token) {
+		return true
+	}
+	for group := range uploadUser.Groups {
+		if strings.EqualFold(group, token) {
+			return true
+		}
+	}
+	return false
+}
+
+func scopePathMatchesAny(dirPath string, patterns []string) bool {
+	cleanPath := normalizePath(dirPath)
+	for _, pattern := range patterns {
+		if scopePathMatches(cleanPath, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+func scopePathMatches(dirPath, pattern string) bool {
+	pattern = normalizePattern(strings.TrimSuffix(strings.TrimSpace(pattern), "/"))
+	if pattern == "" {
+		return false
+	}
+	if pattern == "/*" || pattern == "*" {
+		return true
+	}
+	regex := globToPathRegex(pattern)
+	matched, err := regexp.MatchString(regex, dirPath)
+	return err == nil && matched
+}
+
+func globToPathRegex(pattern string) string {
+	var b strings.Builder
+	b.WriteString("^")
+	for i := 0; i < len(pattern); i++ {
+		ch := pattern[i]
+		switch ch {
+		case '*':
+			b.WriteString(".*")
+		case '?':
+			b.WriteByte('.')
+		case '.', '+', '(', ')', '|', '^', '$', '{', '}', '[', ']', '\\':
+			b.WriteByte('\\')
+			b.WriteByte(ch)
+		default:
+			b.WriteByte(ch)
+		}
+	}
+	b.WriteString("$")
+	return b.String()
+}
+
+func denySFVForExistingSubdirs(cfg Config, existingDirs []string) bool {
+	if !cfg.SFV.DenySubdir || len(existingDirs) == 0 {
+		return false
+	}
+	include := strings.TrimSpace(cfg.SFV.DenySubdirInclude)
+	if include == "" {
+		include = ".*"
+	}
+	exclude := strings.TrimSpace(cfg.SFV.DenySubdirExclude)
+	for _, dirName := range existingDirs {
+		name := strings.TrimSpace(dirName)
+		if name == "" {
+			continue
+		}
+		if exclude != "" {
+			if matched, err := regexp.MatchString(exclude, name); err == nil && matched {
+				continue
+			}
+		}
+		if matched, err := regexp.MatchString(include, name); err == nil && matched {
+			return true
+		}
+	}
+	return false
+}
+
+func sfvAllowNoExt(cfg Config) bool {
+	if cfg.SFV.AllowNoExt == nil {
+		return true
+	}
+	return *cfg.SFV.AllowNoExt
+}
+
+func sfvRestrictFiles(cfg Config) bool {
+	if cfg.SFV.RestrictFiles == nil {
+		return true
+	}
+	return *cfg.SFV.RestrictFiles
 }
 
 func IsIgnoredType(cfg Config, fileName string) bool {
@@ -266,10 +438,29 @@ func IsAllowedType(cfg Config, fileName string) bool {
 	return IsAllowedTypeForDir(cfg, "", fileName)
 }
 
+func AllowedOutsideSFVForDir(cfg Config, dirPath, fileName string) bool {
+	ext := normalizedExt(fileName)
+	if ext == "" {
+		return sfvAllowNoExt(cfg)
+	}
+	if IsIgnoredType(cfg, fileName) {
+		return true
+	}
+	if len(cfg.AllowedFiles.AllowedTypes) > 0 {
+		for _, item := range cfg.AllowedFiles.AllowedTypes {
+			if strings.EqualFold(strings.TrimSpace(item), ext) {
+				return true
+			}
+		}
+		return false
+	}
+	return defaultAllowedOutsideSFVExts[ext]
+}
+
 func IsAllowedTypeForDir(cfg Config, dirPath, fileName string) bool {
 	ext := normalizedExt(fileName)
 	if ext == "" {
-		return true
+		return sfvAllowNoExt(cfg)
 	}
 	if isPrimaryAudioPayload(dirPath, ext) {
 		return true
@@ -327,10 +518,10 @@ func IsRacePayloadFile(cfg Config, fileName string) bool {
 }
 
 func IsRacePayloadFileForDir(cfg Config, dirPath, fileName string) bool {
-	if dirPath != "" && !RaceEnabled(cfg, dirPath) {
+	if dirPath != "" && !UsesRace(cfg, dirPath) {
 		return false
 	}
-	if dirPath == "" && (!cfg.Enabled || !cfg.Race.Enabled) {
+	if dirPath == "" && !cfg.Enabled {
 		return false
 	}
 	name := strings.ToLower(strings.TrimSpace(fileName))
@@ -340,7 +531,7 @@ func IsRacePayloadFileForDir(cfg Config, dirPath, fileName string) bool {
 	if UsesZip(cfg, dirPath) && regexp.MustCompile(`(?i)\.(zip|z\d\d)$`).MatchString(name) {
 		return true
 	}
-	return isMediaInfoFile(name)
+	return IsMediaInfoFile(name)
 }
 
 func isSceneMultipartExt(ext string) bool {
@@ -384,7 +575,7 @@ func MediaInfoGraceDelayForDir(cfg Config, dirPath, fileName string) time.Durati
 	if dirPath == "" && (!cfg.Enabled || !cfg.Race.Enabled) {
 		return 0
 	}
-	if isMediaInfoFile(fileName) {
+	if IsMediaInfoFile(fileName) {
 		return 2500 * time.Millisecond
 	}
 	return 0
@@ -428,6 +619,96 @@ func ShouldDeleteBadCRCForDir(cfg Config, dirPath string) bool {
 	return cfg.Enabled && cfg.SFV.DeleteBadCRC
 }
 
+func AllowResumeForDir(cfg Config, dirPath string) bool {
+	if dirPath != "" && !UsesRace(cfg, dirPath) {
+		return true
+	}
+	return !cfg.Enabled || cfg.SFV.AllowResume
+}
+
+func CheckZipIntegrityForDir(cfg Config, dirPath string) bool {
+	if dirPath != "" && !UsesZip(cfg, dirPath) {
+		return false
+	}
+	if !cfg.Enabled {
+		return false
+	}
+	if cfg.Zip.IntegrityCheck == nil {
+		return true
+	}
+	return *cfg.Zip.IntegrityCheck
+}
+
+func ShowZipDIZOnCWDForDir(cfg Config, dirPath string) bool {
+	if !UsesZip(cfg, dirPath) || cfg.Zip.CWDDIZInfo == nil {
+		return false
+	}
+	return *cfg.Zip.CWDDIZInfo
+}
+
+func RaceStatsOnCWDForDir(cfg Config, dirPath string) bool {
+	if !cfg.Enabled {
+		return false
+	}
+	if UsesZip(cfg, dirPath) {
+		return cfg.Race.CWDZipRaceStats != nil && *cfg.Race.CWDZipRaceStats
+	}
+	if UsesSFV(cfg, dirPath) {
+		return cfg.Race.CWDRaceStats != nil && *cfg.Race.CWDRaceStats
+	}
+	return false
+}
+
+func RaceStatsOnSTORForDir(cfg Config, dirPath string) bool {
+	if !cfg.Enabled {
+		return false
+	}
+	if UsesZip(cfg, dirPath) {
+		return cfg.Race.STORZipRaceStats != nil && *cfg.Race.STORZipRaceStats
+	}
+	if UsesSFV(cfg, dirPath) {
+		return cfg.Race.STORRaceStats != nil && *cfg.Race.STORRaceStats
+	}
+	return false
+}
+
+func ShowStatusBarForDir(cfg Config, dirPath string) bool {
+	if cfg.List.StatusBarEnabled == nil || !cfg.Enabled {
+		return false
+	}
+	if !*cfg.List.StatusBarEnabled {
+		return false
+	}
+	return UsesRace(cfg, dirPath) || audioStatusBarEligibleDir(cfg, dirPath)
+}
+
+func StatusBarDirectoryForDir(cfg Config, dirPath string) bool {
+	if !ShowStatusBarForDir(cfg, dirPath) || cfg.List.StatusBarDirectory == nil {
+		return false
+	}
+	return *cfg.List.StatusBarDirectory
+}
+
+func ShowMissingFilesForDir(cfg Config, dirPath string) bool {
+	if !UsesSFV(cfg, dirPath) || cfg.List.MissingFiles == nil {
+		return false
+	}
+	return *cfg.List.MissingFiles
+}
+
+func audioStatusBarEligibleDir(cfg Config, dirPath string) bool {
+	if !cfg.Audio.Enabled {
+		return false
+	}
+	section, _ := SectionInfoFromPath(dirPath)
+	switch strings.ToUpper(strings.TrimSpace(section)) {
+	case "MP3", "FLAC":
+		return true
+	default:
+		return false
+	}
+}
+
 func RaceEnabled(cfg Config, dirPath string) bool {
 	return cfg.Enabled && cfg.Race.Enabled && UsesRace(cfg, dirPath)
 }
@@ -445,6 +726,28 @@ func AudioCheckEnabled(cfg Config, dirPath, fileName string) bool {
 	}
 	ext := normalizedExt(fileName)
 	return ext == "mp3" || ext == "flac" || ext == "m4a" || ext == "wav"
+}
+
+func ShowAudioInfoOnCWDForDir(cfg Config, dirPath string, fields map[string]string) bool {
+	switch audioInfoReleaseType(dirPath, fields) {
+	case "mp3":
+		return cfg.Enabled && cfg.Audio.Enabled && cfg.Audio.CWDMP3Info != nil && *cfg.Audio.CWDMP3Info
+	case "flac":
+		return cfg.Enabled && cfg.Audio.Enabled && cfg.Audio.CWDFLACInfo != nil && *cfg.Audio.CWDFLACInfo
+	default:
+		return false
+	}
+}
+
+func ShowAudioInfoOnSTORForDir(cfg Config, dirPath string, fields map[string]string) bool {
+	switch audioInfoReleaseType(dirPath, fields) {
+	case "mp3":
+		return cfg.Enabled && cfg.Audio.Enabled && cfg.Audio.STORMP3Info != nil && *cfg.Audio.STORMP3Info
+	case "flac":
+		return cfg.Enabled && cfg.Audio.Enabled && cfg.Audio.STORFLACInfo != nil && *cfg.Audio.STORFLACInfo
+	default:
+		return false
+	}
 }
 
 func ValidateAudioRelease(cfg Config, fields map[string]string) []string {
@@ -484,6 +787,15 @@ func ValidateAudioRelease(cfg Config, fields map[string]string) []string {
 	}
 
 	return reasons
+}
+
+func AudioInfoLooksUsable(fields map[string]string) bool {
+	if len(fields) == 0 {
+		return false
+	}
+	genre := strings.TrimSpace(firstNonEmpty(fields, "genre", "g_genre"))
+	year := strings.TrimSpace(normalizeYearForBanner(firstNonEmpty(fields, "year", "g_recordeddate", "g_recorded_date")))
+	return genre != "" && year != ""
 }
 
 func AudioSortLinks(cfg Config, releasePath string, fields map[string]string) []AudioSortLink {
@@ -529,7 +841,7 @@ func audioSortBasePath(cfg Config, releasePath, basePath string) string {
 	return basePath
 }
 
-func isMediaInfoFile(fileName string) bool {
+func IsMediaInfoFile(fileName string) bool {
 	name := strings.ToLower(strings.TrimSpace(fileName))
 	for _, suffix := range []string{".mp3", ".flac", ".m4a", ".wav", ".mkv", ".mp4", ".avi", ".m2ts"} {
 		if strings.HasSuffix(name, suffix) {
@@ -549,7 +861,7 @@ func musicCompleteExtra(dirPath string, media MediaInfoProvider) string {
 		return ""
 	}
 	info := media.GetDirMediaInfo(dirPath)
-	if len(info) == 0 {
+	if !AudioInfoLooksUsable(info) {
 		return ""
 	}
 	if !isMusicSection(dirPath) && !looksLikeMusicReleaseInfo(info) {
@@ -588,6 +900,29 @@ func isMusicSection(dirPath string) bool {
 		section = section[:idx]
 	}
 	return section == "MP3" || section == "FLAC"
+}
+
+func audioInfoReleaseType(dirPath string, fields map[string]string) string {
+	section := strings.ToUpper(strings.Trim(path.Clean(dirPath), "/"))
+	if idx := strings.Index(section, "/"); idx >= 0 {
+		section = section[:idx]
+	}
+	switch section {
+	case "MP3":
+		return "mp3"
+	case "FLAC":
+		return "flac"
+	}
+	for _, key := range []string{"filename", "filepath", "path"} {
+		name := strings.ToLower(strings.TrimSpace(fields[key]))
+		switch {
+		case strings.HasSuffix(name, ".mp3"):
+			return "mp3"
+		case strings.HasSuffix(name, ".flac"):
+			return "flac"
+		}
+	}
+	return ""
 }
 
 func firstNonEmpty(values map[string]string, keys ...string) string {

@@ -3,6 +3,8 @@ package core
 import (
 	"net"
 	"testing"
+
+	"goftpd/internal/user"
 )
 
 func TestDisconnectActiveSessionClearsTransferState(t *testing.T) {
@@ -35,5 +37,40 @@ func TestDisconnectActiveSessionClearsTransferState(t *testing.T) {
 	}
 	if snap.TransferSlaveName != "" || snap.TransferSlaveIdx != 0 {
 		t.Fatalf("expected slave transfer identity to be cleared, got %q/%d", snap.TransferSlaveName, snap.TransferSlaveIdx)
+	}
+}
+
+func TestCountTransfersForUserCountsByDirection(t *testing.T) {
+	uploadServer, uploadClient := net.Pipe()
+	defer uploadClient.Close()
+	downloadServer, downloadClient := net.Pipe()
+	defer downloadClient.Close()
+
+	uploadSession := &Session{
+		Conn:     uploadServer,
+		IsLogged: true,
+		User:     &user.User{Name: "tester"},
+	}
+	uploadSession.beginTransfer("upload", "/UPLOAD/release/file.r00")
+	uploadSession.ID = registerSession(uploadSession)
+	defer unregisterSession(uploadSession.ID)
+
+	downloadSession := &Session{
+		Conn:     downloadServer,
+		IsLogged: true,
+		User:     &user.User{Name: "tester"},
+	}
+	downloadSession.beginTransfer("download", "/UPLOAD/release/file.r01")
+	downloadSession.ID = registerSession(downloadSession)
+	defer unregisterSession(downloadSession.ID)
+
+	if got := countTransfersForUser("tester", "upload"); got != 1 {
+		t.Fatalf("countTransfersForUser(upload) = %d, want 1", got)
+	}
+	if got := countTransfersForUser("tester", "download"); got != 1 {
+		t.Fatalf("countTransfersForUser(download) = %d, want 1", got)
+	}
+	if got := countTransfersForUser("tester", "other"); got != 0 {
+		t.Fatalf("countTransfersForUser(other) = %d, want 0", got)
 	}
 }

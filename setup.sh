@@ -2065,6 +2065,8 @@ normalize_glftpd_user_file() {
     local source_file="$1"
     local target_file="$2"
     local primary_group="$3"
+    local login_upload_slots="0"
+    local login_download_slots="0"
 
     if [ ! -f "${source_file}" ]; then
         write_minimal_imported_user_file "${target_file}" "${primary_group}"
@@ -2072,6 +2074,23 @@ normalize_glftpd_user_file() {
     fi
 
     awk '{ sub(/\r$/, ""); print }' "${source_file}" > "${target_file}"
+
+    if grep -Eq '^LOGINS[[:space:]]+' "${target_file}"; then
+        local gl_logins_upload_slots gl_logins_download_slots
+        read -r _ _ _ gl_logins_download_slots gl_logins_upload_slots _rest < <(grep -E '^LOGINS[[:space:]]+' "${target_file}" | head -n1)
+        login_upload_slots="${gl_logins_upload_slots:-0}"
+        login_download_slots="${gl_logins_download_slots:-0}"
+    fi
+
+    if ! grep -Eq '^HOMEDIR[[:space:]]+' "${target_file}"; then
+        printf 'HOMEDIR /site\n' >> "${target_file}"
+    fi
+    if ! grep -Eq '^UPLOADSLOTS[[:space:]]+' "${target_file}"; then
+        printf 'UPLOADSLOTS %s\n' "${login_upload_slots}" >> "${target_file}"
+    fi
+    if ! grep -Eq '^DOWNLOADSLOTS[[:space:]]+' "${target_file}"; then
+        printf 'DOWNLOADSLOTS %s\n' "${login_download_slots}" >> "${target_file}"
+    fi
 
     if [ -n "${primary_group}" ]; then
         if ! grep -Eq '^PRIMARY(_GROUP)?[[:space:]]+' "${target_file}"; then

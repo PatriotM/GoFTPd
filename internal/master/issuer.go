@@ -3,6 +3,7 @@ package master
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"goftpd/internal/protocol"
 )
@@ -215,22 +216,59 @@ func IssueAbort(rs *RemoteSlave, transferIndex int32, reason string) {
 
 // IssueRemerge tells the slave to scan and send its file listing.
 // ().
-func IssueRemerge(rs *RemoteSlave, path string, partialRemerge bool, skipAgeCutoff int64, masterTime int64, instantOnline bool) (string, error) {
+func IssueRemerge(rs *RemoteSlave, path string, partialRemerge bool, skipAgeCutoff int64, masterTime int64, instantOnline bool, excludePaths []string) (string, error) {
 	index, err := rs.FetchIndex()
 	if err != nil {
 		return "", err
 	}
+	args := []string{
+		path,
+		fmt.Sprintf("%v", partialRemerge),
+		fmt.Sprintf("%d", skipAgeCutoff),
+		fmt.Sprintf("%d", masterTime),
+		fmt.Sprintf("%v", instantOnline),
+	}
+	for _, p := range excludePaths {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			args = append(args, p)
+		}
+	}
 	return index, rs.SendCommand(&protocol.AsyncCommand{
 		Index: index,
 		Name:  "remerge",
-		Args: []string{
-			path,
-			fmt.Sprintf("%v", partialRemerge),
-			fmt.Sprintf("%d", skipAgeCutoff),
-			fmt.Sprintf("%d", masterTime),
-			fmt.Sprintf("%v", instantOnline),
-		},
+		Args:  args,
 	})
+}
+
+func IssueRemergePause(rs *RemoteSlave) error {
+	index, err := rs.FetchIndex()
+	if err != nil {
+		return err
+	}
+	sendErr := rs.SendCommand(&protocol.AsyncCommand{Index: index, Name: "remergePause"})
+	if sendErr != nil {
+		select {
+		case rs.indexPool <- index:
+		default:
+		}
+	}
+	return sendErr
+}
+
+func IssueRemergeResume(rs *RemoteSlave) error {
+	index, err := rs.FetchIndex()
+	if err != nil {
+		return err
+	}
+	sendErr := rs.SendCommand(&protocol.AsyncCommand{Index: index, Name: "remergeResume"})
+	if sendErr != nil {
+		select {
+		case rs.indexPool <- index:
+		default:
+		}
+	}
+	return sendErr
 }
 
 // IssueCheckSSL checks if slave supports SSL.
@@ -273,6 +311,14 @@ func IssueReadZipEntry(rs *RemoteSlave, archivePath, entryName string) (string, 
 		return "", err
 	}
 	return index, rs.SendCommand(&protocol.AsyncCommand{Index: index, Name: "readZipEntry", Args: []string{archivePath, entryName}})
+}
+
+func IssueZipIntegrity(rs *RemoteSlave, archivePath string) (string, error) {
+	index, err := rs.FetchIndex()
+	if err != nil {
+		return "", err
+	}
+	return index, rs.SendCommand(&protocol.AsyncCommand{Index: index, Name: "zipIntegrity", Args: []string{archivePath}})
 }
 
 // IssueWriteFile asks the slave to write a small file.

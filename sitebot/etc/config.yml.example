@@ -296,10 +296,10 @@ sections:
     paths:
       - "/TV-BLURAY/*"
 
-  - name: "TV-HDRIP"
+  - name: "TV-HDRiP"
     channels: *chan_main
     paths:
-      - "/TV-HDRIP/*"
+      - "/TV-HDRiP/*"
 
   - name: "TV-SD"
     channels: *chan_main

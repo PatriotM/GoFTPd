@@ -22,6 +22,7 @@ func init() {
 	gob.Register(&AsyncResponseSFVInfo{})
 	gob.Register(&AsyncResponseFileContent{})
 	gob.Register(&AsyncResponseZipEntryContent{})
+	gob.Register(&AsyncResponseZipIntegrity{})
 	gob.Register(&AsyncResponseMediaInfo{})
 	gob.Register(&AsyncResponseTransferStats{})
 	gob.Register(&AsyncResponseCommandResult{})
@@ -228,6 +229,13 @@ type AsyncResponseZipEntryContent struct {
 }
 
 func (ar *AsyncResponseZipEntryContent) GetIndex() string { return ar.Index }
+
+type AsyncResponseZipIntegrity struct {
+	Index string
+	OK    bool
+}
+
+func (ar *AsyncResponseZipIntegrity) GetIndex() string { return ar.Index }
 
 // AsyncResponseMediaInfo returns flattened mediainfo metadata from a slave.
 type AsyncResponseMediaInfo struct {

@@ -289,6 +289,22 @@ func (h *Handler) expandPattern(pattern string) []releaseCandidate {
 			if !rel.IsDir || strings.HasPrefix(rel.Name, ".") {
 				continue
 			}
+			if isDatedBucketName(rel.Name) {
+				parentPath := path.Join(base, rel.Name)
+				for _, child := range h.svc.Bridge.PluginListDir(parentPath) {
+					if !child.IsDir || strings.HasPrefix(child.Name, ".") {
+						continue
+					}
+					out = append(out, releaseCandidate{
+						Path:    path.Join(parentPath, child.Name),
+						Name:    child.Name,
+						Section: sectionFromPath(parentPath),
+						Owner:   child.Owner,
+						ModTime: child.ModTime,
+					})
+				}
+				continue
+			}
 			out = append(out, releaseCandidate{
 				Path:    path.Join(base, rel.Name),
 				Name:    rel.Name,
@@ -651,6 +667,12 @@ func (h *Handler) sfvMissingFiles(dirPath string, sfv map[string]uint32) bool {
 }
 
 func (h *Handler) nuke(rel releaseCandidate, multiplier int, reason string) bool {
+	if h.isProtectedBase(rel.Path) || isDatedBucketName(rel.Name) {
+		h.logf("refusing to nuke protected path %s [%s] reason=%s", rel.Path, rel.Section, reason)
+		h.appendHistory("skip_protected_nuke", rel, reason, "protected base or dated bucket")
+		h.clearAllWarnings(rel)
+		return false
+	}
 	siteArgs := fmt.Sprintf("NUKE %s x%d -Auto- %s", rel.Path, multiplier, reason)
 	responseLines, err := h.runSITE(siteArgs)
 	if err != nil {

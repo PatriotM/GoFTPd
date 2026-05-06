@@ -219,6 +219,13 @@ rules:
     - path: /*
       required: $anyone
 
+  rmd:
+    - path: /PRE/*/*
+      required: $anyone
+
+    - path: /*
+      required: $siteop
+
 
   # ---------------------------------------------------------------------------
   # Listings and dirlog

@@ -70,7 +70,7 @@ sections:
   - "/TV-2160P/*"
   - "/TV-720P/*"
   - "/TV-BLURAY/*"
-  - "/TV-HDRIP/*"
+  - "/TV-HDRiP/*"
   - "/TV-SD/*"
   - "/TV-SPORTS/*"
   - "/X264-HD-1080P/*"

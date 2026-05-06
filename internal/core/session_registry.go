@@ -105,6 +105,32 @@ func ListActiveSessionsForPlugins() []plugin.ActiveSession {
 	return out
 }
 
+func countTransfersForUser(username, direction string) int {
+	username = strings.TrimSpace(username)
+	direction = strings.ToLower(strings.TrimSpace(direction))
+	if username == "" || direction == "" {
+		return 0
+	}
+	count := 0
+	activeSessions.Range(func(key, value interface{}) bool {
+		s, ok := value.(*Session)
+		if !ok || s == nil || !s.IsLogged || s.User == nil {
+			return true
+		}
+		if !strings.EqualFold(s.User.Name, username) {
+			return true
+		}
+		s.stateMu.RLock()
+		matches := strings.EqualFold(s.TransferDirection, direction) && strings.TrimSpace(s.TransferPath) != ""
+		s.stateMu.RUnlock()
+		if matches {
+			count++
+		}
+		return true
+	})
+	return count
+}
+
 func DisconnectActiveSession(id uint64) bool {
 	if id == 0 {
 		return false
@@ -117,7 +143,7 @@ func DisconnectActiveSession(id uint64) bool {
 	if !ok || s == nil || s.Conn == nil {
 		return false
 	}
-	s.endTransfer()
+	s.abortCurrentTransfer("session disconnected")
 	_ = s.Conn.Close()
 	return true
 }
@@ -134,7 +160,7 @@ func kickActiveUser(username string) int {
 			return true
 		}
 		if strings.EqualFold(s.User.Name, username) {
-			s.endTransfer()
+			s.abortCurrentTransfer("user kicked")
 			_ = s.Conn.Close()
 			kicked++
 		}

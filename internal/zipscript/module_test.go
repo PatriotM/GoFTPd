@@ -1,6 +1,12 @@
 package zipscript
 
-import "testing"
+import (
+	"testing"
+
+	"goftpd/internal/user"
+)
+
+func boolPtr(v bool) *bool { return &v }
 
 type testMediaInfoProvider struct {
 	data map[string]map[string]string
@@ -126,6 +132,29 @@ func TestCompleteStatusNameUsesMusicMetadataForAffilPredir(t *testing.T) {
 	}
 }
 
+func TestCompleteStatusNameIgnoresUnusableMusicMetadata(t *testing.T) {
+	cfg := Config{
+		Enabled: true,
+		Race: RaceConfig{
+			CompleteBanner:     true,
+			MusicCompleteGenre: true,
+		},
+	}
+	media := testMediaInfoProvider{
+		data: map[string]map[string]string{
+			"/MP3/0503/Artist-Album-2026-GRP": {
+				"genre": "DANCE",
+			},
+		},
+	}
+
+	got := CompleteStatusName(cfg, "GoFTPd", "/MP3/0503/Artist-Album-2026-GRP", 123, 12, media)
+	want := "[GoFTPd] - ( 123M 12F - COMPLETE ) - [GoFTPd]"
+	if got != want {
+		t.Fatalf("CompleteStatusName = %q, want %q", got, want)
+	}
+}
+
 func TestIgnoredReleaseSubdirsIncludeSpamByDefault(t *testing.T) {
 	cfg := Config{Enabled: true}
 
@@ -153,5 +182,325 @@ func TestIgnoredReleaseSubdirNeverTriggersRaceEnd(t *testing.T) {
 
 	if CanTriggerRaceEndForDir(cfg, "/MP3/0503/Artist-Album-2026-GRP/Spam", sfvEntries, "01-track.mp3") {
 		t.Fatalf("expected ignored subdir to never trigger race end")
+	}
+}
+
+func TestValidateUploadDeniesSFVWhenMatchingSubdirExists(t *testing.T) {
+	cfg := Config{
+		Enabled: true,
+		Sections: SectionsConfig{
+			SFV: []string{"/X264-HD-1080P/*"},
+		},
+		SFV: SFVConfig{
+			DenySubdir:        true,
+			DenySubdirInclude: ".*",
+			DenySubdirExclude: "(?i)^sample$",
+		},
+	}
+
+	err := ValidateUpload(cfg, nil, "/X264-HD-1080P/Some.Release-GRP", "release.sfv", nil, []string{"Proof"}, nil)
+	if err == nil {
+		t.Fatalf("expected sfv upload to be denied when matching subdir exists")
+	}
+
+	err = ValidateUpload(cfg, nil, "/X264-HD-1080P/Some.Release-GRP", "release.sfv", nil, []string{"Sample"}, nil)
+	if err != nil {
+		t.Fatalf("expected excluded subdir not to block sfv upload, got %v", err)
+	}
+}
+
+func TestValidateUploadNoExtHonorsAllowNoExt(t *testing.T) {
+	cfg := Config{
+		Enabled: true,
+		Sections: SectionsConfig{
+			SFV: []string{"/0DAY/*/*"},
+		},
+		SFV: SFVConfig{
+			AllowNoExt: boolPtr(false),
+		},
+	}
+
+	if err := ValidateUpload(cfg, nil, "/0DAY/0505/Some.Release-GRP", "README", nil, nil, nil); err == nil {
+		t.Fatalf("expected extensionless upload to be denied by default")
+	}
+
+	cfg.SFV.AllowNoExt = boolPtr(true)
+	if err := ValidateUpload(cfg, nil, "/0DAY/0505/Some.Release-GRP", "README", nil, nil, nil); err != nil {
+		t.Fatalf("expected extensionless upload to be allowed when configured, got %v", err)
+	}
+}
+
+func TestValidateUploadRestrictFilesHonorsSetting(t *testing.T) {
+	cfg := Config{
+		Enabled: true,
+		SFV: SFVConfig{
+			ForceFirst:    true,
+			RestrictFiles: boolPtr(false),
+			PathCheck:     []string{"*"},
+			Users:         []string{"*"},
+		},
+	}
+	sfvEntries := map[string]uint32{
+		"release.sfv": 1,
+		"good.rar":    2,
+	}
+	if err := ValidateUpload(cfg, nil, "/X265/Some.Release-GRP", "bad.rar", []string{"release.sfv"}, nil, sfvEntries); err != nil {
+		t.Fatalf("expected unlisted payload to be allowed when restrict_files is disabled, got %v", err)
+	}
+	cfg.SFV.RestrictFiles = boolPtr(true)
+	if err := ValidateUpload(cfg, nil, "/X265/Some.Release-GRP", "bad.rar", []string{"release.sfv"}, nil, sfvEntries); err == nil {
+		t.Fatalf("expected unlisted payload to be denied when restrict_files is enabled")
+	}
+}
+
+func TestValidateUploadSfvFirstPathIgnoreSkipsEnforcement(t *testing.T) {
+	cfg := Config{
+		Enabled: true,
+		Sections: SectionsConfig{
+			SFV: []string{"/X264-HD-1080P/*", "/X264-HD-1080P/*/*"},
+		},
+		SFV: SFVConfig{
+			ForceFirst: true,
+			PathCheck:  []string{"*"},
+			PathIgnore: []string{"*/Subs", "*/Cover", "*/Covers"},
+			Users:      []string{"*"},
+		},
+	}
+
+	if err := ValidateUpload(cfg, &user.User{Name: "u"}, "/X264-HD-1080P/Some.Release-GRP/Subs", "subs.rar", nil, nil, nil); err != nil {
+		t.Fatalf("expected sfv-first ignore path to skip enforcement, got %v", err)
+	}
+}
+
+func TestValidateUploadSfvFirstUsersCanExcludeGroup(t *testing.T) {
+	cfg := Config{
+		Enabled: true,
+		Sections: SectionsConfig{
+			SFV: []string{"/0DAY/*/*"},
+		},
+		SFV: SFVConfig{
+			ForceFirst: true,
+			PathCheck:  []string{"*"},
+			Users:      []string{"!=SiteOP", "*"},
+		},
+	}
+
+	siteop := &user.User{Name: "admin", PrimaryGroup: "SiteOP", Groups: map[string]int{"SiteOP": 0}}
+	if err := ValidateUpload(cfg, siteop, "/0DAY/0506/Some.Release-GRP", "payload.rar", nil, nil, nil); err != nil {
+		t.Fatalf("expected excluded group to bypass sfv-first, got %v", err)
+	}
+
+	normal := &user.User{Name: "normal", PrimaryGroup: "Users", Groups: map[string]int{"Users": 0}}
+	if err := ValidateUpload(cfg, normal, "/0DAY/0506/Some.Release-GRP", "payload.rar", nil, nil, nil); err == nil {
+		t.Fatalf("expected normal user to still be blocked by sfv-first")
+	}
+}
+
+func TestValidateUploadAllowsConfiguredExtraFileOutsideSFV(t *testing.T) {
+	cfg := Config{
+		Enabled: true,
+		Sections: SectionsConfig{
+			SFV: []string{"/X264-HD-1080P/*"},
+		},
+		SFV: SFVConfig{
+			ForceFirst:    true,
+			RestrictFiles: boolPtr(true),
+			PathCheck:     []string{"*"},
+			Users:         []string{"*"},
+		},
+		AllowedFiles: AllowedFilesConfig{
+			AllowedTypes: []string{"mp4"},
+		},
+	}
+
+	if err := ValidateUpload(cfg, nil, "/X264-HD-1080P/Some.Release-GRP", "sample.mp4", nil, nil, nil); err != nil {
+		t.Fatalf("expected configured extra file to bypass sfv-first before sfv, got %v", err)
+	}
+	if err := ValidateUpload(cfg, nil, "/X264-HD-1080P/Some.Release-GRP", "sample.mp4", []string{"release.sfv"}, nil, map[string]uint32{"movie.r00": 1}); err != nil {
+		t.Fatalf("expected configured extra file to bypass sfv restrict-files after sfv, got %v", err)
+	}
+}
+
+func TestAllowedOutsideSFVDefaultsMatchDrFTPDStyleExtras(t *testing.T) {
+	cfg := Config{}
+	cfg.ApplyDefaults()
+
+	for _, name := range []string{"info.nfo", "sample.mp4", "preview.avi", "proof.jpg", "notes.txt", "readme"} {
+		got := AllowedOutsideSFVForDir(cfg, "/X264-HD-1080P/Release-GRP", name)
+		if name == "readme" {
+			if !got {
+				t.Fatalf("expected extensionless file to be allowed by default")
+			}
+			continue
+		}
+		if !got {
+			t.Fatalf("expected %q to be allowed outside sfv by default", name)
+		}
+	}
+
+	if AllowedOutsideSFVForDir(cfg, "/X264-HD-1080P/Release-GRP", "payload.r00") {
+		t.Fatalf("did not expect multipart payload to be allowed outside sfv")
+	}
+}
+
+func TestValidateUploadBacksOffWhenSfvFileExistsButIsUnreadable(t *testing.T) {
+	cfg := Config{
+		Enabled: true,
+		Sections: SectionsConfig{
+			SFV: []string{"/X264-HD-1080P/*"},
+		},
+		SFV: SFVConfig{
+			ForceFirst:    true,
+			DenyDoubleSFV: true,
+			RestrictFiles: boolPtr(true),
+			PathCheck:     []string{"*"},
+			Users:         []string{"*"},
+		},
+	}
+
+	if err := ValidateUpload(cfg, nil, "/X264-HD-1080P/Some.Release-GRP", "payload.r00", []string{"release.sfv"}, nil, nil); err != nil {
+		t.Fatalf("expected payload to be allowed when sfv file exists but is not readable, got %v", err)
+	}
+	if err := ValidateUpload(cfg, nil, "/X264-HD-1080P/Some.Release-GRP", "other.sfv", []string{"release.sfv"}, nil, nil); err != nil {
+		t.Fatalf("expected second sfv not to be blocked when existing sfv is unreadable, got %v", err)
+	}
+}
+
+func TestValidateUploadReadableSfvStillEnforcesRestrictAndDoubleSfv(t *testing.T) {
+	cfg := Config{
+		Enabled: true,
+		Sections: SectionsConfig{
+			SFV: []string{"/X264-HD-1080P/*"},
+		},
+		SFV: SFVConfig{
+			ForceFirst:    true,
+			DenyDoubleSFV: true,
+			RestrictFiles: boolPtr(true),
+			PathCheck:     []string{"*"},
+			Users:         []string{"*"},
+		},
+	}
+
+	sfvEntries := map[string]uint32{"good.r00": 1}
+	if err := ValidateUpload(cfg, nil, "/X264-HD-1080P/Some.Release-GRP", "bad.r00", []string{"release.sfv"}, nil, sfvEntries); err == nil {
+		t.Fatalf("expected readable sfv to enforce restrict_files")
+	}
+	if err := ValidateUpload(cfg, nil, "/X264-HD-1080P/Some.Release-GRP", "other.sfv", []string{"release.sfv"}, nil, sfvEntries); err == nil {
+		t.Fatalf("expected readable sfv to block a second sfv")
+	}
+}
+
+func TestApplyDefaultsEnableDrFTPDStyleListAndCwdToggles(t *testing.T) {
+	cfg := Config{}
+	cfg.ApplyDefaults()
+
+	if cfg.List.StatusBarEnabled == nil || !*cfg.List.StatusBarEnabled {
+		t.Fatalf("expected statusbar_enabled default to true")
+	}
+	if cfg.List.StatusBarDirectory == nil || !*cfg.List.StatusBarDirectory {
+		t.Fatalf("expected statusbar_directory default to true")
+	}
+	if cfg.List.MissingFiles == nil || !*cfg.List.MissingFiles {
+		t.Fatalf("expected missing_files_enabled default to true")
+	}
+	if cfg.Zip.CWDDIZInfo == nil || !*cfg.Zip.CWDDIZInfo {
+		t.Fatalf("expected cwd_diz_info default to true")
+	}
+	if cfg.Race.CWDRaceStats == nil || !*cfg.Race.CWDRaceStats {
+		t.Fatalf("expected cwd_race_stats default to true")
+	}
+	if cfg.Race.STORRaceStats == nil || !*cfg.Race.STORRaceStats {
+		t.Fatalf("expected stor_race_stats default to true")
+	}
+	if cfg.Race.CWDZipRaceStats == nil || !*cfg.Race.CWDZipRaceStats {
+		t.Fatalf("expected cwd_zip_race_stats default to true")
+	}
+	if cfg.Race.STORZipRaceStats == nil || !*cfg.Race.STORZipRaceStats {
+		t.Fatalf("expected stor_zip_race_stats default to true")
+	}
+	if cfg.Audio.CWDMP3Info == nil || !*cfg.Audio.CWDMP3Info {
+		t.Fatalf("expected cwd_mp3_info default to true")
+	}
+	if cfg.Audio.STORMP3Info == nil || !*cfg.Audio.STORMP3Info {
+		t.Fatalf("expected stor_mp3_info default to true")
+	}
+	if cfg.Audio.CWDFLACInfo == nil || !*cfg.Audio.CWDFLACInfo {
+		t.Fatalf("expected cwd_flac_info default to true")
+	}
+	if cfg.Audio.STORFLACInfo == nil || !*cfg.Audio.STORFLACInfo {
+		t.Fatalf("expected stor_flac_info default to true")
+	}
+}
+
+func TestShowStatusBarAndMissingFilePoliciesRespectOverrides(t *testing.T) {
+	cfg := Config{
+		Enabled: true,
+		Sections: SectionsConfig{
+			SFV: []string{"/X265/*"},
+		},
+		List: ListConfig{
+			StatusBarEnabled:   boolPtr(false),
+			StatusBarDirectory: boolPtr(false),
+			MissingFiles:       boolPtr(false),
+		},
+	}
+
+	if ShowStatusBarForDir(cfg, "/X265/Release-GRP") {
+		t.Fatalf("expected status bar to be disabled")
+	}
+	if StatusBarDirectoryForDir(cfg, "/X265/Release-GRP") {
+		t.Fatalf("expected status bar not to render as directory when disabled")
+	}
+	if ShowMissingFilesForDir(cfg, "/X265/Release-GRP") {
+		t.Fatalf("expected missing files to be disabled")
+	}
+
+	cfg.List.StatusBarEnabled = boolPtr(true)
+	cfg.List.StatusBarDirectory = boolPtr(false)
+	cfg.List.MissingFiles = boolPtr(true)
+
+	if !ShowStatusBarForDir(cfg, "/X265/Release-GRP") {
+		t.Fatalf("expected status bar to be enabled")
+	}
+	if StatusBarDirectoryForDir(cfg, "/X265/Release-GRP") {
+		t.Fatalf("expected status bar to render as a file when configured false")
+	}
+	if !ShowMissingFilesForDir(cfg, "/X265/Release-GRP") {
+		t.Fatalf("expected missing files to be enabled")
+	}
+}
+
+func TestShowZipDIZAndAudioInfoPoliciesRespectOverrides(t *testing.T) {
+	cfg := Config{
+		Enabled: true,
+		Sections: SectionsConfig{
+			Zip: []string{"/0DAY/*/*"},
+		},
+		Zip: ZipConfig{
+			CWDDIZInfo: boolPtr(false),
+		},
+		Audio: AudioConfig{
+			Enabled:      true,
+			CWDMP3Info:   boolPtr(false),
+			STORMP3Info:  boolPtr(true),
+			CWDFLACInfo:  boolPtr(true),
+			STORFLACInfo: boolPtr(false),
+		},
+	}
+
+	if ShowZipDIZOnCWDForDir(cfg, "/0DAY/0506/Zip.Release-GRP") {
+		t.Fatalf("expected zip cwd diz info to be disabled")
+	}
+	if ShowAudioInfoOnCWDForDir(cfg, "/MP3/0506/Artist-Album-GRP", map[string]string{"filename": "01-track.mp3"}) {
+		t.Fatalf("expected mp3 cwd info to be disabled")
+	}
+	if !ShowAudioInfoOnSTORForDir(cfg, "/MP3/0506/Artist-Album-GRP", map[string]string{"filename": "01-track.mp3"}) {
+		t.Fatalf("expected mp3 stor info to be enabled")
+	}
+	if !ShowAudioInfoOnCWDForDir(cfg, "/FLAC/0506/Artist-Album-GRP", map[string]string{"filename": "01-track.flac"}) {
+		t.Fatalf("expected flac cwd info to be enabled")
+	}
+	if ShowAudioInfoOnSTORForDir(cfg, "/FLAC/0506/Artist-Album-GRP", map[string]string{"filename": "01-track.flac"}) {
+		t.Fatalf("expected flac stor info to be disabled")
 	}
 }

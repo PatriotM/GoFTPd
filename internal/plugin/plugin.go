@@ -174,12 +174,12 @@ type FileEntry struct {
 // This is a minimal surface — we can add methods as plugins require them.
 type MasterBridge interface {
 	PluginListDir(path string) []FileEntry
-	MakeDir(path, owner, group string)
+	MakeDir(path, owner, group string) error
 	Symlink(linkPath, targetPath string) error
 	Chmod(path string, mode uint32) error
 	CreateSparseFile(path string, size int64, owner, group string) error
 	DeleteFile(path string) error
-	RenameFile(from, toDir, toName string)
+	RenameFile(from, toDir, toName string) error
 	RelocatePath(from, toDir, toName string) error
 	RelocatePathToSlave(from, toDir, toName, targetSlave string) error
 	WriteFile(path string, content []byte) error
