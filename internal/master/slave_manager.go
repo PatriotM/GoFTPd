@@ -56,15 +56,17 @@ type SlaveManager struct {
 
 	remergeMode atomic.Value
 
-	listener       net.Listener
-	running        atomic.Bool
-	diskStatusHook func(name string, status protocol.DiskStatus, online, available bool, sections []string)
-	securityHook   func(ip, remoteAddr, action, reason string, strikes, limit int, bannedUntil time.Time)
-	authMu         sync.Mutex
-	authState      map[string]*slaveAuthState
-	remergeCRCJobs sync.Map
-	remergeSFVJobs sync.Map
-	remergeCRCSem  chan struct{}
+	listener        net.Listener
+	running         atomic.Bool
+	diskStatusHook  func(name string, status protocol.DiskStatus, online, available bool, sections []string)
+	securityHook    func(ip, remoteAddr, action, reason string, strikes, limit int, bannedUntil time.Time)
+	authMu          sync.Mutex
+	authState       map[string]*slaveAuthState
+	remergeCRCJobs  sync.Map
+	remergeSFVJobs  sync.Map
+	remergeCRCSem   chan struct{}
+	remergePauseAt  atomic.Int64
+	remergeResumeAt atomic.Int64
 
 	enableRemergeChecksums atomic.Bool
 }
@@ -112,6 +114,8 @@ func NewSlaveManager(host string, port int, tlsEnabled bool, tlsCert, tlsKey str
 		remergeCRCSem:    make(chan struct{}, 16),
 	}
 	sm.remergeMode.Store("off")
+	sm.remergePauseAt.Store(250)
+	sm.remergeResumeAt.Store(50)
 	return sm
 }
 
@@ -245,6 +249,20 @@ func (sm *SlaveManager) SetEnableRemergeChecksums(enabled bool) {
 	sm.enableRemergeChecksums.Store(enabled)
 }
 
+func (sm *SlaveManager) SetRemergeFlowControl(pauseThreshold, resumeThreshold int) {
+	if pauseThreshold <= 0 {
+		pauseThreshold = 250
+	}
+	if resumeThreshold < 0 {
+		resumeThreshold = 0
+	}
+	if resumeThreshold >= pauseThreshold {
+		resumeThreshold = pauseThreshold / 2
+	}
+	sm.remergePauseAt.Store(int64(pauseThreshold))
+	sm.remergeResumeAt.Store(int64(resumeThreshold))
+}
+
 func (sm *SlaveManager) SetRemergeMode(mode string) {
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	switch mode {
@@ -253,6 +271,18 @@ func (sm *SlaveManager) SetRemergeMode(mode string) {
 	default:
 		sm.remergeMode.Store("off")
 	}
+}
+
+func (sm *SlaveManager) GetRemergeFlowControl() (pauseThreshold, resumeThreshold int) {
+	pauseThreshold = int(sm.remergePauseAt.Load())
+	resumeThreshold = int(sm.remergeResumeAt.Load())
+	if pauseThreshold <= 0 {
+		pauseThreshold = 250
+	}
+	if resumeThreshold < 0 || resumeThreshold >= pauseThreshold {
+		resumeThreshold = pauseThreshold / 2
+	}
+	return pauseThreshold, resumeThreshold
 }
 
 func (sm *SlaveManager) GetRemergeMode() string {
@@ -773,16 +803,20 @@ func (sm *SlaveManager) initializeSlaveAfterConnect(rs *RemoteSlave) {
 	if err != nil {
 		log.Printf("[SlaveManager] Remerge did not complete for %s: %v (slave stays online)", rs.name, err)
 	} else {
-		remergeComplete = true
-		log.Printf("[SlaveManager] Remerge complete for slave %s", rs.name)
+		if err := rs.WaitForRemergeDrain(60 * time.Minute); err != nil {
+			log.Printf("[SlaveManager] Remerge queue did not drain for %s: %v", rs.name, err)
+		} else {
+			remergeComplete = true
+			log.Printf("[SlaveManager] Remerge complete for slave %s", rs.name)
 
-		// Purge files that were physically deleted from the slave.
-		sm.vfs.PurgeUnseen(rs.name)
-		log.Printf("[SlaveManager] Ghost files purged for %s", rs.name)
+			// Purge files that were physically deleted from the slave.
+			sm.vfs.PurgeUnseen(rs.name)
+			log.Printf("[SlaveManager] Ghost files purged for %s", rs.name)
 
-		// Persist the VFS after remerge and purge complete.
-		if err := sm.vfs.SaveToDisk(vfsFilePath); err != nil {
-			log.Printf("[SlaveManager] Error saving VFS after remerge: %v", err)
+			// Persist the VFS after remerge and purge complete.
+			if err := sm.vfs.SaveToDisk(vfsFilePath); err != nil {
+				log.Printf("[SlaveManager] Error saving VFS after remerge: %v", err)
+			}
 		}
 	}
 	rs.remerging.Store(false)

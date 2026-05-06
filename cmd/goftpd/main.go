@@ -175,6 +175,10 @@ func main() {
 		sm.SetExcludePaths(cfg.ExcludeVFSPaths)
 		sm.SetRemergeMode(stringFromCfg(cfg.Master, "remerge_mode", "off"))
 		sm.SetEnableRemergeChecksums(boolFromCfg(cfg.Master, "remerge_checksums", false))
+		sm.SetRemergeFlowControl(
+			intFromCfg(cfg.Master, "remerge_pause_threshold", 250),
+			intFromCfg(cfg.Master, "remerge_resume_threshold", 50),
+		)
 		if err := sm.Start(); err != nil {
 			log.Fatalf("SlaveManager failed: %v", err)
 		}
@@ -215,6 +219,10 @@ func main() {
 			sm.SetExcludePaths(c.ExcludeVFSPaths)
 			sm.SetRemergeMode(stringFromCfg(c.Master, "remerge_mode", "off"))
 			sm.SetEnableRemergeChecksums(boolFromCfg(c.Master, "remerge_checksums", false))
+			sm.SetRemergeFlowControl(
+				intFromCfg(c.Master, "remerge_pause_threshold", 250),
+				intFromCfg(c.Master, "remerge_resume_threshold", 50),
+			)
 			if err := sm.ConfigureAuthAllowlist(stringSliceFromCfg(c.Master, "slave_allowlist")); err != nil {
 				log.Printf("[REHASH] invalid master.slave_allowlist: %v", err)
 			}

@@ -57,6 +57,7 @@ type Session struct {
 	MasterManager interface{}    // *master.Manager for master/slave operations
 	IsLogged      bool           // Login state (synchronized with commands.go)
 	CurrentDir    string         // Virtual path
+	TransferType  string         // TYPE state ("A" or "I")
 	RenameFrom    string         // Source for RNTO
 	SSCN          bool           // Secure FXP mode
 	DataListen    net.Listener   // For PASV mode
@@ -84,6 +85,13 @@ type Session struct {
 	TransferStartedAt time.Time
 	TransferSlaveName string
 	TransferSlaveIdx  int32
+}
+
+func (s *Session) currentTransferTypeByte() byte {
+	if s == nil || s.TransferType == "" {
+		return 'A'
+	}
+	return s.TransferType[0]
 }
 
 // readLinePure reads exactly one line byte-by-byte.
@@ -119,6 +127,7 @@ func HandleSession(conn net.Conn, tlsConfig *tls.Config, cfg *Config, aclEngine 
 		DupeChecker:   dupeChecker,
 		MasterManager: cfg.MasterManager,
 		CurrentDir:    "/",
+		TransferType:  "A",
 		GroupMap:      LoadGroupFile("etc/group"),
 		StartedAt:     time.Now(),
 		LastCommandAt: time.Now(),

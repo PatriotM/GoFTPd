@@ -28,13 +28,17 @@ type RemoteSlave struct {
 	pendingCmds    sync.Map // index (string) -> chan interface{}
 	earlyResponses sync.Map // index (string) -> interface{}
 	commandNotify  chan struct{}
+	remergeQueue   chan *protocol.AsyncResponseRemerge
+	remergeDrained chan struct{}
 
 	// State
-	online     atomic.Bool
-	available  atomic.Bool
-	remerging  atomic.Bool
-	diskStatus protocol.DiskStatus
-	diskMu     sync.RWMutex
+	online            atomic.Bool
+	available         atomic.Bool
+	remerging         atomic.Bool
+	remergeQueueDepth atomic.Int64
+	remergePaused     atomic.Bool
+	diskStatus        protocol.DiskStatus
+	diskMu            sync.RWMutex
 
 	// Transfers
 	transfers          sync.Map     // TransferIndex (int32) -> *RemoteTransfer
@@ -67,6 +71,8 @@ func NewRemoteSlave(name string, conn net.Conn, stream *protocol.ObjectStream, h
 		onOffline:        onOffline,
 		indexPool:        make(chan string, 256),
 		commandNotify:    make(chan struct{}, 256),
+		remergeQueue:     make(chan *protocol.AsyncResponseRemerge, 512),
+		remergeDrained:   make(chan struct{}, 1),
 		properties:       make(map[string]string),
 		heartbeatTimeout: heartbeatTimeout,
 	}
@@ -228,6 +234,8 @@ func (rs *RemoteSlave) Run(masterSlaveManager *SlaveManager) {
 		rs.SetOffline("connection closed")
 	}()
 
+	go rs.runRemergeQueue(masterSlaveManager)
+
 	var pingIndex string
 
 	for rs.IsOnline() {
@@ -279,8 +287,7 @@ func (rs *RemoteSlave) Run(masterSlaveManager *SlaveManager) {
 			masterSlaveManager.publishDiskStatus(rs)
 
 		case *protocol.AsyncResponseRemerge:
-			// Process remerge data - add files to master's VFS
-			masterSlaveManager.ProcessRemerge(rs, resp)
+			rs.enqueueRemerge(masterSlaveManager, resp)
 
 		case *protocol.AsyncResponseTransferStatus:
 			// Update transfer status
@@ -345,6 +352,84 @@ func (rs *RemoteSlave) Run(masterSlaveManager *SlaveManager) {
 	}
 }
 
+func (rs *RemoteSlave) runRemergeQueue(masterSlaveManager *SlaveManager) {
+	for resp := range rs.remergeQueue {
+		if resp == nil {
+			continue
+		}
+		masterSlaveManager.ProcessRemerge(rs, resp)
+		depth := rs.remergeQueueDepth.Add(-1)
+		if depth < 0 {
+			rs.remergeQueueDepth.Store(0)
+			depth = 0
+		}
+		rs.applyRemergeFlowControl(masterSlaveManager, depth)
+		if depth == 0 {
+			select {
+			case rs.remergeDrained <- struct{}{}:
+			default:
+			}
+		}
+	}
+}
+
+func (rs *RemoteSlave) enqueueRemerge(masterSlaveManager *SlaveManager, resp *protocol.AsyncResponseRemerge) {
+	depth := rs.remergeQueueDepth.Add(1)
+	rs.remergeQueue <- resp
+	rs.applyRemergeFlowControl(masterSlaveManager, depth)
+}
+
+func (rs *RemoteSlave) applyRemergeFlowControl(masterSlaveManager *SlaveManager, depth int64) {
+	if masterSlaveManager == nil || !rs.IsOnline() || !rs.IsRemerging() {
+		return
+	}
+	pauseThreshold, resumeThreshold := masterSlaveManager.GetRemergeFlowControl()
+	if rs.remergePaused.Load() {
+		if depth <= int64(resumeThreshold) {
+			if err := IssueRemergeResume(rs); err != nil {
+				log.Printf("[Master] Failed to resume slave %s remerge: %v", rs.name, err)
+				return
+			}
+			rs.remergePaused.Store(false)
+		}
+		return
+	}
+	if depth > int64(pauseThreshold) {
+		if err := IssueRemergePause(rs); err != nil {
+			log.Printf("[Master] Failed to pause slave %s remerge: %v", rs.name, err)
+			return
+		}
+		rs.remergePaused.Store(true)
+	}
+}
+
+func (rs *RemoteSlave) WaitForRemergeDrain(timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = rs.heartbeatTimeout
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		if rs.remergeQueueDepth.Load() == 0 {
+			return nil
+		}
+		if !rs.IsOnline() {
+			return fmt.Errorf("slave %s went offline while draining remerge queue", rs.name)
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return fmt.Errorf("timeout waiting for remerge queue to drain on slave %s", rs.name)
+		}
+		wait := remaining
+		if wait > 250*time.Millisecond {
+			wait = 250 * time.Millisecond
+		}
+		select {
+		case <-rs.remergeDrained:
+		case <-time.After(wait):
+		}
+	}
+}
+
 // routeResponse delivers a response to the goroutine waiting for it via FetchResponse.
 func (rs *RemoteSlave) routeResponse(index string, obj interface{}) {
 	if val, ok := rs.pendingCmds.Load(index); ok {
@@ -367,6 +452,8 @@ func (rs *RemoteSlave) SetOffline(reason string) {
 	log.Printf("[Master] Slave %s going offline: %s", rs.name, reason)
 	rs.available.Store(false)
 	rs.remerging.Store(false)
+	rs.remergePaused.Store(false)
+	rs.remergeQueueDepth.Store(0)
 	if rs.conn != nil {
 		rs.conn.Close()
 	}
@@ -381,6 +468,10 @@ func (rs *RemoteSlave) SetOffline(reason string) {
 		}
 		return true
 	})
+	select {
+	case rs.remergeDrained <- struct{}{}:
+	default:
+	}
 }
 
 func (rs *RemoteSlave) SetAvailable(avail bool) {

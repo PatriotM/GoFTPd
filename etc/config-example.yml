@@ -57,6 +57,10 @@ master:
                                 # files missing a stored checksum in the VFS.
                                 # Leave this off for imported/legacy trees unless you
                                 # explicitly want that extra verification pass.
+  remerge_pause_threshold: 250  # Pause slave-side remerge streaming when the master's
+                                # pending per-slave remerge queue grows past this size.
+  remerge_resume_threshold: 50  # Resume slave-side remerge streaming when the master's
+                                # pending per-slave remerge queue falls back to this size.
 
 
 # =============================================================================

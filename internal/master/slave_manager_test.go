@@ -75,6 +75,19 @@ func TestShouldRefreshRemergeChecksumDisabledByDefault(t *testing.T) {
 	}
 }
 
+func TestSetRemergeFlowControlNormalizesThresholds(t *testing.T) {
+	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
+	sm.SetRemergeFlowControl(0, 999)
+
+	pauseThreshold, resumeThreshold := sm.GetRemergeFlowControl()
+	if pauseThreshold != 250 {
+		t.Fatalf("expected default pause threshold 250, got %d", pauseThreshold)
+	}
+	if resumeThreshold != 125 {
+		t.Fatalf("expected normalized resume threshold 125, got %d", resumeThreshold)
+	}
+}
+
 func TestSlaveAuthGuardBansAfterConfiguredFailures(t *testing.T) {
 	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
 	sm.ConfigureAuthGuard(2, time.Minute, 10*time.Minute)

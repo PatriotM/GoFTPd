@@ -3,6 +3,9 @@ package core
 import (
 	"crypto/tls"
 	"fmt"
+	"hash"
+	"hash/crc32"
+	"io"
 	"io/fs"
 	"log"
 	"net"
@@ -58,16 +61,18 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 	switch cmd {
 	case "FEAT":
 		fmt.Fprintf(s.Conn, "211- Extensions supported:\r\n")
-		fmt.Fprintf(s.Conn, " AUTH TLS\r\n")
-		fmt.Fprintf(s.Conn, " PBSZ\r\n")
-		fmt.Fprintf(s.Conn, " PROT\r\n")
+		if s.Config != nil && s.Config.TLSEnabled {
+			fmt.Fprintf(s.Conn, " AUTH TLS\r\n")
+			fmt.Fprintf(s.Conn, " PBSZ\r\n")
+			fmt.Fprintf(s.Conn, " PROT\r\n")
+			fmt.Fprintf(s.Conn, " SSCN\r\n")
+			fmt.Fprintf(s.Conn, " CPSV\r\n")
+		}
 		fmt.Fprintf(s.Conn, " SIZE\r\n")
 		fmt.Fprintf(s.Conn, " MDTM\r\n")
 		fmt.Fprintf(s.Conn, " MLSD\r\n")
 		fmt.Fprintf(s.Conn, " MLST Type*;Size*;Modify*;Perm*;\r\n")
 		fmt.Fprintf(s.Conn, " REST STREAM\r\n")
-		fmt.Fprintf(s.Conn, " SSCN\r\n")
-		fmt.Fprintf(s.Conn, " CPSV\r\n")
 		fmt.Fprintf(s.Conn, " PRET\r\n")
 		fmt.Fprintf(s.Conn, " SITE\r\n")
 		fmt.Fprintf(s.Conn, " UTF8\r\n")
@@ -81,33 +86,86 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		}
 
 	case "PBSZ":
-		fmt.Fprintf(s.Conn, "200 PBSZ 0 successful\r\n")
-
-	case "PROT":
+		if s.Config == nil || !s.Config.TLSEnabled {
+			fmt.Fprintf(s.Conn, "500 TLS not configured\r\n")
+			return false
+		}
+		if !s.IsTLS {
+			fmt.Fprintf(s.Conn, "503 Security exchange needs to be completed first\r\n")
+			return false
+		}
 		if len(args) == 0 {
 			fmt.Fprintf(s.Conn, "501 Syntax error\r\n")
 			return false
 		}
-		if strings.ToUpper(args[0]) == "P" {
+		if strings.TrimSpace(args[0]) != "0" {
+			fmt.Fprintf(s.Conn, "200 PBSZ=0\r\n")
+			return false
+		}
+		fmt.Fprintf(s.Conn, "200 PBSZ 0 successful\r\n")
+
+	case "PROT":
+		if s.Config == nil || !s.Config.TLSEnabled {
+			fmt.Fprintf(s.Conn, "500 TLS not configured\r\n")
+			return false
+		}
+		if !s.IsTLS {
+			fmt.Fprintf(s.Conn, "500 You are not on a secure channel\r\n")
+			return false
+		}
+		if len(args) == 0 {
+			fmt.Fprintf(s.Conn, "501 Syntax error\r\n")
+			return false
+		}
+		if len(strings.TrimSpace(args[0])) != 1 {
+			fmt.Fprintf(s.Conn, "501 Syntax error\r\n")
+			return false
+		}
+		switch strings.ToUpper(args[0]) {
+		case "P":
 			s.DataTLS = true
 			fmt.Fprintf(s.Conn, "200 Protection set to Private\r\n")
-		} else {
+		case "C":
 			s.DataTLS = false
 			fmt.Fprintf(s.Conn, "200 Protection set to Clear\r\n")
+		default:
+			fmt.Fprintf(s.Conn, "501 Syntax error\r\n")
+			return false
 		}
 
 	case "SSCN":
+		if !s.IsTLS {
+			fmt.Fprintf(s.Conn, "500 You are not on a secure channel\r\n")
+			return false
+		}
+		if !s.DataTLS {
+			fmt.Fprintf(s.Conn, "500 SSCN only works for encrypted transfers\r\n")
+			return false
+		}
 		if len(args) > 0 && strings.ToUpper(args[0]) == "ON" {
 			s.SSCN = true
-			fmt.Fprintf(s.Conn, "200 SSCN enabled. Ready for secure FXP.\r\n")
+			fmt.Fprintf(s.Conn, "220 SSCN:CLIENT METHOD\r\n")
 		} else {
 			s.SSCN = false
-			fmt.Fprintf(s.Conn, "200 SSCN disabled.\r\n")
+			fmt.Fprintf(s.Conn, "220 SSCN:SERVER METHOD\r\n")
 		}
 
 	case "CPSV":
 		if s.Config.Debug {
 			log.Printf("[CPSV] Starting passive mode setup (passthrough=%v)", s.Config.Passthrough)
+		}
+		s.clearActiveTransferSetup()
+		if !s.IsTLS {
+			fmt.Fprintf(s.Conn, "500 You are not on a secure channel\r\n")
+			return false
+		}
+		if !s.DataTLS {
+			fmt.Fprintf(s.Conn, "500 SSCN only works for encrypted transfers\r\n")
+			return false
+		}
+		if !hasPretForPassive(s) {
+			fmt.Fprintf(s.Conn, "500 You need to use a client supporting PRET (PRE Transfer) to use PASV\r\n")
+			return false
 		}
 		s.SSCN = true
 
@@ -127,7 +185,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				}
 				if err != nil {
 					log.Printf("[CPSV] Passthrough slave listen failed: %v", err)
-					fmt.Fprintf(s.Conn, "421 No available slave for passthrough.\r\n")
+					fmt.Fprintf(s.Conn, "450 No available slave for upcoming transfer.\r\n")
 					return false
 				}
 				s.PassthruSlave = slaveName
@@ -136,7 +194,12 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					s.DataListen.Close()
 					s.DataListen = nil
 				}
-				ip := strings.ReplaceAll(slaveIP, ".", ",")
+				ip, err := ftpPassiveIPv4(slaveIP)
+				if err != nil {
+					fmt.Fprintf(s.Conn, "500 Invalid passive address for selected slave.\r\n")
+					s.clearPassiveTransferSetup()
+					return false
+				}
 				response := fmt.Sprintf("227 Entering Passive Mode (%s,%d,%d)\r\n", ip, port/256, port%256)
 				if s.Config.Debug {
 					log.Printf("[CPSV] Passthrough to slave %s: %s (port: %d)", slaveName, strings.TrimSpace(response), port)
@@ -157,12 +220,20 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			}
 		}
 		if l == nil {
-			fmt.Fprintf(s.Conn, "421 No available passive ports.\r\n")
+			fmt.Fprintf(s.Conn, "425 Can't open passive data connection.\r\n")
 			return false
 		}
 		s.DataListen = l
 		s.PassthruSlave = nil
-		ip := strings.ReplaceAll(s.Config.PublicIP, ".", ",")
+		ip, err := ftpPassiveIPv4(s.Config.PublicIP)
+		if err != nil {
+			fmt.Fprintf(s.Conn, "500 Invalid passive address configuration.\r\n")
+			if s.DataListen != nil {
+				s.DataListen.Close()
+				s.DataListen = nil
+			}
+			return false
+		}
 		fmt.Fprintf(s.Conn, "227 Entering Passive Mode (%s,%d,%d)\r\n", ip, port/256, port%256)
 		return false
 
@@ -318,7 +389,39 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		fmt.Fprintf(s.Conn, "215 UNIX Type: L8\r\n")
 
 	case "TYPE":
-		fmt.Fprintf(s.Conn, "200 Type set to I.\r\n")
+		if len(args) == 0 {
+			fmt.Fprintf(s.Conn, "501 Syntax error\r\n")
+			return false
+		}
+		transferType, ok := normalizeTransferType(args[0])
+		if !ok {
+			fmt.Fprintf(s.Conn, "504 Command not implemented for that parameter.\r\n")
+			return false
+		}
+		s.TransferType = transferType
+		fmt.Fprintf(s.Conn, "200 Command OK\r\n")
+
+	case "MODE":
+		if len(args) == 0 {
+			fmt.Fprintf(s.Conn, "501 Syntax error\r\n")
+			return false
+		}
+		if _, ok := normalizeTransferMode(args[0]); !ok {
+			fmt.Fprintf(s.Conn, "504 Command not implemented for that parameter.\r\n")
+			return false
+		}
+		fmt.Fprintf(s.Conn, "200 Command OK\r\n")
+
+	case "STRU":
+		if len(args) == 0 {
+			fmt.Fprintf(s.Conn, "501 Syntax error\r\n")
+			return false
+		}
+		if _, ok := normalizeTransferStructure(args[0]); !ok {
+			fmt.Fprintf(s.Conn, "504 Command not implemented for that parameter.\r\n")
+			return false
+		}
+		fmt.Fprintf(s.Conn, "200 Command OK\r\n")
 
 	case "REST":
 		if len(args) == 0 {
@@ -644,34 +747,39 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		if s.Config.Debug && len(args) > 0 {
 			log.Printf("[PRET] Client preparing for %s", args[0])
 		}
-		if len(args) > 0 {
-			if s.Config.XdupeEnabled && strings.EqualFold(args[0], "STOR") && len(args) > 1 && s.Config.Mode == "master" && s.MasterManager != nil {
-				if bridge, ok := s.MasterManager.(MasterBridge); ok {
-					pretTarget := path.Clean(path.Join(s.CurrentDir, args[1]))
-					if path.IsAbs(strings.TrimSpace(args[1])) {
-						pretTarget = path.Clean(args[1])
+		s.clearPreparedTransferState()
+		if len(args) == 0 {
+			fmt.Fprintf(s.Conn, "501 Syntax error.\r\n")
+			return false
+		}
+		preparedCmd, preparedArg, err := validatePretRequest(s, args[0], args[1:])
+		if err != nil {
+			fmt.Fprintf(s.Conn, "504 %s\r\n", err.Error())
+			return false
+		}
+		if s.Config.XdupeEnabled && preparedCmd == "STOR" && preparedArg != "" && s.Config.Mode == "master" && s.MasterManager != nil {
+			if bridge, ok := s.MasterManager.(MasterBridge); ok {
+				pretTarget := path.Clean(path.Join(s.CurrentDir, preparedArg))
+				if path.IsAbs(strings.TrimSpace(preparedArg)) {
+					pretTarget = path.Clean(preparedArg)
+				}
+				pretTarget = bridge.ResolvePath(pretTarget)
+				if bridge.FileExists(pretTarget) {
+					for _, line := range xdupeResponseLines(s.XDupeMode, existingFileNamesForXDupe(bridge.ListDir(path.Dir(pretTarget)))) {
+						fmt.Fprintf(s.Conn, "553-%s\r\n", line)
 					}
-					pretTarget = bridge.ResolvePath(pretTarget)
-					if bridge.FileExists(pretTarget) {
-						for _, line := range xdupeResponseLines(s.XDupeMode, existingFileNamesForXDupe(bridge.ListDir(path.Dir(pretTarget)))) {
-							fmt.Fprintf(s.Conn, "553-%s\r\n", line)
-						}
-						fmt.Fprintf(s.Conn, "553 %s: file already exists (X-DUPE)\r\n", path.Base(pretTarget))
-						return false
-					}
+					fmt.Fprintf(s.Conn, "553 %s: file already exists (X-DUPE)\r\n", path.Base(pretTarget))
+					return false
 				}
 			}
-			s.PretCmd = strings.ToUpper(args[0])
-			if len(args) > 1 {
-				s.PretArg = args[1]
-			}
-			fmt.Fprintf(s.Conn, "200 OK, preparing for %s\r\n", args[0])
-		} else {
-			fmt.Fprintf(s.Conn, "200 OK\r\n")
 		}
+		s.PretCmd = preparedCmd
+		s.PretArg = preparedArg
+		fmt.Fprintf(s.Conn, "200 %s\r\n", pretSuccessMessage(preparedCmd))
 		return false
 
 	case "ABOR":
+		s.abortCurrentTransfer("Transfer aborted")
 		fmt.Fprintf(s.Conn, "226 Abort successful\r\n")
 		return false
 
@@ -682,6 +790,11 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 	case "PASV":
 		if s.Config.Debug {
 			log.Printf("[PASV] Starting passive mode setup (pret=%s, passthrough=%v)", s.PretCmd, s.Config.Passthrough)
+		}
+		s.clearActiveTransferSetup()
+		if !hasPretForPassive(s) {
+			fmt.Fprintf(s.Conn, "500 You need to use a client supporting PRET (PRE Transfer) to use PASV\r\n")
+			return false
 		}
 
 		if s.Config.Passthrough && s.Config.Mode == "master" && s.MasterManager != nil {
@@ -701,7 +814,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					}
 					if err != nil {
 						log.Printf("[PASV] Passthrough slave listen failed: %v", err)
-						fmt.Fprintf(s.Conn, "421 No available slave for passthrough.\r\n")
+						fmt.Fprintf(s.Conn, "450 No available slave for upcoming transfer.\r\n")
 						return false
 					}
 					s.PassthruSlave = slaveName
@@ -710,7 +823,12 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						s.DataListen.Close()
 						s.DataListen = nil
 					}
-					ip := strings.ReplaceAll(slaveIP, ".", ",")
+					ip, err := ftpPassiveIPv4(slaveIP)
+					if err != nil {
+						fmt.Fprintf(s.Conn, "500 Invalid passive address for selected slave.\r\n")
+						s.clearPassiveTransferSetup()
+						return false
+					}
 					response := fmt.Sprintf("227 Entering Passive Mode (%s,%d,%d)\r\n", ip, port/256, port%256)
 					if s.Config.Debug {
 						log.Printf("[PASV] Passthrough to slave %s: %s (port: %d, xferIdx: %d)", slaveName, strings.TrimSpace(response), port, xferIdx)
@@ -735,13 +853,21 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			if s.Config.Debug {
 				log.Printf("[PASV] No available ports (tried %d-%d)", s.Config.PasvMin, s.Config.PasvMax)
 			}
-			fmt.Fprintf(s.Conn, "421 No available passive ports.\r\n")
+			fmt.Fprintf(s.Conn, "425 Can't open passive data connection.\r\n")
 			return false
 		}
 		s.DataListen = l
 		s.PassthruSlave = nil
 		s.PassthruXferIdx = 0
-		ip := strings.ReplaceAll(s.Config.PublicIP, ".", ",")
+		ip, err := ftpPassiveIPv4(s.Config.PublicIP)
+		if err != nil {
+			fmt.Fprintf(s.Conn, "500 Invalid passive address configuration.\r\n")
+			if s.DataListen != nil {
+				s.DataListen.Close()
+				s.DataListen = nil
+			}
+			return false
+		}
 		response := fmt.Sprintf("227 Entering Passive Mode (%s,%d,%d)\r\n", ip, port/256, port%256)
 		if s.Config.Debug {
 			log.Printf("[PASV] Sending response: %s (port: %d)", strings.TrimSpace(response), port)
@@ -753,15 +879,29 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		if len(args) == 0 {
 			return false
 		}
-		parts := strings.Split(args[0], ",")
-		if len(parts) != 6 {
+		s.clearPassiveTransferSetup()
+		ip, port, err := parsePortTarget(args[0])
+		if err != nil {
 			fmt.Fprintf(s.Conn, "501 Syntax error\r\n")
 			return false
 		}
-		ip := strings.Join(parts[:4], ".")
-		p1, _ := strconv.Atoi(parts[4])
-		p2, _ := strconv.Atoi(parts[5])
-		s.ActiveAddr = fmt.Sprintf("%s:%d", ip, p1*256+p2)
+		controlHost, _, splitErr := net.SplitHostPort(s.Conn.RemoteAddr().String())
+		controlIP := net.ParseIP(controlHost)
+		if splitErr == nil && shouldRejectPortTarget(controlIP, ip) {
+			fmt.Fprintf(s.Conn, "501 ==YOU'RE BEHIND A NAT ROUTER==\r\n")
+			fmt.Fprintf(s.Conn, "501 Configure your FTP client to use your real IP: %s\r\n", controlHost)
+			fmt.Fprintf(s.Conn, "501 Or use a PRET-capable passive transfer mode.\r\n")
+			return false
+		}
+		s.ActiveAddr = fmt.Sprintf("%s:%d", ip.String(), port)
+		warnings := portTargetWarnings(controlIP, ip)
+		if len(warnings) == 0 {
+			fmt.Fprintf(s.Conn, "200 PORT command successful.\r\n")
+			return false
+		}
+		for _, warning := range warnings {
+			fmt.Fprintf(s.Conn, "200-%s\r\n", warning)
+		}
 		fmt.Fprintf(s.Conn, "200 PORT command successful.\r\n")
 
 	case "MLST":
@@ -831,8 +971,29 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		fmt.Fprintf(s.Conn, "250 End\r\n")
 
 	case "MLSD":
+		defer s.clearPreparedTransferState()
+		if !s.hasPreparedDataConnection() {
+			fmt.Fprintf(s.Conn, "503 Bad sequence of commands.\r\n")
+			return false
+		}
+		targetPath := s.CurrentDir
+		if s.Config.Mode == "master" && s.MasterManager != nil {
+			if bridge, ok := s.MasterManager.(MasterBridge); ok {
+				targetPath = s.resolveListTargetPath("MLSD", args, bridge)
+			}
+		} else {
+			targetPath = s.resolveListTargetPath("MLSD", args, nil)
+		}
+		if err := s.validateListDirectoryTarget(targetPath, s.masterBridgeOrNil()); err != nil {
+			if err.Error() == "504" {
+				fmt.Fprintf(s.Conn, "504 Command not implemented for that parameter.\r\n")
+			} else {
+				fmt.Fprintf(s.Conn, "550 %s: no such file or directory\r\n", targetPath)
+			}
+			return false
+		}
 		if s.Config.Debug {
-			log.Printf("[MLSD] Client requesting machine list for %s", s.CurrentDir)
+			log.Printf("[MLSD] Client requesting machine list for %s", targetPath)
 		}
 		fmt.Fprintf(s.Conn, "150 File status okay; about to open data connection.\r\n")
 
@@ -852,7 +1013,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 
 		if s.Config.Mode == "master" && s.MasterManager != nil {
 			if bridge, ok := s.MasterManager.(MasterBridge); ok {
-				entries := bridge.ListDir(s.CurrentDir)
+				entries := bridge.ListDir(targetPath)
 
 				// Race-stats virtual entry — mirrors the [HV] - ( ... COMPLETE ) - [HV]
 				// row that LIST shows. Rendered as Type=dir so it appears at the top
@@ -861,18 +1022,18 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				if siteName == "" {
 					siteName = "GoFTPd"
 				}
-				if zipscript.ShowStatusBarForDir(s.Config.Zipscript, s.CurrentDir) {
-					if statusName := dirRaceStatusName(bridge, s.Config, s.CurrentDir, siteName); strings.TrimSpace(statusName) != "" {
+				if zipscript.ShowStatusBarForDir(s.Config.Zipscript, targetPath) {
+					if statusName := dirRaceStatusName(bridge, s.Config, targetPath, siteName); strings.TrimSpace(statusName) != "" {
 						nowTs := timeutil.FTPMachine(time.Now())
 						entryType := "file"
-						if zipscript.StatusBarDirectoryForDir(s.Config.Zipscript, s.CurrentDir) {
+						if zipscript.StatusBarDirectoryForDir(s.Config.Zipscript, targetPath) {
 							entryType = "dir"
 						}
 						output.WriteString(fmt.Sprintf("Modify=%s;Perm=el;Type=%s; %s\r\n", nowTs, entryType, statusName))
 					}
 				}
 
-				for _, marker := range incompleteMarkerEntries(bridge, s.Config, activeIncompleteIndicator(s.Config), s.CurrentDir, entries) {
+				for _, marker := range incompleteMarkerEntries(bridge, s.Config, activeIncompleteIndicator(s.Config), targetPath, entries) {
 					ts := timeutil.FTPMachineUnix(marker.ModTime)
 					output.WriteString(fmt.Sprintf("Modify=%s;Perm=el;Type=%s; %s\r\n",
 						ts, mlsdSymlinkType(marker), marker.Name))
@@ -885,7 +1046,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					if isIncompleteMarkerName(activeIncompleteIndicator(s.Config), e.Name) {
 						continue
 					}
-					aclPath := path.Join(s.Config.ACLBasePath, s.CurrentDir, e.Name)
+					aclPath := path.Join(s.Config.ACLBasePath, targetPath, e.Name)
 					if !s.ACLEngine.CanPerform(s.User, "LIST", aclPath) {
 						continue
 					}
@@ -922,7 +1083,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				}
 			}
 		} else {
-			mlsdPath := filepath.Join(s.Config.StoragePath, s.CurrentDir)
+			mlsdPath := filepath.Join(s.Config.StoragePath, targetPath)
 			files, err := os.ReadDir(mlsdPath)
 			if err != nil {
 				if s.Config.Debug {
@@ -969,7 +1130,24 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		fmt.Fprintf(s.Conn, "226 Directory listing complete.\r\n")
 		return false
 
-	case "LIST":
+	case "NLST":
+		defer s.clearPreparedTransferState()
+		if !s.hasPreparedDataConnection() {
+			fmt.Fprintf(s.Conn, "503 Bad sequence of commands.\r\n")
+			return false
+		}
+		targetPath := s.CurrentDir
+		if s.Config.Mode == "master" && s.MasterManager != nil {
+			if bridge, ok := s.MasterManager.(MasterBridge); ok {
+				targetPath = s.resolveListTargetPath("NLST", args, bridge)
+			}
+		} else {
+			targetPath = s.resolveListTargetPath("NLST", args, nil)
+		}
+		if err := s.validateListTargetExists(targetPath, s.masterBridgeOrNil()); err != nil {
+			fmt.Fprintf(s.Conn, "550 %s: no such file or directory\r\n", targetPath)
+			return false
+		}
 		fmt.Fprintf(s.Conn, "150 Opening ASCII mode data connection.\r\n")
 
 		raw, err := s.getRawDataConn()
@@ -988,17 +1166,119 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 
 		if s.Config.Mode == "master" && s.MasterManager != nil {
 			if bridge, ok := s.MasterManager.(MasterBridge); ok {
-				entries := bridge.ListDir(s.CurrentDir)
+				if entry, found := bridge.GetPathEntry(targetPath); found && !entry.IsDir {
+					aclPath := path.Join(s.Config.ACLBasePath, targetPath)
+					if s.ACLEngine.CanPerform(s.User, "LIST", aclPath) && !strings.HasPrefix(entry.Name, ".") {
+						if !isIncompleteMarkerName(activeIncompleteIndicator(s.Config), entry.Name) {
+							output.WriteString(entry.Name + "\r\n")
+						}
+					}
+				} else {
+					for _, e := range bridge.ListDir(targetPath) {
+						if strings.HasPrefix(e.Name, ".") {
+							continue
+						}
+						if strings.HasSuffix(e.Name, "-missing") || strings.HasSuffix(e.Name, "-MISSING") {
+							continue
+						}
+						if isIncompleteMarkerName(activeIncompleteIndicator(s.Config), e.Name) {
+							continue
+						}
+						if strings.HasPrefix(e.Name, "[#") || strings.HasPrefix(e.Name, "[:") {
+							continue
+						}
+						if strings.Contains(e.Name, "COMPLETE") && strings.Contains(e.Name, "[") {
+							continue
+						}
+						aclPath := path.Join(s.Config.ACLBasePath, targetPath, e.Name)
+						if !s.ACLEngine.CanPerform(s.User, "LIST", aclPath) {
+							continue
+						}
+						output.WriteString(e.Name + "\r\n")
+					}
+				}
+			}
+		} else {
+			listPath := filepath.Join(s.Config.StoragePath, targetPath)
+			if info, statErr := os.Lstat(listPath); statErr == nil && !info.IsDir() {
+				name := filepath.Base(listPath)
+				if !strings.HasPrefix(name, ".") {
+					output.WriteString(name + "\r\n")
+				}
+			} else if files, readErr := os.ReadDir(listPath); readErr == nil {
+				for _, f := range files {
+					if strings.HasPrefix(f.Name(), ".") {
+						continue
+					}
+					if !s.Config.ShowSymlinks && f.Type()&fs.ModeSymlink != 0 {
+						continue
+					}
+					output.WriteString(f.Name() + "\r\n")
+				}
+			}
+		}
+
+		dataConn.Write([]byte(output.String()))
+		dataConn.Close()
+
+		if s.Config.Mode == "master" && s.MasterManager != nil {
+			s.showGlobalStats("226", false)
+		}
+
+		fmt.Fprintf(s.Conn, "226 Directory listing complete.\r\n")
+		return false
+
+	case "LIST":
+		defer s.clearPreparedTransferState()
+		if !s.hasPreparedDataConnection() {
+			fmt.Fprintf(s.Conn, "503 Bad sequence of commands.\r\n")
+			return false
+		}
+		targetPath := s.CurrentDir
+		if s.Config.Mode == "master" && s.MasterManager != nil {
+			if bridge, ok := s.MasterManager.(MasterBridge); ok {
+				targetPath = s.resolveListTargetPath("LIST", args, bridge)
+			}
+		} else {
+			targetPath = s.resolveListTargetPath("LIST", args, nil)
+		}
+		if err := s.validateListDirectoryTarget(targetPath, s.masterBridgeOrNil()); err != nil {
+			if err.Error() == "504" {
+				fmt.Fprintf(s.Conn, "504 Command not implemented for that parameter.\r\n")
+			} else {
+				fmt.Fprintf(s.Conn, "550 %s: no such file or directory\r\n", targetPath)
+			}
+			return false
+		}
+		fmt.Fprintf(s.Conn, "150 Opening ASCII mode data connection.\r\n")
+
+		raw, err := s.getRawDataConn()
+		if err != nil {
+			fmt.Fprintf(s.Conn, "425 Data connection failed\r\n")
+			return false
+		}
+		dataConn, err := s.upgradeDataTLS(raw, tlsConfig)
+		if err != nil {
+			raw.Close()
+			fmt.Fprintf(s.Conn, "435 Failed TLS negotiation on data channel\r\n")
+			return false
+		}
+
+		var output strings.Builder
+
+		if s.Config.Mode == "master" && s.MasterManager != nil {
+			if bridge, ok := s.MasterManager.(MasterBridge); ok {
+				entries := bridge.ListDir(targetPath)
 				now := timeutil.Now().Format("Jan _2 15:04")
 				siteName := s.Config.SiteNameShort
 				if siteName == "" {
 					siteName = "GoFTPd"
 				}
 
-				totalBytes, present, total := dirRaceProgress(bridge, s.Config, s.CurrentDir)
+				totalBytes, present, total := dirRaceProgress(bridge, s.Config, targetPath)
 				if s.Config.Debug {
 					log.Printf("[LIST/RACESTATS] dir=%s totalBytes=%d present=%d total=%d",
-						s.CurrentDir, totalBytes, present, total)
+						targetPath, totalBytes, present, total)
 				}
 
 				existingFiles := make(map[string]bool)
@@ -1006,11 +1286,11 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					existingFiles[e.Name] = true
 				}
 
-				if zipscript.ShowStatusBarForDir(s.Config.Zipscript, s.CurrentDir) {
-					if statusName := dirRaceStatusName(bridge, s.Config, s.CurrentDir, siteName); strings.TrimSpace(statusName) != "" {
+				if zipscript.ShowStatusBarForDir(s.Config.Zipscript, targetPath) {
+					if statusName := dirRaceStatusName(bridge, s.Config, targetPath, siteName); strings.TrimSpace(statusName) != "" {
 						mode := "drwxr-xr-x"
 						size := "4096"
-						if !zipscript.StatusBarDirectoryForDir(s.Config.Zipscript, s.CurrentDir) {
+						if !zipscript.StatusBarDirectoryForDir(s.Config.Zipscript, targetPath) {
 							mode = "-rw-r--r--"
 							size = "0"
 						}
@@ -1019,7 +1299,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					}
 				}
 
-				for _, marker := range incompleteMarkerEntries(bridge, s.Config, activeIncompleteIndicator(s.Config), s.CurrentDir, entries) {
+				for _, marker := range incompleteMarkerEntries(bridge, s.Config, activeIncompleteIndicator(s.Config), targetPath, entries) {
 					ts := timeutil.Unix(marker.ModTime).Format("Jan _2 15:04")
 					name := fmt.Sprintf("%s -> %s", marker.Name, marker.LinkTarget)
 					output.WriteString(fmt.Sprintf("%s   1 %-8s %-8s %10s %s %s\r\n",
@@ -1043,7 +1323,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						continue
 					}
 
-					aclPath := path.Join(s.Config.ACLBasePath, s.CurrentDir, e.Name)
+					aclPath := path.Join(s.Config.ACLBasePath, targetPath, e.Name)
 					if !s.ACLEngine.CanPerform(s.User, "LIST", aclPath) {
 						continue
 					}
@@ -1064,9 +1344,9 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						mode, owner, group, size, ts, name))
 				}
 
-				if zipscript.ShowMissingFilesForDir(s.Config.Zipscript, s.CurrentDir) && total > 0 && present < total {
-					sfvMeta := bridge.GetSFVData(s.CurrentDir)
-					verifiedPresent := bridge.GetVerifiedSFVPresentFiles(s.CurrentDir)
+				if zipscript.ShowMissingFilesForDir(s.Config.Zipscript, targetPath) && total > 0 && present < total {
+					sfvMeta := bridge.GetSFVData(targetPath)
+					verifiedPresent := bridge.GetVerifiedSFVPresentFiles(targetPath)
 					if sfvMeta != nil {
 						for fileName := range sfvMeta {
 							key := raceCRCKey(fileName)
@@ -1085,7 +1365,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			}
 		} else {
 			// FALLBACK: Standalone mode directory listing for cbftp
-			listPath := filepath.Join(s.Config.StoragePath, s.CurrentDir)
+			listPath := filepath.Join(s.Config.StoragePath, targetPath)
 			files, err := os.ReadDir(listPath)
 			if err == nil {
 
@@ -1130,6 +1410,11 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		if len(args) == 0 {
 			return false
 		}
+		defer s.clearPreparedTransferState()
+		if !s.hasPreparedTransferChannel() {
+			fmt.Fprintf(s.Conn, "503 Bad sequence of commands.\r\n")
+			return false
+		}
 
 		isTLSExempt := false
 		for _, exemptUser := range s.Config.TLSExemptUsers {
@@ -1166,33 +1451,29 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			return false
 		}
 
-		if s.Config.XdupeEnabled {
+		if s.Config.Mode == "master" && s.MasterManager != nil {
 			fileExists := false
 			var xdupeNames []string
-			if s.Config.Mode == "master" && s.MasterManager != nil {
-				if bridge, ok := s.MasterManager.(MasterBridge); ok {
-					if err := ensureUploadDirsForEvent(s, bridge, uploadDir); err != nil {
-						fmt.Fprintf(s.Conn, "550 Upload prepare failed: %v\r\n", err)
-						return false
-					}
-					fileExists = bridge.FileExists(uploadPath)
-					xdupeNames = existingFileNamesForXDupe(bridge.ListDir(uploadDir))
-				}
-			}
-			if fileExists && restOffset == 0 {
-				for _, line := range xdupeResponseLines(s.XDupeMode, xdupeNames) {
-					fmt.Fprintf(s.Conn, "553-%s\r\n", line)
-				}
-				fmt.Fprintf(s.Conn, "553 %s: file already exists (X-DUPE)\r\n", fileName)
-				return false
-			}
-		}
-		if !s.Config.XdupeEnabled && s.Config.Mode == "master" && s.MasterManager != nil {
 			if bridge, ok := s.MasterManager.(MasterBridge); ok {
 				if err := ensureUploadDirsForEvent(s, bridge, uploadDir); err != nil {
 					fmt.Fprintf(s.Conn, "550 Upload prepare failed: %v\r\n", err)
 					return false
 				}
+				fileExists = bridge.FileExists(uploadPath)
+				if s.Config.XdupeEnabled {
+					xdupeNames = existingFileNamesForXDupe(bridge.ListDir(uploadDir))
+				}
+			}
+			if fileExists && restOffset == 0 {
+				if s.Config.XdupeEnabled {
+					for _, line := range xdupeResponseLines(s.XDupeMode, xdupeNames) {
+						fmt.Fprintf(s.Conn, "553-%s\r\n", line)
+					}
+					fmt.Fprintf(s.Conn, "553 %s: file already exists (X-DUPE)\r\n", fileName)
+				} else {
+					fmt.Fprintf(s.Conn, "553 %s: file already exists\r\n", fileName)
+				}
+				return false
 			}
 		}
 		if restOffset > 0 {
@@ -1228,6 +1509,35 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				}
 			}
 		}
+		localPath := filepath.Join(s.Config.StoragePath, filepath.FromSlash(strings.TrimPrefix(uploadPath, "/")))
+		if s.Config.Mode != "master" || s.MasterManager == nil {
+			if shouldBlockZipDIZUpload(s.Config, uploadDir, fileName) {
+				fmt.Fprintf(s.Conn, "550 zipscript: upload file_id.diz inside the zip, not as a standalone file\r\n")
+				return false
+			}
+			dirEntries, err := os.ReadDir(filepath.Dir(localPath))
+			if err == nil {
+				localExistingNames := make([]string, 0, len(dirEntries))
+				localExistingDirs := make([]string, 0, len(dirEntries))
+				for _, entry := range dirEntries {
+					localExistingNames = append(localExistingNames, entry.Name())
+					if entry.IsDir() {
+						localExistingDirs = append(localExistingDirs, entry.Name())
+					}
+				}
+				if err := zipscript.ValidateUpload(s.Config.Zipscript, s.User, uploadDir, fileName, localExistingNames, localExistingDirs, localSFVEntriesForDir(filepath.Dir(localPath))); err != nil {
+					fmt.Fprintf(s.Conn, "550 %s\r\n", err)
+					return false
+				}
+			}
+		}
+		if s.User != nil && s.User.UploadSlots > 0 {
+			activeUploads := countTransfersForUser(s.User.Name, "upload")
+			if activeUploads >= s.User.UploadSlots {
+				fmt.Fprintf(s.Conn, "550 Maximum simultaneous uploads reached (%d).\r\n", s.User.UploadSlots)
+				return false
+			}
+		}
 
 		if s.Config.Passthrough && s.Config.Mode == "master" && s.MasterManager != nil && s.ActiveAddr != "" && s.PassthruSlave == nil {
 			if bridge, ok := s.MasterManager.(MasterBridge); ok {
@@ -1236,16 +1546,16 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				s.ActiveAddr = ""
 
 				log.Printf("[Passthrough] PORT STOR %s → slave connects to %s", filePath, portAddr)
-				fmt.Fprintf(s.Conn, "150 Opening binary mode data connection.\r\n")
+				fmt.Fprintf(s.Conn, "150 Opening %s mode data connection.\r\n", transferTypeReplyName(s.TransferType))
 				s.beginTransfer("upload", filePath)
 				defer s.endTransfer()
 
-				fileSize, checksum, xferMs, err := bridge.SlaveConnectAndReceive(filePath, portAddr, s.User.Name, s.User.PrimaryGroup, restOffset)
+				fileSize, checksum, xferMs, err := bridge.SlaveConnectAndReceive(filePath, portAddr, s.User.Name, s.User.PrimaryGroup, restOffset, s.DataTLS, s.SSCN, s.currentTransferTypeByte())
 				_ = xferMs
 
 				if err != nil {
 					log.Printf("[Passthrough] PORT upload failed: %v", err)
-					fmt.Fprintf(s.Conn, "550 Upload failed: %v\r\n", err)
+					writeTransferFailure(s.Conn, "Upload", err)
 					return false
 				}
 
@@ -1280,6 +1590,14 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						}
 					}
 				}
+				if !strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
+					sfvEntries := bridge.GetSFVData(uploadDir)
+					if expectedCRC, exists := cachedExpectedCRC(sfvEntries, fileName); exists {
+						writeUploadSFVStatus(s.Conn, checksum, expectedCRC, true, fileSize)
+					} else {
+						writeUploadNoSFVEntryStatus(s.Conn, sfvEntries, fileName)
+					}
+				}
 
 				if strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
 					if sfvEntries, err := bridge.GetSFVInfo(filePath); err == nil {
@@ -1312,12 +1630,16 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				emitSTORAudioInfo(s, uploadDir, audioFields)
 
 				isSpeedtest := isSpeedtestPath(filePath)
-				if fileSize > 0 {
-					s.User.UpdateStatsWithCredits(fileSize, true, !isSpeedtest)
+				transferredBytes := fileSize
+				if restOffset > 0 && fileSize > restOffset {
+					transferredBytes = fileSize - restOffset
+				}
+				if transferredBytes > 0 {
+					s.User.UpdateStatsWithCredits(transferredBytes, true, !isSpeedtest)
 				}
 				speedMB := 0.0
 				if xferMs > 0 {
-					speedMB = (float64(fileSize) / 1024.0 / 1024.0) / (float64(xferMs) / 1000.0)
+					speedMB = (float64(transferredBytes) / 1024.0 / 1024.0) / (float64(xferMs) / 1000.0)
 				}
 				data := map[string]string{}
 				if subdir := zipscript.ReleaseSubdirLabel(s.Config.Zipscript, uploadDir); subdir != "" {
@@ -1334,7 +1656,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					}
 				}
 				raceUsers, raceTotalBytes, raceTotalFiles, raceComplete := populateUploadRaceData(bridge, s.Config, uploadDir, fileName, fileSize, data)
-				s.emitEvent(EventUpload, filePath, fileName, fileSize, speedMB, data)
+				s.emitEvent(EventUpload, filePath, fileName, transferredBytes, speedMB, data)
 				if shouldAnnounceNoRace(s.Config, uploadDir, existingNames, fileName) && zipscript.RaceStatsOnSTORForDir(s.Config.Zipscript, uploadDir) {
 					go emitRaceEndAfter(s, uploadDir, nil, fileSize, 1, xferMs, 0)
 				}
@@ -1378,23 +1700,23 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 
 				if s.PassthruSlave != nil && s.Config.Passthrough {
 					slaveName := s.PassthruSlave.(string)
-					fmt.Fprintf(s.Conn, "150 Opening binary mode data connection.\r\n")
+					fmt.Fprintf(s.Conn, "150 Opening %s mode data connection.\r\n", transferTypeReplyName(s.TransferType))
 					log.Printf("[Passthrough] STOR %s via slave %s (xferIdx=%d)", filePath, slaveName, s.PassthruXferIdx)
 					s.beginTransferOnSlave("upload", filePath, slaveName, s.PassthruXferIdx)
 					defer s.endTransfer()
 
-					fileSize, checksum, xferMs, err = bridge.SlaveReceivePassthrough(filePath, s.PassthruXferIdx, slaveName, s.User.Name, s.User.PrimaryGroup, restOffset)
+					fileSize, checksum, xferMs, err = bridge.SlaveReceivePassthrough(filePath, s.PassthruXferIdx, slaveName, s.User.Name, s.User.PrimaryGroup, restOffset, s.currentTransferTypeByte())
 					s.PassthruSlave = nil
 					s.PretCmd = ""
 					s.PretArg = ""
 
 					if err != nil {
 						log.Printf("[Passthrough] Upload failed: %v", err)
-						fmt.Fprintf(s.Conn, "550 Upload failed: %v\r\n", err)
+						writeTransferFailure(s.Conn, "Upload", err)
 						return false
 					}
 				} else {
-					fmt.Fprintf(s.Conn, "150 Opening binary mode data connection.\r\n")
+					fmt.Fprintf(s.Conn, "150 Opening %s mode data connection.\r\n", transferTypeReplyName(s.TransferType))
 					dataConn, err := s.upgradeDataTLS(raw, tlsConfig)
 					if err != nil {
 						raw.Close()
@@ -1405,13 +1727,13 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					dataConn = trackTransferConn(s, dataConn, "upload")
 
 					start := time.Now()
-					fileSize, checksum, err = bridge.UploadFile(filePath, dataConn, s.User.Name, s.User.PrimaryGroup, restOffset)
+					fileSize, checksum, err = bridge.UploadFile(filePath, dataConn, s.User.Name, s.User.PrimaryGroup, restOffset, s.currentTransferTypeByte())
 					xferMs = time.Since(start).Milliseconds()
 					dataConn.Close()
 
 					if err != nil {
 						log.Printf("[MASTER] Upload failed: %v", err)
-						fmt.Fprintf(s.Conn, "550 Upload failed: %v\r\n", err)
+						writeTransferFailure(s.Conn, "Upload", err)
 						return false
 					}
 				}
@@ -1447,6 +1769,14 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						}
 					}
 				}
+				if !strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
+					sfvEntries := bridge.GetSFVData(uploadDir)
+					if expectedCRC, exists := cachedExpectedCRC(sfvEntries, fileName); exists {
+						writeUploadSFVStatus(s.Conn, checksum, expectedCRC, true, fileSize)
+					} else {
+						writeUploadNoSFVEntryStatus(s.Conn, sfvEntries, fileName)
+					}
+				}
 
 				if strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
 					if sfvEntries, err := bridge.GetSFVInfo(filePath); err == nil {
@@ -1479,12 +1809,16 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				emitSTORAudioInfo(s, uploadDir, audioFields)
 
 				isSpeedtest := isSpeedtestPath(filePath)
-				if fileSize > 0 {
-					s.User.UpdateStatsWithCredits(fileSize, true, !isSpeedtest)
+				transferredBytes := fileSize
+				if restOffset > 0 && fileSize > restOffset {
+					transferredBytes = fileSize - restOffset
+				}
+				if transferredBytes > 0 {
+					s.User.UpdateStatsWithCredits(transferredBytes, true, !isSpeedtest)
 				}
 				speedMB := 0.0
 				if xferMs > 0 {
-					speedMB = (float64(fileSize) / 1024.0 / 1024.0) / (float64(xferMs) / 1000.0)
+					speedMB = (float64(transferredBytes) / 1024.0 / 1024.0) / (float64(xferMs) / 1000.0)
 				}
 				data := map[string]string{}
 				if subdir := zipscript.ReleaseSubdirLabel(s.Config.Zipscript, uploadDir); subdir != "" {
@@ -1501,7 +1835,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					}
 				}
 				raceUsers, raceTotalBytes, raceTotalFiles, raceComplete := populateUploadRaceData(bridge, s.Config, uploadDir, fileName, fileSize, data)
-				s.emitEvent(EventUpload, filePath, fileName, fileSize, speedMB, data)
+				s.emitEvent(EventUpload, filePath, fileName, transferredBytes, speedMB, data)
 				if shouldAnnounceNoRace(s.Config, uploadDir, existingNames, fileName) && zipscript.RaceStatsOnSTORForDir(s.Config.Zipscript, uploadDir) {
 					go emitRaceEndAfter(s, uploadDir, nil, fileSize, 1, xferMs, 0)
 				}
@@ -1526,13 +1860,156 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			return false
 		}
 
-		if raw != nil {
-			raw.Close()
+		if restOffset > 0 {
+			info, err := os.Stat(localPath)
+			if err != nil {
+				fmt.Fprintf(s.Conn, "550 Resume target not found.\r\n")
+				return false
+			}
+			if restOffset > info.Size() {
+				fmt.Fprintf(s.Conn, "550 Resume offset beyond end of file.\r\n")
+				return false
+			}
+		} else if info, err := os.Stat(localPath); err == nil && !info.IsDir() {
+			if s.Config.XdupeEnabled {
+				dirEntries, readErr := os.ReadDir(filepath.Dir(localPath))
+				if readErr == nil {
+					var names []string
+					for _, entry := range dirEntries {
+						names = append(names, entry.Name())
+					}
+					for _, line := range xdupeResponseLines(s.XDupeMode, names) {
+						fmt.Fprintf(s.Conn, "553-%s\r\n", line)
+					}
+				}
+				fmt.Fprintf(s.Conn, "553 %s: file already exists (X-DUPE)\r\n", fileName)
+			} else {
+				fmt.Fprintf(s.Conn, "553 %s: file already exists\r\n", fileName)
+			}
+			return false
 		}
+
+		if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
+			if raw != nil {
+				raw.Close()
+			}
+			fmt.Fprintf(s.Conn, "550 Upload prepare failed: %v\r\n", err)
+			return false
+		}
+
+		fmt.Fprintf(s.Conn, "150 Opening %s mode data connection.\r\n", transferTypeReplyName(s.TransferType))
+		dataConn, err := s.upgradeDataTLS(raw, tlsConfig)
+		if err != nil {
+			raw.Close()
+			return false
+		}
+
+		flags := os.O_CREATE | os.O_WRONLY
+		if restOffset > 0 {
+			flags |= os.O_APPEND
+		} else {
+			flags |= os.O_TRUNC
+		}
+		file, err := os.OpenFile(localPath, flags, 0644)
+		if err != nil {
+			dataConn.Close()
+			writeTransferFailure(s.Conn, "Upload", err)
+			return false
+		}
+		if restOffset > 0 {
+			if _, err := file.Seek(restOffset, io.SeekStart); err != nil {
+				file.Close()
+				dataConn.Close()
+				writeTransferFailure(s.Conn, "Upload", err)
+				return false
+			}
+		}
+
+		s.beginTransfer("upload", uploadPath)
+		defer s.endTransfer()
+		dataConn = trackTransferConn(s, dataConn, "upload")
+
+		start := time.Now()
+		var checksum uint32
+		writer := io.Writer(file)
+		var checksumHash hash.Hash32
+		if restOffset == 0 {
+			checksumHash = crc32.NewIEEE()
+			writer = io.MultiWriter(file, checksumHash)
+		}
+		written, err := io.Copy(writer, dataConn)
+		xferMs := time.Since(start).Milliseconds()
+		file.Close()
+		dataConn.Close()
+		if err != nil {
+			if restOffset == 0 {
+				_ = os.Remove(localPath)
+			}
+			writeTransferFailure(s.Conn, "Upload", err)
+			return false
+		}
+		if checksumHash != nil {
+			checksum = checksumHash.Sum32()
+		}
+		fileSize := written
+		if restOffset > 0 {
+			fileSize += restOffset
+		}
+		if fileSize == 0 && zipscript.ShouldDeleteZeroByteForDir(s.Config.Zipscript, uploadDir) {
+			_ = os.Remove(localPath)
+			fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
+			return false
+		}
+		if badZip, err := localCheckUploadedZipIntegrity(s.Config, uploadDir, localPath, fileName); err != nil && s.Config.Debug {
+			log.Printf("[LOCAL-ZS] zip integrity check skipped for %s: %v", uploadPath, err)
+		} else if badZip {
+			fmt.Fprintf(s.Conn, "226 Zip integrity check failed, deleting file\r\n")
+			return false
+		}
+		if checksum > 0 && zipscript.ShouldDeleteBadCRCForDir(s.Config.Zipscript, uploadDir) && !strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
+			if expectedCRC, ok := localExpectedCRCForFile(localPath); ok && expectedCRC != checksum {
+				_ = os.Remove(localPath)
+				fmt.Fprintf(s.Conn, "226- checksum mismatch: SLAVE: %08X SFV: %08X\r\n", checksum, expectedCRC)
+				fmt.Fprintf(s.Conn, "226 Checksum mismatch, deleting file\r\n")
+				return false
+			}
+		}
+		if !strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
+			sfvEntries := localSFVEntriesForDir(filepath.Dir(localPath))
+			if expectedCRC, ok := cachedExpectedCRC(sfvEntries, fileName); ok {
+				writeUploadSFVStatus(s.Conn, checksum, expectedCRC, true, fileSize)
+			} else {
+				writeUploadNoSFVEntryStatus(s.Conn, sfvEntries, fileName)
+			}
+		}
+		if strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
+			localReconcileSFVEntries(s.Config, filepath.Dir(localPath), localSFVEntriesForDir(filepath.Dir(localPath)))
+		}
+
+		isSpeedtest := isSpeedtestPath(uploadPath)
+		transferredBytes := written
+		if transferredBytes > 0 {
+			s.User.UpdateStatsWithCredits(transferredBytes, true, !isSpeedtest)
+		}
+		speedMB := transferSpeedMB(transferredBytes, xferMs)
+		s.emitEvent(EventUpload, uploadPath, fileName, transferredBytes, speedMB, nil)
+		if err := localRefreshZipDIZFromArchive(filepath.Dir(localPath), localPath, fileName); err != nil && s.Config.Debug {
+			log.Printf("[LOCAL-ZS] zip diz refresh skipped for %s: %v", uploadPath, err)
+		}
+
+		if checksum != 0 {
+			fmt.Fprintf(s.Conn, "226- Checksum from transfer: %08X\r\n", checksum)
+		}
+		fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
 		return false
 
 	case "RETR":
 		if len(args) == 0 {
+			return false
+		}
+		defer s.clearPreparedTransferState()
+		if !s.hasPreparedTransferChannel() {
+			fmt.Fprintf(s.Conn, "503 Bad sequence of commands.\r\n")
 			return false
 		}
 
@@ -1597,25 +2074,77 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					fmt.Fprintf(s.Conn, "550 Not enough credits.\r\n")
 					return false
 				}
+				if s.User != nil && s.User.DownloadSlots > 0 {
+					activeDownloads := countTransfersForUser(s.User.Name, "download")
+					if activeDownloads >= s.User.DownloadSlots {
+						fmt.Fprintf(s.Conn, "550 Maximum simultaneous downloads reached (%d).\r\n", s.User.DownloadSlots)
+						return false
+					}
+				}
+
+				if s.Config.Passthrough && s.ActiveAddr != "" && s.PassthruSlave == nil {
+					portAddr := s.ActiveAddr
+					s.ActiveAddr = ""
+					fmt.Fprintf(s.Conn, "150 Opening %s mode data connection for %s (%d bytes).\r\n", transferTypeReplyName(s.TransferType), args[0], fileSize)
+					log.Printf("[Passthrough] PORT RETR %s -> %s", filePath, portAddr)
+					s.beginTransfer("download", filePath)
+					defer s.endTransfer()
+
+					transferChecksum, xferMs, err := bridge.SlaveConnectAndSend(filePath, portAddr, restOffset, s.DataTLS, s.SSCN, s.currentTransferTypeByte())
+					if err != nil {
+						log.Printf("[Passthrough] PORT download failed: %v", err)
+						writeTransferFailure(s.Conn, "Download", err)
+						return false
+					}
+
+					if restOffset == 0 && transferChecksum != 0 {
+						fmt.Fprintf(s.Conn, "226- Checksum from transfer: %08X\r\n", transferChecksum)
+						if expectedCRC, ok := cachedExpectedCRC(bridge.GetSFVData(path.Dir(filePath)), path.Base(filePath)); ok {
+							if transferChecksum == expectedCRC {
+								fmt.Fprintf(s.Conn, "226- checksum from transfer matched checksum in .sfv\r\n")
+							} else {
+								fmt.Fprintf(s.Conn, "226- WARNING: checksum from transfer didn't match checksum in .sfv\r\n")
+							}
+						}
+					}
+					fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
+					if remainingSize > 0 {
+						s.User.UpdateStatsWithCredits(remainingSize, false, !isSpeedtest)
+					}
+					s.emitEvent(EventDownload, filePath, args[0], remainingSize, transferSpeedMB(remainingSize, xferMs), nil)
+					return false
+				}
 
 				if s.PassthruSlave != nil && s.Config.Passthrough {
 					slaveName := s.PassthruSlave.(string)
-					fmt.Fprintf(s.Conn, "150 Opening binary mode data connection for %s (%d bytes).\r\n", args[0], fileSize)
+					fmt.Fprintf(s.Conn, "150 Opening %s mode data connection for %s (%d bytes).\r\n", transferTypeReplyName(s.TransferType), args[0], fileSize)
 					log.Printf("[Passthrough] RETR %s via slave %s (xferIdx=%d)", filePath, slaveName, s.PassthruXferIdx)
 					s.beginTransferOnSlave("download", filePath, slaveName, s.PassthruXferIdx)
 					defer s.endTransfer()
 
 					start := time.Now()
-					err := bridge.SlaveSendPassthrough(filePath, s.PassthruXferIdx, slaveName, restOffset)
-					xferMs := time.Since(start).Milliseconds()
+					transferChecksum, xferMs, err := bridge.SlaveSendPassthrough(filePath, s.PassthruXferIdx, slaveName, restOffset, s.currentTransferTypeByte())
+					if xferMs == 0 {
+						xferMs = time.Since(start).Milliseconds()
+					}
 					s.PassthruSlave = nil
 					s.PretCmd = ""
 					s.PretArg = ""
 
 					if err != nil {
 						log.Printf("[Passthrough] Download failed: %v", err)
-						fmt.Fprintf(s.Conn, "550 Download failed: %v\r\n", err)
+						writeTransferFailure(s.Conn, "Download", err)
 					} else {
+						if restOffset == 0 && transferChecksum != 0 {
+							fmt.Fprintf(s.Conn, "226- Checksum from transfer: %08X\r\n", transferChecksum)
+							if expectedCRC, ok := cachedExpectedCRC(bridge.GetSFVData(path.Dir(filePath)), path.Base(filePath)); ok {
+								if transferChecksum == expectedCRC {
+									fmt.Fprintf(s.Conn, "226- checksum from transfer matched checksum in .sfv\r\n")
+								} else {
+									fmt.Fprintf(s.Conn, "226- WARNING: checksum from transfer didn't match checksum in .sfv\r\n")
+								}
+							}
+						}
 						fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
 						if remainingSize > 0 {
 							s.User.UpdateStatsWithCredits(remainingSize, false, !isSpeedtest)
@@ -1628,7 +2157,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						fmt.Fprintf(s.Conn, "425 Data connection failed\r\n")
 						return false
 					}
-					fmt.Fprintf(s.Conn, "150 Opening binary mode data connection for %s (%d bytes).\r\n", args[0], fileSize)
+					fmt.Fprintf(s.Conn, "150 Opening %s mode data connection for %s (%d bytes).\r\n", transferTypeReplyName(s.TransferType), args[0], fileSize)
 					dataConn, err := s.upgradeDataTLS(raw, tlsConfig)
 					if err != nil {
 						raw.Close()
@@ -1638,14 +2167,14 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					defer s.endTransfer()
 					dataConn = trackTransferConn(s, dataConn, "download")
 					start := time.Now()
-					transferChecksum, err := bridge.DownloadFile(filePath, dataConn, restOffset)
+					transferChecksum, err := bridge.DownloadFile(filePath, dataConn, restOffset, s.currentTransferTypeByte())
 					xferMs := time.Since(start).Milliseconds()
 					dataConn.Close()
 					s.PretCmd = ""
 					s.PretArg = ""
 					if err != nil {
 						log.Printf("[MASTER] Download failed: %v", err)
-						fmt.Fprintf(s.Conn, "550 Download failed: %v\r\n", err)
+						writeTransferFailure(s.Conn, "Download", err)
 					} else {
 						if restOffset == 0 && transferChecksum != 0 {
 							fmt.Fprintf(s.Conn, "226- Checksum from transfer: %08X\r\n", transferChecksum)
@@ -1670,53 +2199,261 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			return false
 		}
 
+		localPath := filepath.Join(s.Config.StoragePath, filepath.FromSlash(strings.TrimPrefix(filePath, "/")))
+		if restOffset > 0 && !zipscript.AllowResumeForDir(s.Config.Zipscript, path.Dir(filePath)) {
+			fmt.Fprintf(s.Conn, "550 Resume is disabled for this release.\r\n")
+			return false
+		}
+		info, err := os.Stat(localPath)
+		if err != nil {
+			fmt.Fprintf(s.Conn, "550 File not found.\r\n")
+			return false
+		}
+		if info.IsDir() {
+			fmt.Fprintf(s.Conn, "550 Requested target is not a file.\r\n")
+			return false
+		}
+		fileSize := info.Size()
+		if activeUploadForPath(filePath) {
+			fmt.Fprintf(s.Conn, "550 No Permission To Download A File Currently Being Uploaded.\r\n")
+			return false
+		}
+		if localShouldTreatDownloadAsMissing(s.Config, filePath, localPath) {
+			fmt.Fprintf(s.Conn, "550 File is incomplete or failed checksum verification.\r\n")
+			return false
+		}
+		if restOffset > fileSize {
+			fmt.Fprintf(s.Conn, "550 Resume offset beyond end of file.\r\n")
+			return false
+		}
+		isSpeedtest := isSpeedtestPath(filePath)
+		remainingSize := fileSize
+		if restOffset > 0 && restOffset < fileSize {
+			remainingSize = fileSize - restOffset
+		}
+		if !isSpeedtest && !s.User.CanDownload("", remainingSize) {
+			fmt.Fprintf(s.Conn, "550 Not enough credits.\r\n")
+			return false
+		}
+		if s.User != nil && s.User.DownloadSlots > 0 {
+			activeDownloads := countTransfersForUser(s.User.Name, "download")
+			if activeDownloads >= s.User.DownloadSlots {
+				fmt.Fprintf(s.Conn, "550 Maximum simultaneous downloads reached (%d).\r\n", s.User.DownloadSlots)
+				return false
+			}
+		}
+
+		raw, err := s.getRawDataConn()
+		if err != nil {
+			fmt.Fprintf(s.Conn, "425 Data connection failed\r\n")
+			return false
+		}
+		fmt.Fprintf(s.Conn, "150 Opening %s mode data connection for %s (%d bytes).\r\n", transferTypeReplyName(s.TransferType), args[0], fileSize)
+		dataConn, err := s.upgradeDataTLS(raw, tlsConfig)
+		if err != nil {
+			raw.Close()
+			return false
+		}
+
+		file, err := os.Open(localPath)
+		if err != nil {
+			dataConn.Close()
+			writeTransferFailure(s.Conn, "Download", err)
+			return false
+		}
+		defer file.Close()
+		if restOffset > 0 {
+			if _, err := file.Seek(restOffset, io.SeekStart); err != nil {
+				dataConn.Close()
+				writeTransferFailure(s.Conn, "Download", err)
+				return false
+			}
+		}
+
+		s.beginTransfer("download", filePath)
+		defer s.endTransfer()
+		dataConn = trackTransferConn(s, dataConn, "download")
+
+		start := time.Now()
+		var transferChecksum uint32
+		var reader io.Reader = file
+		var checksumHash hash.Hash32
+		if restOffset == 0 {
+			checksumHash = crc32.NewIEEE()
+			reader = io.TeeReader(file, checksumHash)
+		}
+		_, err = io.Copy(dataConn, reader)
+		xferMs := time.Since(start).Milliseconds()
+		dataConn.Close()
+		if err != nil {
+			writeTransferFailure(s.Conn, "Download", err)
+			return false
+		}
+		if checksumHash != nil {
+			transferChecksum = checksumHash.Sum32()
+		}
+
+		if restOffset == 0 && transferChecksum != 0 {
+			fmt.Fprintf(s.Conn, "226- Checksum from transfer: %08X\r\n", transferChecksum)
+			if expectedCRC, ok := localExpectedCRCForFile(localPath); ok {
+				if transferChecksum == expectedCRC {
+					fmt.Fprintf(s.Conn, "226- checksum from transfer matched checksum in .sfv\r\n")
+				} else {
+					fmt.Fprintf(s.Conn, "226- WARNING: checksum from transfer didn't match checksum in .sfv\r\n")
+				}
+			}
+		}
+		fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
+		if remainingSize > 0 {
+			s.User.UpdateStatsWithCredits(remainingSize, false, !isSpeedtest)
+		}
+		s.emitEvent(EventDownload, filePath, args[0], remainingSize, transferSpeedMB(remainingSize, xferMs), nil)
+		return false
+
 	case "STAT":
 		// STAT with no args = server status. STAT <path> = listing on control
 		// channel (no data connection). cbftp uses STAT -l at login as a
 		// cheap way to probe the server without opening a data conn.
 		if len(args) == 0 {
+			typeName := "ASCII"
+			if strings.EqualFold(s.TransferType, "I") {
+				typeName = "BINARY"
+			}
 			fmt.Fprintf(s.Conn, "211- %s server status:\r\n", s.Config.SiteNameShort)
 			fmt.Fprintf(s.Conn, " Connected from %s\r\n", s.Conn.RemoteAddr())
 			fmt.Fprintf(s.Conn, " Logged in as %s\r\n", s.User.Name)
-			fmt.Fprintf(s.Conn, " TYPE: %s, STRU: F, MODE: S\r\n", "BINARY")
+			fmt.Fprintf(s.Conn, " TYPE: %s, STRU: F, MODE: S\r\n", typeName)
 			fmt.Fprintf(s.Conn, "211 End of status.\r\n")
 			return false
 		}
 
-		// STAT with args — if it's a flag like "-l" or "-la", treat as listing
-		// of current dir. If it's a path, list that path.
-		target := s.CurrentDir
-		arg := strings.TrimSpace(args[0])
-		if arg != "" && !strings.HasPrefix(arg, "-") {
-			if strings.HasPrefix(arg, "/") {
-				target = path.Clean(arg)
+		target := s.resolveListTargetPath("LIST", args, s.masterBridgeOrNil())
+		if err := s.validateListDirectoryTarget(target, s.masterBridgeOrNil()); err != nil {
+			if err.Error() == "504" {
+				fmt.Fprintf(s.Conn, "504 Command not implemented for that parameter.\r\n")
 			} else {
-				target = path.Clean(path.Join(s.CurrentDir, arg))
+				fmt.Fprintf(s.Conn, "550 %s: no such file or directory\r\n", target)
 			}
+			return false
 		}
 
-		fmt.Fprintf(s.Conn, "213- Status of %s:\r\n", target)
+		fmt.Fprintf(s.Conn, "213-STAT\r\n")
+		fmt.Fprintf(s.Conn, " total 0\r\n")
 		if s.Config.Mode == "master" && s.MasterManager != nil {
 			if bridge, ok := s.MasterManager.(MasterBridge); ok {
 				entries := bridge.ListDir(target)
+				now := timeutil.Now().Format("Jan _2 15:04")
+				siteName := s.Config.SiteNameShort
+				if siteName == "" {
+					siteName = "GoFTPd"
+				}
+
+				_, present, total := dirRaceProgress(bridge, s.Config, target)
+				existingFiles := make(map[string]bool)
+				for _, e := range entries {
+					existingFiles[e.Name] = true
+				}
+
+				if zipscript.ShowStatusBarForDir(s.Config.Zipscript, target) {
+					if statusName := dirRaceStatusName(bridge, s.Config, target, siteName); strings.TrimSpace(statusName) != "" {
+						mode := "drwxr-xr-x"
+						size := "4096"
+						if !zipscript.StatusBarDirectoryForDir(s.Config.Zipscript, target) {
+							mode = "-rw-r--r--"
+							size = "0"
+						}
+						fmt.Fprintf(s.Conn, " %s   1 %-8s %-8s %10s %s %s\r\n",
+							mode, "GoFTPd", "GoFTPd", size, now, statusName)
+					}
+				}
+
 				for _, marker := range incompleteMarkerEntries(bridge, s.Config, activeIncompleteIndicator(s.Config), target, entries) {
 					ts := timeutil.Unix(marker.ModTime).Format("Jan _2 15:04")
-					fmt.Fprintf(s.Conn, " %s   1 %-8s %-8s %10s %s %s -> %s\r\n",
-						ftpListMode(marker), marker.Owner, marker.Group, "0", ts, marker.Name, marker.LinkTarget)
+					name := fmt.Sprintf("%s -> %s", marker.Name, marker.LinkTarget)
+					fmt.Fprintf(s.Conn, " %s   1 %-8s %-8s %10s %s %s\r\n",
+						ftpListMode(marker), marker.Owner, marker.Group, "0", ts, name)
 				}
+
 				for _, e := range entries {
 					if strings.HasPrefix(e.Name, ".") {
 						continue
 					}
-					mode := "-rw-r--r--"
+					if strings.HasSuffix(e.Name, "-missing") || strings.HasSuffix(e.Name, "-MISSING") {
+						continue
+					}
+					if isIncompleteMarkerName(activeIncompleteIndicator(s.Config), e.Name) {
+						continue
+					}
+					if strings.HasPrefix(e.Name, "[#") || strings.HasPrefix(e.Name, "[:") {
+						continue
+					}
+					if strings.Contains(e.Name, "COMPLETE") && strings.Contains(e.Name, "[") {
+						continue
+					}
+					aclPath := path.Join(s.Config.ACLBasePath, target, e.Name)
+					if !s.ACLEngine.CanPerform(s.User, "LIST", aclPath) {
+						continue
+					}
+
+					mode := ftpListMode(e)
 					size := fmt.Sprintf("%d", e.Size)
-					if e.IsDir {
-						mode = "drwxr-xr-x"
+					name := e.Name
+					if e.IsSymlink {
+						size = "0"
+						name = fmt.Sprintf("%s -> %s", e.Name, e.LinkTarget)
+					} else if e.IsDir {
 						size = "4096"
 					}
 					ts := timeutil.Unix(e.ModTime).Format("Jan _2 15:04")
 					fmt.Fprintf(s.Conn, " %s   1 %-8s %-8s %10s %s %s\r\n",
-						mode, "GoFTPd", "GoFTPd", size, ts, e.Name)
+						mode, "GoFTPd", "GoFTPd", size, ts, name)
+				}
+
+				if zipscript.ShowMissingFilesForDir(s.Config.Zipscript, target) && total > 0 && present < total {
+					sfvMeta := bridge.GetSFVData(target)
+					verifiedPresent := bridge.GetVerifiedSFVPresentFiles(target)
+					if sfvMeta != nil {
+						for fileName := range sfvMeta {
+							key := raceCRCKey(fileName)
+							if verifiedPresent != nil {
+								if verifiedPresent[key] {
+									continue
+								}
+							} else if existingFiles[fileName] {
+								continue
+							}
+							fmt.Fprintf(s.Conn, " -rw-r--r--   1 %-8s %-8s %10s %s %s-MISSING\r\n",
+								"GoFTPd", "GoFTPd", "0", now, fileName)
+						}
+					}
+				}
+			}
+		} else {
+			listPath := filepath.Join(s.Config.StoragePath, target)
+			files, err := os.ReadDir(listPath)
+			if err == nil {
+				for _, f := range files {
+					if strings.HasPrefix(f.Name(), ".") {
+						continue
+					}
+					if !s.Config.ShowSymlinks && f.Type()&fs.ModeSymlink != 0 {
+						continue
+					}
+					info, err := f.Info()
+					if err != nil {
+						continue
+					}
+					mode := "-rw-r--r--"
+					size := fmt.Sprintf("%d", info.Size())
+					if info.IsDir() {
+						mode = "drwxr-xr-x"
+						size = "4096"
+					} else if f.Type()&fs.ModeSymlink != 0 {
+						mode = "lrwxrwxrwx"
+					}
+					ts := timeutil.In(info.ModTime()).Format("Jan _2 15:04")
+					fmt.Fprintf(s.Conn, " %s   1 %-8s %-8s %10s %s %s\r\n",
+						mode, "GoFTPd", "GoFTPd", size, ts, f.Name())
 				}
 			}
 		}

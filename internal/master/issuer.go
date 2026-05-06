@@ -241,6 +241,36 @@ func IssueRemerge(rs *RemoteSlave, path string, partialRemerge bool, skipAgeCuto
 	})
 }
 
+func IssueRemergePause(rs *RemoteSlave) error {
+	index, err := rs.FetchIndex()
+	if err != nil {
+		return err
+	}
+	sendErr := rs.SendCommand(&protocol.AsyncCommand{Index: index, Name: "remergePause"})
+	if sendErr != nil {
+		select {
+		case rs.indexPool <- index:
+		default:
+		}
+	}
+	return sendErr
+}
+
+func IssueRemergeResume(rs *RemoteSlave) error {
+	index, err := rs.FetchIndex()
+	if err != nil {
+		return err
+	}
+	sendErr := rs.SendCommand(&protocol.AsyncCommand{Index: index, Name: "remergeResume"})
+	if sendErr != nil {
+		select {
+		case rs.indexPool <- index:
+		default:
+		}
+	}
+	return sendErr
+}
+
 // IssueCheckSSL checks if slave supports SSL.
 func IssueCheckSSL(rs *RemoteSlave) (string, error) {
 	index, err := rs.FetchIndex()

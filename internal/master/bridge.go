@@ -283,7 +283,7 @@ func (b *Bridge) PluginListDir(dirPath string) []plugin.FileEntry {
 // In  the FTP client connects directly to the slave's PASV port.
 // Here we bridge through the master since the client already connected to us.
 // A PRET-based optimization (redirect client to slave) can be added later.
-func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group string, position int64) (int64, uint32, error) {
+func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group string, position int64, transferType byte) (int64, uint32, error) {
 	var slave *RemoteSlave
 	if position > 0 {
 		slave = b.sm.SelectSlaveForDownload(filePath)
@@ -326,7 +326,7 @@ func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group s
 	}
 
 	// Tell slave to receive the file
-	recvIdx, err := IssueReceive(slave, filePath, 'I', position, "master",
+	recvIdx, err := IssueReceive(slave, filePath, transferType, position, "master",
 		transferResp.Info.TransferIndex, 0, 0)
 	if err != nil {
 		slaveConn.Close()
@@ -414,7 +414,7 @@ func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group s
 //  3. Connect from master to slave's data port
 //  4. Tell slave to SEND the file
 //  5. Bridge data: read from slave, write to clientData
-func (b *Bridge) DownloadFile(filePath string, clientData net.Conn, position int64) (uint32, error) {
+func (b *Bridge) DownloadFile(filePath string, clientData net.Conn, position int64, transferType byte) (uint32, error) {
 	slave := b.sm.SelectSlaveForDownload(filePath)
 	if slave == nil {
 		return 0, fmt.Errorf("file not found on any available slave: %s", filePath)
@@ -445,7 +445,7 @@ func (b *Bridge) DownloadFile(filePath string, clientData net.Conn, position int
 	}
 
 	// Tell slave to send the file
-	sendIdx, err := IssueSend(slave, filePath, 'I', position, "master",
+	sendIdx, err := IssueSend(slave, filePath, transferType, position, "master",
 		transferResp.Info.TransferIndex, 0, 0)
 	if err != nil {
 		slaveConn.Close()
@@ -1749,7 +1749,7 @@ func (b *Bridge) SlaveListenForDownloadPassthrough(filePath string, encrypted bo
 
 // SlaveReceivePassthrough tells a slave to receive a file (client already connected directly).
 // Waits for the slave to finish and returns size, checksum, duration.
-func (b *Bridge) SlaveReceivePassthrough(filePath string, transferIdx int32, slaveName string, owner, group string, position int64) (int64, uint32, int64, error) {
+func (b *Bridge) SlaveReceivePassthrough(filePath string, transferIdx int32, slaveName string, owner, group string, position int64, transferType byte) (int64, uint32, int64, error) {
 	slave := b.sm.GetSlave(slaveName)
 	if slave == nil {
 		return 0, 0, 0, fmt.Errorf("slave %s not found", slaveName)
@@ -1758,7 +1758,7 @@ func (b *Bridge) SlaveReceivePassthrough(filePath string, transferIdx int32, sla
 	slave.IncActiveTransfers()
 	defer slave.DecActiveTransfers()
 
-	recvIdx, err := IssueReceive(slave, filePath, 'I', position, "master", transferIdx, 0, 0)
+	recvIdx, err := IssueReceive(slave, filePath, transferType, position, "master", transferIdx, 0, 0)
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("issue receive: %w", err)
 	}
@@ -1814,39 +1814,42 @@ func (b *Bridge) SlaveReceivePassthrough(filePath string, transferIdx int32, sla
 }
 
 // SlaveSendPassthrough tells a slave to send a file (client already connected directly).
-func (b *Bridge) SlaveSendPassthrough(filePath string, transferIdx int32, slaveName string, position int64) error {
+func (b *Bridge) SlaveSendPassthrough(filePath string, transferIdx int32, slaveName string, position int64, transferType byte) (uint32, int64, error) {
 	slave := b.sm.GetSlave(slaveName)
 	if slave == nil {
-		return fmt.Errorf("slave %s not found", slaveName)
+		return 0, 0, fmt.Errorf("slave %s not found", slaveName)
 	}
 
-	sendIdx, err := IssueSend(slave, filePath, 'I', position, "master", transferIdx, 0, 0)
+	sendIdx, err := IssueSend(slave, filePath, transferType, position, "master", transferIdx, 0, 0)
 	if err != nil {
-		return fmt.Errorf("issue send: %w", err)
+		return 0, 0, fmt.Errorf("issue send: %w", err)
 	}
 
 	_, err = slave.FetchResponse(sendIdx, 60*time.Second)
 	if err != nil {
 		b.reconcileUnavailableDownloadState(filePath, slave)
-		return fmt.Errorf("send ack: %w", err)
+		return 0, 0, fmt.Errorf("send ack: %w", err)
 	}
 
 	status, err := slave.WaitTransferStatus(transferIdx, 2*time.Hour)
 	if err != nil {
 		b.reconcileUnavailableDownloadState(filePath, slave)
-		return err
+		return 0, 0, err
 	}
 	if status.Error != "" {
 		b.reconcileUnavailableDownloadState(filePath, slave)
-		return fmt.Errorf("%s", status.Error)
+		return 0, 0, fmt.Errorf("%s", status.Error)
 	}
 
-	return nil
+	if position > 0 {
+		return 0, status.Elapsed, nil
+	}
+	return status.Checksum, status.Elapsed, nil
 }
 
 // SlaveConnectAndReceive tells a slave to connect out to a remote address (PORT mode passthrough)
 // and receive a file. The slave connects directly to the remote site — master doesn't touch the data.
-func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group string, position int64) (int64, uint32, int64, error) {
+func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group string, position int64, encrypted bool, sslClientMode bool, transferType byte) (int64, uint32, int64, error) {
 	var slave *RemoteSlave
 	if position > 0 {
 		slave = b.sm.SelectSlaveForDownload(filePath)
@@ -1870,7 +1873,7 @@ func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group strin
 
 	// Tell slave to connect out to the remote address (with TLS for FXP)
 	// sslClientHandshake=false: slave acts as TLS SERVER (other site did CPSV, is TLS client)
-	connectIdx, err := IssueConnect(slave, remoteIP, remotePort, true, false)
+	connectIdx, err := IssueConnect(slave, remoteIP, remotePort, encrypted, sslClientMode)
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("issue connect to %s: %w", slave.Name(), err)
 	}
@@ -1886,7 +1889,7 @@ func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group strin
 	}
 
 	// Tell slave to receive the file on this connection
-	recvIdx, err := IssueReceive(slave, filePath, 'I', position, remoteAddr,
+	recvIdx, err := IssueReceive(slave, filePath, transferType, position, remoteAddr,
 		transferResp.Info.TransferIndex, 0, 0)
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("issue receive: %w", err)
@@ -1939,4 +1942,66 @@ func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group strin
 	}
 
 	return finalSize, finalChecksum, status.Elapsed, nil
+}
+
+// SlaveConnectAndSend tells the owning slave to connect out to a remote address (PORT mode passthrough)
+// and send a file directly. The master only orchestrates the control flow.
+func (b *Bridge) SlaveConnectAndSend(filePath, remoteAddr string, position int64, encrypted bool, sslClientMode bool, transferType byte) (uint32, int64, error) {
+	slave := b.sm.SelectSlaveForDownload(filePath)
+	if slave == nil {
+		return 0, 0, fmt.Errorf("file not found on any available slave: %s", filePath)
+	}
+
+	slave.IncActiveTransfers()
+	defer slave.DecActiveTransfers()
+
+	parts := strings.SplitN(remoteAddr, ":", 2)
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("invalid remote address: %s", remoteAddr)
+	}
+	remoteIP := parts[0]
+	remotePort, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid remote address: %s", remoteAddr)
+	}
+
+	connectIdx, err := IssueConnect(slave, remoteIP, remotePort, encrypted, sslClientMode)
+	if err != nil {
+		return 0, 0, fmt.Errorf("issue connect to %s: %w", slave.Name(), err)
+	}
+
+	resp, err := slave.FetchResponse(connectIdx, 60*time.Second)
+	if err != nil {
+		return 0, 0, fmt.Errorf("slave %s connect failed: %w", slave.Name(), err)
+	}
+
+	transferResp, ok := resp.(*protocol.AsyncResponseTransfer)
+	if !ok {
+		return 0, 0, fmt.Errorf("unexpected response from slave")
+	}
+
+	sendIdx, err := IssueSend(slave, filePath, transferType, position, remoteAddr, transferResp.Info.TransferIndex, 0, 0)
+	if err != nil {
+		IssueAbort(slave, transferResp.Info.TransferIndex, "download send setup failed")
+		return 0, 0, fmt.Errorf("issue send: %w", err)
+	}
+	if _, err := slave.FetchResponse(sendIdx, 60*time.Second); err != nil {
+		IssueAbort(slave, transferResp.Info.TransferIndex, "download send ack failed")
+		b.reconcileUnavailableDownloadState(filePath, slave)
+		return 0, 0, fmt.Errorf("send ack: %w", err)
+	}
+
+	status, err := slave.WaitTransferStatus(transferResp.Info.TransferIndex, 2*time.Hour)
+	if err != nil {
+		b.reconcileUnavailableDownloadState(filePath, slave)
+		return 0, 0, err
+	}
+	if status.Error != "" {
+		b.reconcileUnavailableDownloadState(filePath, slave)
+		return 0, 0, fmt.Errorf("%s", status.Error)
+	}
+	if position > 0 {
+		return 0, status.Elapsed, nil
+	}
+	return status.Checksum, status.Elapsed, nil
 }
