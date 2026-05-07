@@ -112,6 +112,11 @@ Edit `etc/config.yml` before running it for real. The same config file is used
 for master and slave mode; `mode: master` or `mode: slave` decides which blocks
 are active.
 
+In `mode: slave`, the slave-specific runtime comes from the `slave:` block.
+`slave.roots` is required, and slave mode no longer falls back to
+`storage_path` for roots. Shared top-level runtime settings such as `tls_*`,
+`log_*`, `debug`, and `timezone` still apply to both roles.
+
 Edit `sitebot/etc/config.yml` before starting the sitebot. The daemon and
 sitebot must use the same `event_fifo` path.
 
@@ -172,6 +177,15 @@ For an archive server, point a slave root at the existing archive tree and set
 `readonly: true`. Use `sections` or `paths` only if you want to limit which
 paths that archive slave serves.
 
+On a slave host, the role-specific settings you normally care about are:
+
+- `mode: slave`
+- the `slave:` block
+- shared top-level runtime settings like `tls_*`, `log_*`, `debug`, and `timezone`
+
+Master-only site layout, ACL storage, plugin routing, and sitebot settings are
+ignored in slave mode.
+
 The master control socket can also be hardened with:
 
 - `master.slave_allowlist` - optional exact IP / CIDR allowlist for slave connections
@@ -187,6 +201,20 @@ Siteops can manage the persistent denylist from FTP with:
 - `SITE SLAVEBANS`
 - `SITE SLAVEBAN <ip|cidr>`
 - `SITE SLAVEUNBAN <ip|cidr>`
+
+## Restart And Remerge
+
+The master persists VFS state to `userdata/vfs.dat`.
+
+On a normal master restart, the first reconnect from a slave with cached VFS
+entries now reuses that cached tree instead of immediately forcing a full
+startup remerge. Later reconnects in the same runtime still use normal remerge
+behavior.
+
+If `master.remerge_checksums: true`, remerge only asks slaves for CRCs when the
+current VFS entry does not already have a stored checksum. Unchanged files with
+preserved checksum state should not be re-CRC'd just because the master was
+restarted.
 
 ## ACL Rules
 
@@ -254,6 +282,8 @@ policy and the daemon checks ownership before allowing the action.
 - Transfer commands: `PASV`, `PORT`, `PRET`, `STOR`, `RETR`, `REST`, `ABOR`.
 - Listings: `LIST`, `MLSD`, `MLST`.
 - CRC/SFV verification is done during upload.
+- Successful transfer-checksum chatter is suppressed on the control channel;
+  only mismatch warnings are still emitted there.
 - Existing-file overwrite protection still applies, including paths marked
   `nodupecheck`.
 - User records support flags, groups, IP masks, credits, ratios, and password
