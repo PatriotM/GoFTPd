@@ -229,13 +229,13 @@ func (c *Config) Validate() error {
 		errs = append(errs, "mode must be \"master\" or \"slave\"")
 	}
 
-	if strings.TrimSpace(c.StoragePath) == "" {
-		errs = append(errs, "storage_path must not be empty")
-	}
-	if strings.TrimSpace(c.ACLBasePath) == "" {
-		errs = append(errs, "acl_base_path must not be empty")
-	}
 	if mode == "master" {
+		if strings.TrimSpace(c.StoragePath) == "" {
+			errs = append(errs, "storage_path must not be empty in master mode")
+		}
+		if strings.TrimSpace(c.ACLBasePath) == "" {
+			errs = append(errs, "acl_base_path must not be empty in master mode")
+		}
 		if c.ListenPort < 1 || c.ListenPort > 65535 {
 			errs = append(errs, "listen_port must be between 1 and 65535 in master mode")
 		}
@@ -293,6 +293,9 @@ func (c *Config) Validate() error {
 		if port, err := mapIntValue(c.Slave, "master_port", 1099); err != nil || port < 1 || port > 65535 {
 			errs = append(errs, "slave.master_port must be between 1 and 65535")
 		}
+		if roots, ok := mapStringSliceValue(c.Slave, "roots"); !ok || len(roots) == 0 {
+			errs = append(errs, "slave.roots must contain at least one path in slave mode")
+		}
 	}
 
 	if len(errs) == 0 {
@@ -334,6 +337,42 @@ func mapIntValue(m map[string]interface{}, key string, def int) (int, error) {
 		return int(v), nil
 	default:
 		return 0, fmt.Errorf("%s is not an integer", key)
+	}
+}
+
+func mapStringSliceValue(m map[string]interface{}, key string) ([]string, bool) {
+	if m == nil {
+		return nil, false
+	}
+	raw, ok := m[key]
+	if !ok {
+		return nil, false
+	}
+	switch v := raw.(type) {
+	case []string:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			item = strings.TrimSpace(item)
+			if item != "" {
+				out = append(out, item)
+			}
+		}
+		return out, true
+	case []interface{}:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			s, ok := item.(string)
+			if !ok {
+				continue
+			}
+			s = strings.TrimSpace(s)
+			if s != "" {
+				out = append(out, s)
+			}
+		}
+		return out, true
+	default:
+		return nil, false
 	}
 }
 

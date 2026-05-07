@@ -46,7 +46,6 @@ func main() {
 	if err := timeutil.Set(cfg.Timezone); err != nil {
 		log.Fatalf("Invalid timezone %q in etc/config.yml: %v", cfg.Timezone, err)
 	}
-
 	// 1a. Install logging early. File logs always keep the full stream when
 	// log_file is set. Console stays full in debug mode, otherwise it is
 	// filtered down to warnings/errors.
@@ -504,10 +503,6 @@ func startSlave(cfg *core.Config) {
 			}
 		}
 	}
-	if len(roots) == 0 && cfg.StoragePath != "" {
-		roots = []string{cfg.StoragePath}
-	}
-
 	pasvMin := intFromCfg(slaveCfg, "pasv_port_min", 0)
 	pasvMax := intFromCfg(slaveCfg, "pasv_port_max", 0)
 	bindIP, _ := slaveCfg["bind_ip"].(string)
