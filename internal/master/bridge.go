@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"goftpd/internal/core"
@@ -25,9 +26,31 @@ import (
 type Bridge struct {
 	sm     *SlaveManager
 	raceDB *RaceDB
+
+	cacheMu                sync.Mutex
+	readFileCache          map[string]cachedReadFileResult
+	liveTransferStatsCache []core.LiveTransferStat
+	liveTransferStatsAt    time.Time
+}
+
+func configureBridgeDataSocket(conn net.Conn) {
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		_ = tcpConn.SetNoDelay(true)
+	}
+}
+
+type cachedReadFileResult struct {
+	content []byte
+	errText string
+	expires time.Time
 }
 
 var zipPayloadNameRE = regexp.MustCompile(`(?i)\.(zip|z\d\d)$`)
+
+const (
+	readFileCacheTTL          = 2 * time.Second
+	liveTransferStatsCacheTTL = 1 * time.Second
+)
 
 func isZipMainArchivePath(filePath string) bool {
 	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(path.Base(filePath))), ".zip")
@@ -35,7 +58,10 @@ func isZipMainArchivePath(filePath string) bool {
 
 // NewBridge creates a new Bridge adapter.
 func NewBridge(sm *SlaveManager) *Bridge {
-	b := &Bridge{sm: sm}
+	b := &Bridge{
+		sm:            sm,
+		readFileCache: make(map[string]cachedReadFileResult),
+	}
 	rdb, err := NewRaceDB("userdata/race.db")
 	if err != nil {
 		log.Printf("[Bridge] Race DB disabled: %v", err)
@@ -57,6 +83,23 @@ func (b *Bridge) StartRemergeAll() (int, []string) {
 }
 
 func (b *Bridge) GetLiveTransferStats() []core.LiveTransferStat {
+	return b.getLiveTransferStats(true)
+}
+
+func (b *Bridge) getLiveTransferStats(useCache bool) []core.LiveTransferStat {
+	if b == nil {
+		return nil
+	}
+	if useCache {
+		b.cacheMu.Lock()
+		if !b.liveTransferStatsAt.IsZero() && time.Since(b.liveTransferStatsAt) < liveTransferStatsCacheTTL {
+			cached := append([]core.LiveTransferStat(nil), b.liveTransferStatsCache...)
+			b.cacheMu.Unlock()
+			return cached
+		}
+		b.cacheMu.Unlock()
+	}
+
 	var out []core.LiveTransferStat
 	for _, slave := range b.sm.GetAllSlaves() {
 		if slave == nil || !slave.IsOnline() {
@@ -100,6 +143,10 @@ func (b *Bridge) GetLiveTransferStats() []core.LiveTransferStat {
 			})
 		}
 	}
+	b.cacheMu.Lock()
+	b.liveTransferStatsCache = append([]core.LiveTransferStat(nil), out...)
+	b.liveTransferStatsAt = time.Now()
+	b.cacheMu.Unlock()
 	return out
 }
 
@@ -324,6 +371,7 @@ func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group s
 	if err != nil {
 		return 0, 0, fmt.Errorf("connect to slave data port: %w", err)
 	}
+	configureBridgeDataSocket(slaveConn)
 
 	// Tell slave to receive the file
 	recvIdx, err := IssueReceive(slave, filePath, transferType, position, "master",
@@ -443,6 +491,7 @@ func (b *Bridge) DownloadFile(filePath string, clientData net.Conn, position int
 	if err != nil {
 		return 0, fmt.Errorf("connect to slave data port: %w", err)
 	}
+	configureBridgeDataSocket(slaveConn)
 
 	// Tell slave to send the file
 	sendIdx, err := IssueSend(slave, filePath, transferType, position, "master",
@@ -504,6 +553,7 @@ func (b *Bridge) DeleteFile(filePath string) error {
 			log.Printf("[Bridge] Race DB delete sync failed for %s: %v", filePath, derr)
 		}
 	}
+	b.invalidateReadFileCache(filePath)
 	return nil
 }
 
@@ -998,6 +1048,19 @@ func (b *Bridge) GetKnownChecksum(filePath string) (uint32, bool) {
 
 // ReadFile reads a small file from a slave (for .message/.imdb display).
 func (b *Bridge) ReadFile(filePath string) ([]byte, error) {
+	filePath = filepath.ToSlash(filepath.Clean(filePath))
+	b.cacheMu.Lock()
+	if cached, ok := b.readFileCache[filePath]; ok && time.Now().Before(cached.expires) {
+		content := append([]byte(nil), cached.content...)
+		errText := cached.errText
+		b.cacheMu.Unlock()
+		if errText != "" {
+			return nil, fmt.Errorf("%s", errText)
+		}
+		return content, nil
+	}
+	b.cacheMu.Unlock()
+
 	candidates, candidateErr := b.candidateSlavesForPath(filePath)
 	if candidateErr != nil {
 		return nil, candidateErr
@@ -1020,14 +1083,18 @@ func (b *Bridge) ReadFile(filePath string) ([]byte, error) {
 			continue
 		}
 		if fc, ok := resp.(*protocol.AsyncResponseFileContent); ok {
+			b.cacheReadFileResult(filePath, fc.Content, nil)
 			return fc.Content, nil
 		}
 		lastErr = fmt.Errorf("%s: unexpected response type: %T", slave.Name(), resp)
 	}
 	if lastErr != nil {
+		b.cacheReadFileResult(filePath, nil, lastErr)
 		return nil, lastErr
 	}
-	return nil, fmt.Errorf("file not found: %s", filePath)
+	err := fmt.Errorf("file not found: %s", filePath)
+	b.cacheReadFileResult(filePath, nil, err)
+	return nil, err
 }
 
 func (b *Bridge) ReadZipEntry(archivePath, entryName string) ([]byte, error) {
@@ -1203,8 +1270,38 @@ func (b *Bridge) WriteFile(filePath string, content []byte) error {
 		LastModified: time.Now().Unix(),
 		SlaveName:    slave.Name(),
 	})
+	b.cacheReadFileResult(filePath, content, nil)
 
 	return nil
+}
+
+func (b *Bridge) cacheReadFileResult(filePath string, content []byte, err error) {
+	if b == nil {
+		return
+	}
+	cached := cachedReadFileResult{
+		content: append([]byte(nil), content...),
+		expires: time.Now().Add(readFileCacheTTL),
+	}
+	if err != nil {
+		cached.errText = err.Error()
+	}
+	b.cacheMu.Lock()
+	if b.readFileCache == nil {
+		b.readFileCache = make(map[string]cachedReadFileResult)
+	}
+	b.readFileCache[filePath] = cached
+	b.cacheMu.Unlock()
+}
+
+func (b *Bridge) invalidateReadFileCache(filePath string) {
+	if b == nil {
+		return
+	}
+	filePath = filepath.ToSlash(filepath.Clean(filePath))
+	b.cacheMu.Lock()
+	delete(b.readFileCache, filePath)
+	b.cacheMu.Unlock()
 }
 
 func (b *Bridge) CreateSparseFile(filePath string, size int64, owner, group string) error {
@@ -1547,13 +1644,46 @@ func (b *Bridge) GetVFSRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFS
 	return coreUsers, coreGroups, totalBytes, present, total
 }
 
+func (b *Bridge) GetVFSRaceStatsFresh(dirPath string) ([]core.VFSRaceUser, []core.VFSRaceGroup, int64, int, int) {
+	cleanDirPath := filepath.Clean(dirPath)
+	excludeKeys := b.liveUploadingRaceKeysForDirFresh(cleanDirPath)
+	users, groups, totalBytes, present, total := b.sm.GetVFS().GetRaceStatsFiltered(dirPath, excludeKeys)
+
+	coreUsers := make([]core.VFSRaceUser, len(users))
+	for i, u := range users {
+		coreUsers[i] = core.VFSRaceUser{
+			Name:       u.Name,
+			Group:      u.Group,
+			Files:      u.Files,
+			Bytes:      u.Bytes,
+			Speed:      u.Speed,
+			PeakSpeed:  u.PeakSpeed,
+			SlowSpeed:  u.SlowSpeed,
+			Percent:    u.Percent,
+			DurationMs: u.DurationMs,
+		}
+	}
+	coreGroups := make([]core.VFSRaceGroup, len(groups))
+	for i, g := range groups {
+		coreGroups[i] = core.VFSRaceGroup{
+			Name:    g.Name,
+			Files:   g.Files,
+			Bytes:   g.Bytes,
+			Speed:   g.Speed,
+			Percent: g.Percent,
+		}
+	}
+
+	return coreUsers, coreGroups, totalBytes, present, total
+}
+
 func (b *Bridge) GetImmediateReleaseProgress(dirPath string) map[string]core.ReleaseProgressStat {
 	if b == nil || b.sm == nil {
 		return nil
 	}
 	cleanDirPath := filepath.Clean(dirPath)
 	if out := b.sm.GetVFS().GetImmediateChildDirProgress(cleanDirPath); len(out) > 0 {
-		uploadsByDir := b.liveUploadingRaceKeysByDir(cleanDirPath)
+		uploadsByDir := b.liveUploadingRaceKeysByDir(cleanDirPath, false)
 		for childPath, excludeKeys := range uploadsByDir {
 			stat, ok := out[childPath]
 			if !ok {
@@ -1637,18 +1767,23 @@ func (b *Bridge) GetVerifiedSFVPresentFiles(dirPath string) map[string]bool {
 }
 
 func (b *Bridge) liveUploadingRaceKeysForDir(dirPath string) map[string]bool {
-	byDir := b.liveUploadingRaceKeysByDir(filepath.Clean(dirPath))
+	byDir := b.liveUploadingRaceKeysByDir(filepath.Clean(dirPath), true)
 	return byDir[filepath.Clean(dirPath)]
 }
 
-func (b *Bridge) liveUploadingRaceKeysByDir(rootDir string) map[string]map[string]bool {
+func (b *Bridge) liveUploadingRaceKeysForDirFresh(dirPath string) map[string]bool {
+	byDir := b.liveUploadingRaceKeysByDir(filepath.Clean(dirPath), false)
+	return byDir[filepath.Clean(dirPath)]
+}
+
+func (b *Bridge) liveUploadingRaceKeysByDir(rootDir string, useCache bool) map[string]map[string]bool {
 	if b == nil {
 		return nil
 	}
 	rootDir = filepath.Clean(rootDir)
 	rootPrefix := strings.TrimRight(filepath.ToSlash(rootDir), "/") + "/"
 	out := make(map[string]map[string]bool)
-	for _, stat := range b.GetLiveTransferStats() {
+	for _, stat := range b.getLiveTransferStats(useCache) {
 		if stat.Direction != "upload" {
 			continue
 		}

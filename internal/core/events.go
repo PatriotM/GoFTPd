@@ -637,7 +637,7 @@ func userTransferStatsBytes(command string, u *user.User) int64 {
 }
 
 func markRaceCompleteOnce(dirPath string, totalBytes int64, total int) bool {
-	key := path.Clean(dirPath)
+	key := fmt.Sprintf("%s|%d|%d", path.Clean(dirPath), total, totalBytes)
 	now := time.Now()
 
 	completedRaceMu.Lock()

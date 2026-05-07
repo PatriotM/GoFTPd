@@ -34,6 +34,10 @@ type MasterTransferState struct {
 	TransferIndex int32
 	IsPASV        bool
 	IsUpload      bool // true = STOR, false = RETR
+	TransferType  byte
+	ResumeOffset  int64
+	Encrypted     bool
+	SSLClientMode bool
 }
 
 // SetupPASVForUpload selects a slave and tells it to listen.
@@ -62,10 +66,13 @@ func (sm *SlaveManager) SetupPASVForUpload(filePath string) (*MasterTransferStat
 		return nil, "", 0, fmt.Errorf("unexpected response type from slave")
 	}
 
-	rt := NewRemoteTransfer(transferResp.Info, slave)
+	rt, ok := slave.GetTransfer(transferResp.Info.TransferIndex)
+	if !ok || rt == nil {
+		rt = NewRemoteTransfer(transferResp.Info, slave)
+		slave.AddTransfer(transferResp.Info.TransferIndex, rt)
+	}
 	rt.SetPath(filePath)
 	rt.SetDirection('R')
-	slave.AddTransfer(transferResp.Info.TransferIndex, rt)
 
 	state := &MasterTransferState{
 		Slave:         slave,
@@ -73,6 +80,7 @@ func (sm *SlaveManager) SetupPASVForUpload(filePath string) (*MasterTransferStat
 		TransferIndex: transferResp.Info.TransferIndex,
 		IsPASV:        true,
 		IsUpload:      true,
+		TransferType:  'I',
 	}
 
 	ip := slave.GetPASVIP()
@@ -106,10 +114,13 @@ func (sm *SlaveManager) SetupPASVForDownload(filePath string) (*MasterTransferSt
 		return nil, "", 0, fmt.Errorf("unexpected response type from slave")
 	}
 
-	rt := NewRemoteTransfer(transferResp.Info, slave)
+	rt, ok := slave.GetTransfer(transferResp.Info.TransferIndex)
+	if !ok || rt == nil {
+		rt = NewRemoteTransfer(transferResp.Info, slave)
+		slave.AddTransfer(transferResp.Info.TransferIndex, rt)
+	}
 	rt.SetPath(filePath)
 	rt.SetDirection('S')
-	slave.AddTransfer(transferResp.Info.TransferIndex, rt)
 
 	state := &MasterTransferState{
 		Slave:         slave,
@@ -117,6 +128,7 @@ func (sm *SlaveManager) SetupPASVForDownload(filePath string) (*MasterTransferSt
 		TransferIndex: transferResp.Info.TransferIndex,
 		IsPASV:        true,
 		IsUpload:      false,
+		TransferType:  'I',
 	}
 
 	ip := slave.GetPASVIP()
@@ -134,8 +146,8 @@ func (sm *SlaveManager) ExecuteUpload(state *MasterTransferState, clientAddr str
 	index, err := IssueReceive(
 		state.Slave,
 		state.Transfer.GetPath(),
-		'I', // binary
-		0,   // position
+		normalizeLegacyTransferType(state.TransferType),
+		state.ResumeOffset,
 		clientAddr,
 		state.TransferIndex,
 		0, 0, // min/max speed
@@ -163,8 +175,8 @@ func (sm *SlaveManager) ExecuteDownload(state *MasterTransferState, clientAddr s
 	index, err := IssueSend(
 		state.Slave,
 		state.Transfer.GetPath(),
-		'I', // binary
-		0,   // position
+		normalizeLegacyTransferType(state.TransferType),
+		state.ResumeOffset,
 		clientAddr,
 		state.TransferIndex,
 		0, 0, // min/max speed
@@ -184,22 +196,23 @@ func (sm *SlaveManager) ExecuteDownload(state *MasterTransferState, clientAddr s
 
 // WaitForTransferComplete blocks until the transfer finishes or times out.
 func (sm *SlaveManager) WaitForTransferComplete(state *MasterTransferState, timeout time.Duration) (*protocol.TransferStatus, error) {
-	deadline := time.After(timeout)
+	status, err := state.Slave.WaitTransferStatus(state.TransferIndex, timeout)
+	if err != nil {
+		state.Transfer.Abort("timeout")
+		return nil, err
+	}
+	if status.Error != "" {
+		return &status, fmt.Errorf("transfer error: %s", status.Error)
+	}
+	return &status, nil
+}
 
-	for {
-		select {
-		case <-deadline:
-			state.Transfer.Abort("timeout")
-			return nil, fmt.Errorf("transfer timeout")
-		case <-time.After(500 * time.Millisecond):
-			if state.Transfer.IsFinished() {
-				status := state.Transfer.GetStatus()
-				if status.Error != "" {
-					return &status, fmt.Errorf("transfer error: %s", status.Error)
-				}
-				return &status, nil
-			}
-		}
+func normalizeLegacyTransferType(transferType byte) byte {
+	switch transferType {
+	case 'A', 'I':
+		return transferType
+	default:
+		return 'I'
 	}
 }
 

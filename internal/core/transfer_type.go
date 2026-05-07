@@ -1,6 +1,8 @@
 package core
 
-import "strings"
+import (
+	"strings"
+)
 
 func transferTypeReplyName(transferType string) string {
 	if strings.EqualFold(strings.TrimSpace(transferType), "A") {

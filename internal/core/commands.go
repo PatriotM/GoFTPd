@@ -114,7 +114,8 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			return false
 		}
 		if len(args) == 0 {
-			fmt.Fprintf(s.Conn, "501 Syntax error\r\n")
+			s.DataTLS = false
+			fmt.Fprintf(s.Conn, "200 Command OK\r\n")
 			return false
 		}
 		if len(strings.TrimSpace(args[0])) != 1 {
@@ -142,11 +143,17 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			fmt.Fprintf(s.Conn, "500 SSCN only works for encrypted transfers\r\n")
 			return false
 		}
-		if len(args) > 0 && strings.ToUpper(args[0]) == "ON" {
-			s.SSCN = true
+		if len(args) > 0 {
+			switch strings.ToUpper(args[0]) {
+			case "ON":
+				s.SSCN = true
+			case "OFF":
+				s.SSCN = false
+			}
+		}
+		if s.SSCN {
 			fmt.Fprintf(s.Conn, "220 SSCN:CLIENT METHOD\r\n")
 		} else {
-			s.SSCN = false
 			fmt.Fprintf(s.Conn, "220 SSCN:SERVER METHOD\r\n")
 		}
 
@@ -164,10 +171,10 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			return false
 		}
 		if !hasPretForPassive(s) {
+			s.clearPreparedTransferState()
 			fmt.Fprintf(s.Conn, "500 You need to use a client supporting PRET (PRE Transfer) to use PASV\r\n")
 			return false
 		}
-		s.SSCN = true
 
 		if s.Config.Passthrough && s.Config.Mode == "master" && s.MasterManager != nil {
 			if bridge, ok := s.MasterManager.(MasterBridge); ok {
@@ -225,6 +232,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		}
 		s.DataListen = l
 		s.PassthruSlave = nil
+		s.nextDataTLSClientMode = true
 		ip, err := ftpPassiveIPv4(s.Config.PublicIP)
 		if err != nil {
 			fmt.Fprintf(s.Conn, "500 Invalid passive address configuration.\r\n")
@@ -820,6 +828,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		}
 		s.clearActiveTransferSetup()
 		if !hasPretForPassive(s) {
+			s.clearPreparedTransferState()
 			fmt.Fprintf(s.Conn, "500 You need to use a client supporting PRET (PRE Transfer) to use PASV\r\n")
 			return false
 		}
@@ -886,6 +895,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		s.DataListen = l
 		s.PassthruSlave = nil
 		s.PassthruXferIdx = 0
+		s.nextDataTLSClientMode = false
 		ip, err := ftpPassiveIPv4(s.Config.PublicIP)
 		if err != nil {
 			fmt.Fprintf(s.Conn, "500 Invalid passive address configuration.\r\n")
@@ -1581,10 +1591,14 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				_ = xferMs
 
 				if err != nil {
+					if writeDuplicateUploadResponse(s, bridge, uploadDir, fileName, err) {
+						return false
+					}
 					log.Printf("[Passthrough] PORT upload failed: %v", err)
 					writeTransferFailure(s.Conn, "Upload", err)
 					return false
 				}
+				s.endTransfer()
 
 				if fileSize == 0 && zipscript.ShouldDeleteZeroByteForDir(s.Config.Zipscript, uploadDir) {
 					bridge.DeleteFile(filePath)
@@ -1670,6 +1684,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					}
 				}
 				raceUsers, raceTotalBytes, raceTotalFiles, raceComplete := populateUploadRaceData(bridge, s.Config, uploadDir, fileName, fileSize, data)
+				enrichUploadRaceUserData(data, raceUsers, s.User.Name)
 				s.emitEvent(EventUpload, filePath, fileName, transferredBytes, speedMB, data)
 				if shouldAnnounceNoRace(s.Config, uploadDir, existingNames, fileName) && zipscript.RaceStatsOnSTORForDir(s.Config.Zipscript, uploadDir) {
 					go emitRaceEndAfter(s, uploadDir, nil, fileSize, 1, xferMs, 0)
@@ -1725,6 +1740,9 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					s.PretArg = ""
 
 					if err != nil {
+						if writeDuplicateUploadResponse(s, bridge, uploadDir, fileName, err) {
+							return false
+						}
 						log.Printf("[Passthrough] Upload failed: %v", err)
 						writeTransferFailure(s.Conn, "Upload", err)
 						return false
@@ -1751,6 +1769,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						return false
 					}
 				}
+				s.endTransfer()
 
 				if fileSize == 0 && zipscript.ShouldDeleteZeroByteForDir(s.Config.Zipscript, uploadDir) {
 					bridge.DeleteFile(filePath)
@@ -1836,6 +1855,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					}
 				}
 				raceUsers, raceTotalBytes, raceTotalFiles, raceComplete := populateUploadRaceData(bridge, s.Config, uploadDir, fileName, fileSize, data)
+				enrichUploadRaceUserData(data, raceUsers, s.User.Name)
 				s.emitEvent(EventUpload, filePath, fileName, transferredBytes, speedMB, data)
 				if shouldAnnounceNoRace(s.Config, uploadDir, existingNames, fileName) && zipscript.RaceStatsOnSTORForDir(s.Config.Zipscript, uploadDir) {
 					go emitRaceEndAfter(s, uploadDir, nil, fileSize, 1, xferMs, 0)
@@ -1949,6 +1969,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			writeTransferFailure(s.Conn, "Upload", err)
 			return false
 		}
+		s.endTransfer()
 		if checksumHash != nil {
 			checksum = checksumHash.Sum32()
 		}
@@ -2280,7 +2301,8 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			checksumHash = crc32.NewIEEE()
 			reader = io.TeeReader(file, checksumHash)
 		}
-		_, err = io.Copy(dataConn, reader)
+		var out io.Writer = dataConn
+		_, err = io.Copy(out, reader)
 		xferMs := time.Since(start).Milliseconds()
 		dataConn.Close()
 		if err != nil {
@@ -3168,6 +3190,29 @@ func xdupeResponseLines(mode int, names []string) []string {
 	}
 }
 
+func isDuplicateUploadErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.HasPrefix(msg, "file ") && strings.HasSuffix(msg, " exists")
+}
+
+func writeDuplicateUploadResponse(s *Session, bridge MasterBridge, uploadDir, fileName string, err error) bool {
+	if s == nil || s.Conn == nil || bridge == nil || !isDuplicateUploadErr(err) {
+		return false
+	}
+	if s.Config != nil && s.Config.XdupeEnabled {
+		for _, line := range xdupeResponseLines(s.XDupeMode, existingFileNamesForXDupe(bridge.ListDir(uploadDir))) {
+			fmt.Fprintf(s.Conn, "553-%s\r\n", line)
+		}
+		fmt.Fprintf(s.Conn, "553 %s: file already exists (X-DUPE)\r\n", fileName)
+		return true
+	}
+	fmt.Fprintf(s.Conn, "553 %s: file already exists\r\n", fileName)
+	return true
+}
+
 func activeIncompleteIndicator(cfg *Config) string {
 	if cfg == nil {
 		return ""
@@ -3947,6 +3992,10 @@ func zipDirComplete(bridge MasterBridge, dirPath string, entries []MasterFileEnt
 }
 
 func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName string, fileSize int64, data map[string]string) ([]VFSRaceUser, int64, int, bool) {
+	type freshRaceStatsBridge interface {
+		GetVFSRaceStatsFresh(dirPath string) (users []VFSRaceUser, groups []VFSRaceGroup, totalBytes int64, present int, total int)
+	}
+
 	sfvEntries := bridge.GetSFVData(dirPath)
 	isTrackedPayload := zipscript.IsRacePayloadFileForDir(cfg.Zipscript, dirPath, fileName)
 	if sfvEntries != nil {
@@ -3998,6 +4047,9 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 	}
 	if sfvEntries != nil {
 		users, _, totalBytes, present, total := bridge.GetVFSRaceStats(dirPath)
+		if freshBridge, ok := bridge.(freshRaceStatsBridge); ok {
+			users, _, totalBytes, present, total = freshBridge.GetVFSRaceStatsFresh(dirPath)
+		}
 		if total > 0 {
 			data["relname"] = path.Base(dirPath)
 			data["t_files"] = fmt.Sprintf("%d", total)
@@ -4021,6 +4073,25 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 		}
 	}
 	return nil, 0, 0, false
+}
+
+func enrichUploadRaceUserData(data map[string]string, users []VFSRaceUser, username string) {
+	if data == nil || len(users) == 0 || strings.TrimSpace(username) == "" {
+		return
+	}
+	for _, u := range users {
+		if !strings.EqualFold(strings.TrimSpace(u.Name), strings.TrimSpace(username)) {
+			continue
+		}
+		data["u_race_speed"] = fmt.Sprintf("%.2fMB/s", userDisplaySpeed(u)/1024.0/1024.0)
+		data["u_race_files"] = fmt.Sprintf("%d", u.Files)
+		data["u_race_mb"] = fmt.Sprintf("%.1f", float64(u.Bytes)/1024.0/1024.0)
+		data["u_race_pct"] = fmt.Sprintf("%d", u.Percent)
+		if strings.TrimSpace(data["u_group"]) == "" && strings.TrimSpace(u.Group) != "" {
+			data["u_group"] = u.Group
+		}
+		return
+	}
 }
 
 func shouldEmitZipRaceEnd(cfg *Config, dirPath, fileName string) bool {

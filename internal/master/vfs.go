@@ -54,6 +54,11 @@ type VFSSearchResult struct {
 	ModTime int64
 }
 
+type vfsSnapshot struct {
+	Files   map[string]*VFSFile
+	DirMeta map[string]*VFSDirMeta
+}
+
 // VirtualFileSystem maintains the master's view of files across all slaves.
 //
 //	/ VirtualFileSystemDirectory.
@@ -905,13 +910,36 @@ func (vfs *VirtualFileSystem) SaveToDisk(filePath string) error {
 		vfs.mu.RUnlock()
 		return nil
 	}
-	snapshot := make(map[string]*VFSFile, len(vfs.files))
+	snapshot := vfsSnapshot{
+		Files:   make(map[string]*VFSFile, len(vfs.files)),
+		DirMeta: make(map[string]*VFSDirMeta, len(vfs.dirMeta)),
+	}
 	for path, file := range vfs.files {
 		if file == nil {
 			continue
 		}
 		copyFile := *file
-		snapshot[path] = &copyFile
+		snapshot.Files[path] = &copyFile
+	}
+	for dirPath, meta := range vfs.dirMeta {
+		if meta == nil {
+			continue
+		}
+		copyMeta := &VFSDirMeta{}
+		if len(meta.SFVEntries) > 0 {
+			copyMeta.SFVEntries = make(map[string]uint32, len(meta.SFVEntries))
+			for name, crc := range meta.SFVEntries {
+				copyMeta.SFVEntries[name] = crc
+			}
+		}
+		copyMeta.SFVName = meta.SFVName
+		if len(meta.MediaInfo) > 0 {
+			copyMeta.MediaInfo = make(map[string]string, len(meta.MediaInfo))
+			for key, value := range meta.MediaInfo {
+				copyMeta.MediaInfo[key] = value
+			}
+		}
+		snapshot.DirMeta[dirPath] = copyMeta
 	}
 	vfs.mu.RUnlock()
 
@@ -945,7 +973,7 @@ func (vfs *VirtualFileSystem) SaveToDisk(filePath string) error {
 	}
 	vfs.mu.Unlock()
 
-	log.Printf("[VFS] Saved %d entries to %s", len(snapshot), filePath)
+	log.Printf("[VFS] Saved %d entries to %s", len(snapshot.Files), filePath)
 	return nil
 }
 
@@ -966,13 +994,33 @@ func (vfs *VirtualFileSystem) LoadFromDisk(filePath string) error {
 	defer vfs.mu.Unlock()
 
 	dec := gob.NewDecoder(f)
-	if err := dec.Decode(&vfs.files); err != nil {
-		return fmt.Errorf("decode vfs: %w", err)
+	var snapshot vfsSnapshot
+	if err := dec.Decode(&snapshot); err != nil {
+		if _, seekErr := f.Seek(0, 0); seekErr != nil {
+			return fmt.Errorf("decode vfs: %w", err)
+		}
+		dec = gob.NewDecoder(f)
+		var legacyFiles map[string]*VFSFile
+		if legacyErr := dec.Decode(&legacyFiles); legacyErr != nil {
+			return fmt.Errorf("decode vfs: %w", err)
+		}
+		vfs.files = legacyFiles
+		vfs.dirMeta = make(map[string]*VFSDirMeta)
+	} else {
+		vfs.files = snapshot.Files
+		if snapshot.DirMeta != nil {
+			vfs.dirMeta = snapshot.DirMeta
+		} else {
+			vfs.dirMeta = make(map[string]*VFSDirMeta)
+		}
 	}
 
 	// Ensure root exists
 	if _, ok := vfs.files["/"]; !ok {
 		vfs.files["/"] = &VFSFile{Path: "/", IsDir: true, Seen: true}
+	}
+	if vfs.dirMeta == nil {
+		vfs.dirMeta = make(map[string]*VFSDirMeta)
 	}
 	if vfs.protectedDirs == nil {
 		vfs.protectedDirs = make(map[string]bool)

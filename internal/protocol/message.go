@@ -83,6 +83,7 @@ func (ar *AsyncResponseTransfer) GetIndex() string { return ar.Index }
 type ConnectInfo struct {
 	Port          int
 	TransferIndex int32
+	Status        TransferStatus
 }
 
 type AsyncResponseTransferStatus struct {

@@ -582,7 +582,16 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 					}
 					outs = append(outs, plugin.Output{Type: "RACE", Text: p.render(key, vars, fallback)})
 				} else {
-					outs = append(outs, plugin.Output{Type: "RACE", Text: p.render("RACE_RAR", vars, fmt.Sprintf("RACE: [%s] %s%s - %s joined the race at %s.", section, vars["subdir_prefix"], rel, evt.User, speedMB(evt)))})
+					joinVars := map[string]string{}
+					for k, v := range vars {
+						joinVars[k] = v
+					}
+					joinSpeed := strings.TrimSpace(joinVars["u_race_speed"])
+					if joinSpeed == "" {
+						joinSpeed = speedMB(evt)
+					}
+					joinVars["u_speed"] = joinSpeed
+					outs = append(outs, plugin.Output{Type: "RACE", Text: p.render("RACE_RAR", joinVars, fmt.Sprintf("RACE: [%s] %s%s - %s joined the race at %s.", section, vars["subdir_prefix"], rel, evt.User, joinSpeed))})
 				}
 			}
 			// NEW LEADER: announce when the leading user changes (skip single-user races)
