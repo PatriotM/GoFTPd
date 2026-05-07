@@ -69,6 +69,8 @@ type SlaveManager struct {
 	remergeResumeAt atomic.Int64
 
 	enableRemergeChecksums atomic.Bool
+
+	startupCachedSlaves sync.Map
 }
 
 type slaveAuthState struct {
@@ -334,6 +336,9 @@ func (sm *SlaveManager) getPolicy(name string) (SlaveRoutePolicy, bool) {
 func (sm *SlaveManager) Start() error {
 	// Load saved VFS from disk (if exists)
 	sm.vfs.LoadFromDisk(vfsFilePath)
+	for _, slaveName := range sm.vfs.SlaveNames() {
+		sm.startupCachedSlaves.Store(slaveName, struct{}{})
+	}
 
 	var listener net.Listener
 	var err error
@@ -767,6 +772,15 @@ func splitRemoteAddr(addr net.Addr) (ip string, raw string) {
 func (sm *SlaveManager) initializeSlaveAfterConnect(rs *RemoteSlave) {
 	mode := sm.GetRemergeMode()
 	instantOnline := mode == "instant"
+	if _, useCachedVFS := sm.startupCachedSlaves.LoadAndDelete(rs.name); useCachedVFS {
+		log.Printf("[SlaveManager] Reusing cached VFS for slave %s on startup; skipping initial remerge", rs.name)
+		rs.remerging.Store(false)
+		rs.SetAvailable(true)
+		sm.publishDiskStatus(rs)
+		sm.ensureBootstrapDirsOnSlave(rs)
+		return
+	}
+
 	log.Printf("[SlaveManager] Starting remerge for slave %s (mode=%s)", rs.name, mode)
 
 	rs.remerging.Store(true)

@@ -2,8 +2,11 @@
 #  GoFTPd configuration — single file used for both master and slave roles.
 #
 #  The `mode:` setting decides which blocks are read. When `mode: master`,
-#  the `slave:` block is ignored (and vice versa). You can keep this same
-#  file on both boxes and just flip `mode:` + fill in the relevant block.
+#  the `slave:` block is ignored. When `mode: slave`, all master-only FTP/site/
+#  plugin settings are ignored and only the shared top-level runtime settings
+#  (for example TLS/logging/debug/timezone) plus the `slave:` block are used.
+#  You can keep this same file on both boxes and just flip `mode:` + fill in
+#  the relevant block.
 # =============================================================================
 
 
@@ -65,13 +68,15 @@ master:
 
 # =============================================================================
 #  Slave block — used when mode: slave
-#  On a master-only box, you can leave this with placeholder values.
+#  This is the only role-specific block a slave needs. On a master-only box,
+#  you can leave this with placeholder values.
 # =============================================================================
 slave:
   name:          ""             # Unique slave identifier — MUST match an entry in `slaves:` below
   master_host:   ""             # IP or hostname of the master
   master_port:   1099           # Must match master's control_port
-  roots:         []             # List of root dirs this slave serves, e.g. ["/data/site"]
+  roots:         []             # REQUIRED in slave mode. List of root dirs this slave serves.
+                                # Example: ["/slave1/site"]
   pasv_port_min: 30000          # Passive-port range for client→slave data transfers
   pasv_port_max: 35000
   bind_ip:       ""             # Public IP advertised in PASV responses from this slave.

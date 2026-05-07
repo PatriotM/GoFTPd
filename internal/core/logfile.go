@@ -165,16 +165,23 @@ func shouldWriteConsoleLog(p []byte) bool {
 	line := strings.ToLower(string(p))
 	allowMarkers := []string{
 		"[startup]",
-		"[master]",
-		"[slavemanager]",
-		"[slave]",
 		"[plugins] plugin loaded:",
 		"[plugins] plugin load complete",
+		"[plugins] all plugins initialized",
 		"listening on port",
+		"listening for slaves on",
 		"waiting for slaves",
-		"connected from",
 		"[rehash]",
+		"connected to master",
+		"registered as '",
+		" connected from ",
+		"reusing cached vfs for slave",
+		"slave mode [name=",
 		"starting goftpd",
+		"shutting down",
+		"going offline",
+		"reconnecting to master in",
+		"no saved vfs at",
 	}
 	for _, marker := range allowMarkers {
 		if strings.Contains(line, marker) {
