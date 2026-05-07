@@ -1684,6 +1684,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					}
 				}
 				raceUsers, raceTotalBytes, raceTotalFiles, raceComplete := populateUploadRaceData(bridge, s.Config, uploadDir, fileName, fileSize, data)
+				enrichUploadRaceUserData(data, raceUsers, s.User.Name)
 				s.emitEvent(EventUpload, filePath, fileName, transferredBytes, speedMB, data)
 				if shouldAnnounceNoRace(s.Config, uploadDir, existingNames, fileName) && zipscript.RaceStatsOnSTORForDir(s.Config.Zipscript, uploadDir) {
 					go emitRaceEndAfter(s, uploadDir, nil, fileSize, 1, xferMs, 0)
@@ -1854,6 +1855,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					}
 				}
 				raceUsers, raceTotalBytes, raceTotalFiles, raceComplete := populateUploadRaceData(bridge, s.Config, uploadDir, fileName, fileSize, data)
+				enrichUploadRaceUserData(data, raceUsers, s.User.Name)
 				s.emitEvent(EventUpload, filePath, fileName, transferredBytes, speedMB, data)
 				if shouldAnnounceNoRace(s.Config, uploadDir, existingNames, fileName) && zipscript.RaceStatsOnSTORForDir(s.Config.Zipscript, uploadDir) {
 					go emitRaceEndAfter(s, uploadDir, nil, fileSize, 1, xferMs, 0)
@@ -4071,6 +4073,25 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 		}
 	}
 	return nil, 0, 0, false
+}
+
+func enrichUploadRaceUserData(data map[string]string, users []VFSRaceUser, username string) {
+	if data == nil || len(users) == 0 || strings.TrimSpace(username) == "" {
+		return
+	}
+	for _, u := range users {
+		if !strings.EqualFold(strings.TrimSpace(u.Name), strings.TrimSpace(username)) {
+			continue
+		}
+		data["u_race_speed"] = fmt.Sprintf("%.2fMB/s", userDisplaySpeed(u)/1024.0/1024.0)
+		data["u_race_files"] = fmt.Sprintf("%d", u.Files)
+		data["u_race_mb"] = fmt.Sprintf("%.1f", float64(u.Bytes)/1024.0/1024.0)
+		data["u_race_pct"] = fmt.Sprintf("%d", u.Percent)
+		if strings.TrimSpace(data["u_group"]) == "" && strings.TrimSpace(u.Group) != "" {
+			data["u_group"] = u.Group
+		}
+		return
+	}
 }
 
 func shouldEmitZipRaceEnd(cfg *Config, dirPath, fileName string) bool {
