@@ -2016,9 +2016,6 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			log.Printf("[LOCAL-ZS] zip diz refresh skipped for %s: %v", uploadPath, err)
 		}
 
-		if checksum != 0 {
-			fmt.Fprintf(s.Conn, "226- Checksum from transfer: %08X\r\n", checksum)
-		}
 		fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
 		return false
 
@@ -2117,13 +2114,8 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					}
 
 					if restOffset == 0 && transferChecksum != 0 {
-						fmt.Fprintf(s.Conn, "226- Checksum from transfer: %08X\r\n", transferChecksum)
-						if expectedCRC, ok := cachedExpectedCRC(bridge.GetSFVData(path.Dir(filePath)), path.Base(filePath)); ok {
-							if transferChecksum == expectedCRC {
-								fmt.Fprintf(s.Conn, "226- checksum from transfer matched checksum in .sfv\r\n")
-							} else {
-								fmt.Fprintf(s.Conn, "226- WARNING: checksum from transfer didn't match checksum in .sfv\r\n")
-							}
+						if expectedCRC, ok := cachedExpectedCRC(bridge.GetSFVData(path.Dir(filePath)), path.Base(filePath)); ok && transferChecksum != expectedCRC {
+							fmt.Fprintf(s.Conn, "226- WARNING: checksum from transfer didn't match checksum in .sfv\r\n")
 						}
 					}
 					fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
@@ -2155,13 +2147,8 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						writeTransferFailure(s.Conn, "Download", err)
 					} else {
 						if restOffset == 0 && transferChecksum != 0 {
-							fmt.Fprintf(s.Conn, "226- Checksum from transfer: %08X\r\n", transferChecksum)
-							if expectedCRC, ok := cachedExpectedCRC(bridge.GetSFVData(path.Dir(filePath)), path.Base(filePath)); ok {
-								if transferChecksum == expectedCRC {
-									fmt.Fprintf(s.Conn, "226- checksum from transfer matched checksum in .sfv\r\n")
-								} else {
-									fmt.Fprintf(s.Conn, "226- WARNING: checksum from transfer didn't match checksum in .sfv\r\n")
-								}
+							if expectedCRC, ok := cachedExpectedCRC(bridge.GetSFVData(path.Dir(filePath)), path.Base(filePath)); ok && transferChecksum != expectedCRC {
+								fmt.Fprintf(s.Conn, "226- WARNING: checksum from transfer didn't match checksum in .sfv\r\n")
 							}
 						}
 						fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
@@ -2196,13 +2183,8 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						writeTransferFailure(s.Conn, "Download", err)
 					} else {
 						if restOffset == 0 && transferChecksum != 0 {
-							fmt.Fprintf(s.Conn, "226- Checksum from transfer: %08X\r\n", transferChecksum)
-							if expectedCRC, ok := cachedExpectedCRC(bridge.GetSFVData(path.Dir(filePath)), path.Base(filePath)); ok {
-								if transferChecksum == expectedCRC {
-									fmt.Fprintf(s.Conn, "226- checksum from transfer matched checksum in .sfv\r\n")
-								} else {
-									fmt.Fprintf(s.Conn, "226- WARNING: checksum from transfer didn't match checksum in .sfv\r\n")
-								}
+							if expectedCRC, ok := cachedExpectedCRC(bridge.GetSFVData(path.Dir(filePath)), path.Base(filePath)); ok && transferChecksum != expectedCRC {
+								fmt.Fprintf(s.Conn, "226- WARNING: checksum from transfer didn't match checksum in .sfv\r\n")
 							}
 						}
 						fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
@@ -2314,13 +2296,8 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		}
 
 		if restOffset == 0 && transferChecksum != 0 {
-			fmt.Fprintf(s.Conn, "226- Checksum from transfer: %08X\r\n", transferChecksum)
-			if expectedCRC, ok := localExpectedCRCForFile(localPath); ok {
-				if transferChecksum == expectedCRC {
-					fmt.Fprintf(s.Conn, "226- checksum from transfer matched checksum in .sfv\r\n")
-				} else {
-					fmt.Fprintf(s.Conn, "226- WARNING: checksum from transfer didn't match checksum in .sfv\r\n")
-				}
+			if expectedCRC, ok := localExpectedCRCForFile(localPath); ok && transferChecksum != expectedCRC {
+				fmt.Fprintf(s.Conn, "226- WARNING: checksum from transfer didn't match checksum in .sfv\r\n")
 			}
 		}
 		fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
