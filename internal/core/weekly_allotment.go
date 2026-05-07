@@ -1,0 +1,78 @@
+package core
+
+import (
+	"database/sql"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+
+	_ "github.com/mattn/go-sqlite3"
+	"goftpd/internal/user"
+)
+
+var weeklyAllotmentSchema = `
+CREATE TABLE IF NOT EXISTS weekly_allotment (
+	username TEXT PRIMARY KEY,
+	week_key TEXT NOT NULL,
+	applied_at INTEGER NOT NULL
+);
+`
+
+func weeklyAllotmentDBPath() string {
+	return filepath.Join("userdata", "weekly_allotment.db")
+}
+
+func getWeeklyAllotmentDB() (*sql.DB, error) {
+	if err := os.MkdirAll("userdata", 0o755); err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("sqlite3", weeklyAllotmentDBPath())
+	if err != nil {
+		return nil, err
+	}
+	if _, err := db.Exec(weeklyAllotmentSchema); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return db, nil
+}
+
+func currentISOWeekKey(now time.Time) string {
+	year, week := now.ISOWeek()
+	return fmt.Sprintf("%04d-%02d", year, week)
+}
+
+func applyWeeklyAllotmentIfDue(u *user.User, now time.Time) error {
+	if u == nil || u.WeeklyAllotment <= 0 {
+		return nil
+	}
+	db, err := getWeeklyAllotmentDB()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	weekKey := currentISOWeekKey(now)
+	var existing string
+	err = db.QueryRow(`SELECT week_key FROM weekly_allotment WHERE username = ?`, u.Name).Scan(&existing)
+	if err == nil && existing == weekKey {
+		return nil
+	}
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+
+	u.Credits = u.WeeklyAllotment
+	if err := u.Save(); err != nil {
+		return err
+	}
+	_, err = db.Exec(`
+INSERT INTO weekly_allotment(username, week_key, applied_at)
+VALUES(?, ?, ?)
+ON CONFLICT(username) DO UPDATE SET
+	week_key = excluded.week_key,
+	applied_at = excluded.applied_at
+`, u.Name, weekKey, now.Unix())
+	return err
+}

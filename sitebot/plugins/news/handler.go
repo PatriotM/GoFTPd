@@ -149,26 +149,26 @@ func (p *NewsPlugin) show(evt *event.Event, args string) ([]plugin.Output, error
 
 func (p *NewsPlugin) add(evt *event.Event, text string) ([]plugin.Output, error) {
 	if !p.canStaff(evt) {
-		return notice(evt.User, "Sorry, only staff can add news."), nil
+		return p.directReplies(evt, "Sorry, only staff can add news."), nil
 	}
 	if strings.TrimSpace(text) == "" {
-		return notice(evt.User, "Usage: !addnews <news>"), nil
+		return p.directReplies(evt, "Usage: !addnews <news>"), nil
 	}
 	p.mu.Lock()
 	err := p.append(item{Time: time.Now().Unix(), User: evt.User, Text: text})
 	p.mu.Unlock()
 	if err != nil {
-		return notice(evt.User, "Could not add news right now."), nil
+		return p.directReplies(evt, "Could not add news right now."), nil
 	}
 	channel := strings.TrimSpace(evt.Data["channel"])
 	if channel == "" {
-		return notice(evt.User, "News added."), nil
+		return p.directReplies(evt, "News added."), nil
 	}
 	targets := p.channels
 	if len(targets) == 0 {
 		targets = []string{channel}
 	}
-	outs := []plugin.Output{{Type: "COMMAND", Target: evt.User, Notice: true, Text: "News added."}}
+	outs := p.directReplies(evt, "News added.")
 	for _, target := range targets {
 		target = strings.TrimSpace(target)
 		if target == "" {
@@ -181,11 +181,11 @@ func (p *NewsPlugin) add(evt *event.Event, text string) ([]plugin.Output, error)
 
 func (p *NewsPlugin) delete(evt *event.Event, args string) ([]plugin.Output, error) {
 	if !p.canStaff(evt) {
-		return notice(evt.User, "Sorry, only staff can delete news."), nil
+		return p.directReplies(evt, "Sorry, only staff can delete news."), nil
 	}
 	n, err := strconv.Atoi(strings.TrimSpace(args))
 	if err != nil || n < 1 {
-		return notice(evt.User, "Usage: !delnews <number> where 1 is the newest news item"), nil
+		return p.directReplies(evt, "Usage: !delnews <number> where 1 is the newest news item"), nil
 	}
 
 	p.mu.Lock()
@@ -201,9 +201,9 @@ func (p *NewsPlugin) delete(evt *event.Event, args string) ([]plugin.Output, err
 	}
 	p.mu.Unlock()
 	if err != nil {
-		return notice(evt.User, "Could not delete that news item."), nil
+		return p.directReplies(evt, "Could not delete that news item."), nil
 	}
-	return notice(evt.User, "News deleted."), nil
+	return p.directReplies(evt, "News deleted."), nil
 }
 
 func (p *NewsPlugin) parseShowArgs(args string) (int, string) {
@@ -339,6 +339,19 @@ func notices(target string, lines ...string) []plugin.Output {
 
 func notice(target, text string) []plugin.Output {
 	return notices(target, text)
+}
+
+func (p *NewsPlugin) directReplies(evt *event.Event, lines ...string) []plugin.Output {
+	target := strings.TrimSpace(evt.User)
+	out := make([]plugin.Output, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || target == "" {
+			continue
+		}
+		out = append(out, plugin.Output{Type: "COMMAND", Target: target, Notice: false, Text: line})
+	}
+	return out
 }
 
 func (p *NewsPlugin) replies(evt *event.Event, lines ...string) []plugin.Output {

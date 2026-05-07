@@ -589,9 +589,15 @@ plugins:
 #    - sitebot_config: Path to the sitebot's config.yml. SITE INVITE reads
 #                      irc.channels + invite_channels from there (flag rules
 #                      restricting which channels which users can be invited to).
+#    - blowfish_*:     Optional daemon-side mirror for SITE BLOWFISH. If left
+#                      empty, SITE BLOWFISH falls back to parsing sitebot_config.
 # =============================================================================
 event_fifo:     "/GoFTPd/etc/goftpd.sitebot.fifo"
 sitebot_config: "/GoFTPd/sitebot/etc/config.yml"
+blowfish_private_key: ""
+blowfish_keys:
+  # "#goftpd": "cbc:YourBlowfishKeyHere123456"
+  # "#goftpd-staff": "cbc:YourBlowfishKeyHere123456"
 
 
 # =============================================================================

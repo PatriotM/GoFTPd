@@ -50,10 +50,20 @@ type User struct {
 	NukeStat StatLine `yaml:"nukestat"`
 
 	// Slot Configuration
+	LoginSlots       int  `yaml:"login_slots"`      // Max concurrent logins
+	MaxSim           int  `yaml:"max_sim"`          // Max total concurrent transfers
 	UploadSlots      int  `yaml:"upload_slots"`   // Max concurrent uploads
 	DownloadSlots    int  `yaml:"download_slots"` // Max concurrent downloads
+	WeeklyAllotment  int64 `yaml:"weekly_allotment"`
+	GroupSlots       int  `yaml:"group_slots"`
+	LeechSlots       int  `yaml:"leech_slots"`
+	LoginSlotsSet    bool `yaml:"-"`
+	MaxSimSet        bool `yaml:"-"`
 	UploadSlotsSet   bool `yaml:"-"`
 	DownloadSlotsSet bool `yaml:"-"`
+	WeeklyAllotmentSet bool `yaml:"-"`
+	GroupSlotsSet    bool `yaml:"-"`
+	LeechSlotsSet    bool `yaml:"-"`
 
 	// Raw userfile fields we preserve across load/save so imported glFTPD
 	// accounts keep their original shape instead of being flattened.
@@ -139,6 +149,7 @@ func loadUserFile(name, path string, groupMap map[string]int) (*User, error) {
 			if len(parts) > 1 {
 				u.LoginsLine = strings.Join(parts[1:], " ")
 			}
+			u.deriveLoginLimitsFromLine()
 		case "HOMEDIR":
 			if len(parts) > 1 {
 				u.HomeRoot = parts[1]
@@ -257,6 +268,30 @@ func loadUserFile(name, path string, groupMap map[string]int) (*User, error) {
 				fmt.Sscanf(parts[1], "%d", &u.DownloadSlots)
 				u.DownloadSlotsSet = true
 			}
+		case "LOGINSLOTS":
+			if len(parts) > 1 {
+				fmt.Sscanf(parts[1], "%d", &u.LoginSlots)
+				u.LoginSlotsSet = true
+			}
+		case "MAXSIM":
+			if len(parts) > 1 {
+				fmt.Sscanf(parts[1], "%d", &u.MaxSim)
+				u.MaxSimSet = true
+			}
+		case "WKLYALLOTMENT":
+			if len(parts) > 1 {
+				fmt.Sscanf(parts[1], "%d", &u.WeeklyAllotment)
+				u.WeeklyAllotmentSet = true
+			}
+		case "GROUPSLOTS":
+			if len(parts) > 1 {
+				fmt.Sscanf(parts[1], "%d", &u.GroupSlots)
+				u.GroupSlotsSet = true
+			}
+			if len(parts) > 2 {
+				fmt.Sscanf(parts[2], "%d", &u.LeechSlots)
+				u.LeechSlotsSet = true
+			}
 		case "TIMEFRAME":
 			if len(parts) > 1 {
 				u.TimeframeLine = strings.Join(parts[1:], " ")
@@ -283,7 +318,7 @@ func loadUserFile(name, path string, groupMap map[string]int) (*User, error) {
 		u.GeneralLine = "0,120 -1 0 0"
 	}
 	if u.LoginsLine == "" {
-		u.LoginsLine = "0 0 -1 -1"
+		u.LoginsLine = "16 0 6 10"
 	}
 	if u.TimeframeLine == "" {
 		u.TimeframeLine = "0 0"
@@ -291,8 +326,12 @@ func loadUserFile(name, path string, groupMap map[string]int) (*User, error) {
 	if u.AddedBy == "" {
 		u.AddedBy = "goftpd"
 	}
-	if u.LoginsLine != "" && (!u.UploadSlotsSet || !u.DownloadSlotsSet || (u.UploadSlots == 0 && u.DownloadSlots == 0)) {
-		u.deriveSlotsFromLogins()
+	if u.LoginsLine != "" {
+		u.deriveLoginLimitsFromLine()
+	}
+	if !u.LoginSlotsSet {
+		u.LoginSlots = 16
+		u.LoginSlotsSet = true
 	}
 
 	// Set GID based on primary group
@@ -320,14 +359,24 @@ func loadUserFile(name, path string, groupMap map[string]int) (*User, error) {
 	return u, nil
 }
 
-func (u *User) deriveSlotsFromLogins() {
+func (u *User) deriveLoginLimitsFromLine() {
 	fields := strings.Fields(u.LoginsLine)
 	if len(fields) < 4 {
 		return
 	}
-	var uploadSlots, downloadSlots int
+	var loginSlots, maxSim, uploadSlots, downloadSlots int
+	fmt.Sscanf(fields[0], "%d", &loginSlots)
+	fmt.Sscanf(fields[1], "%d", &maxSim)
 	fmt.Sscanf(fields[3], "%d", &uploadSlots)
 	fmt.Sscanf(fields[2], "%d", &downloadSlots)
+	if !u.LoginSlotsSet || u.LoginSlots == 0 {
+		u.LoginSlots = loginSlots
+		u.LoginSlotsSet = true
+	}
+	if !u.MaxSimSet {
+		u.MaxSim = maxSim
+		u.MaxSimSet = true
+	}
 	if !u.UploadSlotsSet || u.UploadSlots == 0 {
 		u.UploadSlots = uploadSlots
 		u.UploadSlotsSet = true
@@ -336,6 +385,13 @@ func (u *User) deriveSlotsFromLogins() {
 		u.DownloadSlots = downloadSlots
 		u.DownloadSlotsSet = true
 	}
+}
+
+func (u *User) syncLoginsLine() {
+	if !u.LoginSlotsSet && u.LoginSlots == 0 {
+		u.LoginSlots = 16
+	}
+	u.LoginsLine = fmt.Sprintf("%d %d %d %d", u.LoginSlots, u.MaxSim, u.DownloadSlots, u.UploadSlots)
 }
 
 // Save writes user back to userfile-format file
@@ -366,7 +422,7 @@ func (u *User) Save() error {
 		u.GeneralLine = "0,120 -1 0 0"
 	}
 	if u.LoginsLine == "" {
-		u.LoginsLine = "0 0 -1 -1"
+		u.LoginsLine = "16 0 6 10"
 	}
 	if u.TimeframeLine == "" {
 		u.TimeframeLine = "0 0"
@@ -377,6 +433,7 @@ func (u *User) Save() error {
 	if u.StatExtras == nil {
 		u.StatExtras = make(map[string]string)
 	}
+	u.syncLoginsLine()
 
 	dir := filepath.Dir(path)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
@@ -401,8 +458,12 @@ func (u *User) Save() error {
 	fmt.Fprintf(file, "EXPIRES %d\n", u.Expires)
 	writeValueLine(file, "CREDITS", u.Credits, u.CreditsExtra)
 	writeValueLine(file, "RATIO", int64(u.Ratio), u.RatioExtra)
+	fmt.Fprintf(file, "LOGINSLOTS %d\n", u.LoginSlots)
+	fmt.Fprintf(file, "MAXSIM %d\n", u.MaxSim)
 	fmt.Fprintf(file, "UPLOADSLOTS %d\n", u.UploadSlots)
 	fmt.Fprintf(file, "DOWNLOADSLOTS %d\n", u.DownloadSlots)
+	fmt.Fprintf(file, "WKLYALLOTMENT %d\n", u.WeeklyAllotment)
+	fmt.Fprintf(file, "GROUPSLOTS %d %d\n", u.GroupSlots, u.LeechSlots)
 	writeStatLine(file, "ALLUP", u.AllUp, u.StatExtras["ALLUP"])
 	writeStatLine(file, "ALLDN", u.AllDn, u.StatExtras["ALLDN"])
 	writeStatLine(file, "WKUP", u.WkUp, u.StatExtras["WKUP"])
@@ -576,8 +637,12 @@ func (u *User) HasEnoughCredits(fileBytes int64) bool {
 	return u.Credits >= fileBytes
 }
 
+func (u *User) HasDownloadAccess() bool {
+	return u.HasFlag("3")
+}
+
 func (u *User) CanDownload(section string, fileBytes int64) bool {
-	if !u.HasFlag("3") {
+	if !u.HasDownloadAccess() {
 		return false
 	}
 	return u.HasEnoughCredits(fileBytes)

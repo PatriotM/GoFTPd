@@ -67,6 +67,10 @@ type Config struct {
 	// SITE INVITE to read the announce channels from the sitebot config
 	// (single source of truth).
 	SitebotConfig string `yaml:"sitebot_config"`
+	// Optional daemon-side mirror of sitebot FiSH keys for SITE BLOWFISH.
+	// If empty, SITE BLOWFISH falls back to parsing sitebot_config.
+	BlowfishPrivateKey string            `yaml:"blowfish_private_key"`
+	BlowfishKeys       map[string]string `yaml:"blowfish_keys"`
 
 	// Storage & Paths
 	StoragePath string `yaml:"storage_path"`

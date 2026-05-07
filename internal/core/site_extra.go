@@ -59,10 +59,15 @@ func (s *Session) HandleSiteUser(args []string) bool {
 	fmt.Fprintf(s.Conn, "200- Groups: %s\r\n", strings.Join(groups, ", "))
 	fmt.Fprintf(s.Conn, "200- Home: %s%s\r\n", u.HomeRoot, u.HomeDir)
 	fmt.Fprintf(s.Conn, "200- Ratio: %s Credits: %s\r\n", formatRatio(u.Ratio), formatBytes(u.Credits))
+	fmt.Fprintf(s.Conn, "200- Limits: logins=%d maxsim=%d ulslots=%d dlslots=%d wkly_allotment=%s groupslots=%d leechslots=%d\r\n",
+		u.LoginSlots, u.MaxSim, u.UploadSlots, u.DownloadSlots, formatBytes(u.WeeklyAllotment), u.GroupSlots, u.LeechSlots)
 	fmt.Fprintf(s.Conn, "200- Uploaded: %dF/%s Downloaded: %dF/%s\r\n",
 		u.AllUp.Files, formatBytes(u.AllUp.Bytes), u.AllDn.Files, formatBytes(u.AllDn.Bytes))
 	fmt.Fprintf(s.Conn, "200- Added: %s Last login: %s Expires: %s\r\n",
 		formatUnixTime(u.Added), formatUnixTime(u.LastLogin), formatUnixTime(u.Expires))
+	if ban, ok := FindUserBan(u.Name); ok {
+		fmt.Fprintf(s.Conn, "200- Ban: yes (%s by %s at %s)\r\n", ban.Reason, ban.By, formatUnixTime(ban.Added))
+	}
 	fmt.Fprintf(s.Conn, "200 User end.\r\n")
 	return false
 }
@@ -135,6 +140,13 @@ func (s *Session) HandleSiteGroup(args []string) bool {
 	}
 	members, gadmins := groupMembers(group, s.GroupMap)
 	fmt.Fprintf(s.Conn, "200- Group: %s (GID: %d)\r\n", group, gid)
+	if groupCfg, err := LoadGroupConfig(group); err == nil {
+		fmt.Fprintf(s.Conn, "200- Slots: %d %d %d %d\r\n", groupCfg.Slots, groupCfg.LeechSlots, groupCfg.AllotmentSlots, groupCfg.MaxAllotment)
+		fmt.Fprintf(s.Conn, "200- Simult: %d\r\n", groupCfg.Simult)
+		if strings.TrimSpace(groupCfg.GroupNFO) != "" {
+			fmt.Fprintf(s.Conn, "200- GroupNFO: %s\r\n", groupCfg.GroupNFO)
+		}
+	}
 	fmt.Fprintf(s.Conn, "200- Members: %s\r\n", strings.Join(members, ", "))
 	fmt.Fprintf(s.Conn, "200- Gadmins: %s\r\n", strings.Join(gadmins, ", "))
 	fmt.Fprintf(s.Conn, "200 Group end.\r\n")
@@ -198,6 +210,47 @@ func (s *Session) HandleSiteTraffic(args []string) bool {
 	fmt.Fprintf(s.Conn, "200- Traffic for group %s\r\n", target)
 	writeTrafficLine(s, "All", up, dn)
 	fmt.Fprintf(s.Conn, "200 Traffic end.\r\n")
+	return false
+}
+
+func (s *Session) HandleSiteUserStatLine(kind string, args []string) bool {
+	kind = strings.ToUpper(strings.TrimSpace(kind))
+	target := s.User.Name
+	if len(args) > 0 && strings.TrimSpace(args[0]) != "" {
+		target = strings.TrimSpace(args[0])
+	}
+
+	if u, err := user.LoadUser(target, s.GroupMap); err == nil {
+		if !strings.EqualFold(u.Name, s.User.Name) && !s.User.HasFlag("1") {
+			fmt.Fprintf(s.Conn, "550 Access denied.\r\n")
+			return false
+		}
+		stat, extra := userStatLineByKind(u, kind)
+		fmt.Fprintf(s.Conn, "200 %s %d %d %d%s\r\n", kind, stat.Files, stat.Bytes, stat.Meta, suffixWithSpace(extra))
+		return false
+	}
+
+	members, _ := groupMembers(target, s.GroupMap)
+	if len(members) == 0 {
+		fmt.Fprintf(s.Conn, "550 No user or group named %s.\r\n", target)
+		return false
+	}
+	if !s.User.HasFlag("1") && !s.User.IsInGroup(target) {
+		fmt.Fprintf(s.Conn, "550 Access denied.\r\n")
+		return false
+	}
+	var aggregate user.StatLine
+	for _, member := range members {
+		u, err := user.LoadUser(member, s.GroupMap)
+		if err != nil {
+			continue
+		}
+		stat, _ := userStatLineByKind(u, kind)
+		aggregate.Files += stat.Files
+		aggregate.Bytes += stat.Bytes
+		aggregate.Meta += stat.Meta
+	}
+	fmt.Fprintf(s.Conn, "200 %s %d %d %d\r\n", kind, aggregate.Files, aggregate.Bytes, aggregate.Meta)
 	return false
 }
 
@@ -336,6 +389,21 @@ func countGroupMembers(group string) int {
 	return len(members)
 }
 
+func countGroupLeechMembers(group string) int {
+	members, _ := groupMembers(group, LoadGroupFile("etc/group"))
+	count := 0
+	for _, name := range members {
+		u, err := user.LoadUser(name, LoadGroupFile("etc/group"))
+		if err != nil {
+			continue
+		}
+		if u.Ratio == 0 {
+			count++
+		}
+	}
+	return count
+}
+
 func undupeCandidates(name string) []string {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -374,6 +442,37 @@ func uniqueStrings(values []string) []string {
 func writeTrafficLine(s *Session, label string, up, dn user.StatLine) {
 	fmt.Fprintf(s.Conn, "200- %-5s UL: %dF/%s DL: %dF/%s\r\n",
 		label, up.Files, formatBytes(up.Bytes), dn.Files, formatBytes(dn.Bytes))
+}
+
+func userStatLineByKind(u *user.User, kind string) (user.StatLine, string) {
+	switch strings.ToUpper(strings.TrimSpace(kind)) {
+	case "ALLUP":
+		return u.AllUp, u.StatExtras["ALLUP"]
+	case "ALLDN":
+		return u.AllDn, u.StatExtras["ALLDN"]
+	case "WKUP":
+		return u.WkUp, u.StatExtras["WKUP"]
+	case "WKDN":
+		return u.WkDn, u.StatExtras["WKDN"]
+	case "DAYUP":
+		return u.DayUp, u.StatExtras["DAYUP"]
+	case "DAYDN":
+		return u.DayDn, u.StatExtras["DAYDN"]
+	case "MONTHUP":
+		return u.MonthUp, u.StatExtras["MONTHUP"]
+	case "MONTHDN":
+		return u.MonthDn, u.StatExtras["MONTHDN"]
+	default:
+		return user.StatLine{}, ""
+	}
+}
+
+func suffixWithSpace(extra string) string {
+	extra = strings.TrimSpace(extra)
+	if extra == "" {
+		return ""
+	}
+	return " " + extra
 }
 
 func formatRatio(ratio int) string {
