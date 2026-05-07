@@ -76,6 +76,27 @@ type VirtualFileSystem struct {
 	mu             sync.RWMutex
 }
 
+// SlaveNames returns the distinct non-empty slave names currently present in the VFS.
+func (vfs *VirtualFileSystem) SlaveNames() []string {
+	vfs.mu.RLock()
+	defer vfs.mu.RUnlock()
+
+	seen := make(map[string]struct{})
+	for _, file := range vfs.files {
+		if file == nil || file.SlaveName == "" {
+			continue
+		}
+		seen[file.SlaveName] = struct{}{}
+	}
+
+	names := make([]string, 0, len(seen))
+	for name := range seen {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
 func NewVirtualFileSystem() *VirtualFileSystem {
 	vfs := &VirtualFileSystem{
 		files:         make(map[string]*VFSFile),
