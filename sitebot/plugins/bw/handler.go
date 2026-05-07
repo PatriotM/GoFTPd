@@ -20,6 +20,7 @@ type Plugin struct {
 	port        int
 	user        string
 	password    string
+	siteName    string
 	useTLS      bool
 	insecure    bool
 	timeout     time.Duration
@@ -33,6 +34,7 @@ func New() *Plugin {
 		host:        "127.0.0.1",
 		port:        2121,
 		user:        "goftpd",
+		siteName:    "GoFTPd",
 		useTLS:      true,
 		insecure:    true,
 		timeout:     10 * time.Second,
@@ -60,6 +62,9 @@ func (p *Plugin) Initialize(config map[string]interface{}) error {
 	}
 	if s, ok := stringConfig(cfg, config, "user", "bandwidth_user"); ok && strings.TrimSpace(s) != "" {
 		p.user = strings.TrimSpace(s)
+	}
+	if s, ok := stringConfig(cfg, config, "sitename", "sitename"); ok && strings.TrimSpace(s) != "" {
+		p.siteName = strings.TrimSpace(s)
 	}
 	if s, ok := stringConfig(cfg, config, "password", "bandwidth_password"); ok {
 		p.password = s
@@ -104,9 +109,10 @@ func (p *Plugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 		return p.reply(evt, p.render("BW_ERROR", map[string]string{"response": "no bandwidth output returned."}, "BANDWiDTH: no bandwidth output returned.")), nil
 	}
 
-	outLines := []string{p.render("BW", map[string]string{"response": "Checking GoFTPd bandwidth, please wait ..."}, "BANDWiDTH: Checking GoFTPd bandwidth, please wait ...")}
+	waitText := fmt.Sprintf("Checking %s bandwidth, please wait ...", p.siteName)
+	outLines := []string{p.render("BW", map[string]string{"response": waitText, "sitename": p.siteName}, "BANDWiDTH: "+waitText)}
 	for _, line := range lines {
-		outLines = append(outLines, p.render("BW_LINE", map[string]string{"response": line}, line))
+		outLines = append(outLines, p.render("BW_LINE", map[string]string{"response": line, "sitename": p.siteName}, line))
 	}
 	return p.replies(evt, outLines...), nil
 }

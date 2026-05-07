@@ -1,11 +1,14 @@
 package core
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -49,6 +52,7 @@ func (s *Session) HandleSiteNuke(args []string) bool {
 	if !strings.HasPrefix(targetPath, "/") {
 		targetPath = path.Join(s.CurrentDir, targetPath)
 	}
+	targetPath = path.Clean(targetPath)
 	aclPath := path.Join(s.Config.ACLBasePath, path.Clean(targetPath))
 	if !s.ACLEngine.CanPerform(s.User, "NUKE", aclPath) {
 		fmt.Fprintf(s.Conn, "550 Insufficient flags.\r\n")
@@ -124,10 +128,29 @@ func (s *Session) HandleSiteNuke(args []string) bool {
 	// Rename directory
 	newName := fmt.Sprintf("[NUKED]-%s", dirName)
 	newPath := filepath.Join(filepath.Dir(fullPath), newName)
+	newSitePath := path.Join(path.Dir(targetPath), newName)
 
 	if err := os.Rename(fullPath, newPath); err != nil {
 		fmt.Fprintf(s.Conn, "550 Rename failed: %v\r\n", err)
 		return false
+	}
+	if db, err := GetNukeHistoryDB(s.Config.Debug); err == nil {
+		if err := db.RecordNuke(NukeHistoryEntry{
+			OriginalPath:         targetPath,
+			CurrentPath:          newSitePath,
+			ReleaseName:          dirName,
+			Multiplier:           multiplier,
+			Reason:               reason,
+			NukedBy:              s.User.Name,
+			UsersAffected:        len(uploaderBytes),
+			TotalBytes:           SumBytes(uploaderBytes),
+			TotalCreditsRemoved:  totalNuked,
+			Nukees:               nukeeLine,
+		}); err != nil && s.Config.Debug {
+			log.Printf("[NUKE-DB] record local nuke failed for %s: %v", targetPath, err)
+		}
+	} else if s.Config.Debug {
+		log.Printf("[NUKE-DB] init failed: %v", err)
 	}
 
 	s.emitEvent(EventNuke, path.Join(s.CurrentDir, target), dirName, 0, 0, map[string]string{
@@ -200,6 +223,12 @@ func (s *Session) HandleSiteUnnuke(args []string) bool {
 
 	// Restore credits to each uploader
 	totalRestored := int64(0)
+	restoreMultiplier := s.Config.NukeMaxMultiplier
+	if db, err := GetNukeHistoryDB(s.Config.Debug); err == nil {
+		if entry, err := db.FindActiveByPath(targetPath); err == nil && entry != nil && entry.Multiplier > 0 {
+			restoreMultiplier = entry.Multiplier
+		}
+	}
 
 	for username, bytes := range uploaderBytes {
 		u, err := user.LoadUser(username, s.GroupMap)
@@ -207,10 +236,9 @@ func (s *Session) HandleSiteUnnuke(args []string) bool {
 			continue
 		}
 
-		// Calculate credits to restore using user's ratio and max multiplier
-		// Restore: (bytes * ratio) * max_multiplier (worst case)
+		// Restore the exact recorded nuke multiplier when known.
 		baseCredits := bytes * int64(u.Ratio)
-		nukedCredits := baseCredits * int64(s.Config.NukeMaxMultiplier)
+		nukedCredits := baseCredits * int64(restoreMultiplier)
 
 		u.Credits += nukedCredits
 
@@ -229,6 +257,13 @@ func (s *Session) HandleSiteUnnuke(args []string) bool {
 		fmt.Fprintf(s.Conn, "550 Rename failed: %v\r\n", err)
 		return false
 	}
+	if db, err := GetNukeHistoryDB(s.Config.Debug); err == nil {
+		if _, err := db.MarkUnnuked(targetPath, path.Join(path.Dir(targetPath), originalName), s.User.Name, totalRestored); err != nil && !errors.Is(err, sql.ErrNoRows) && s.Config.Debug {
+			log.Printf("[NUKE-DB] mark local unnuke failed for %s: %v", targetPath, err)
+		}
+	} else if s.Config.Debug {
+		log.Printf("[NUKE-DB] init failed: %v", err)
+	}
 
 	s.emitEvent(EventUnnuke, newPath, originalName, 0, 0, map[string]string{
 		"users": strconv.Itoa(len(uploaderBytes)),
@@ -236,6 +271,82 @@ func (s *Session) HandleSiteUnnuke(args []string) bool {
 	fmt.Fprintf(s.Conn, "200 Unnuked: %d MB, %d users affected, %d credits restored.\r\n",
 		len(uploaderBytes), len(uploaderBytes), totalRestored)
 	return true
+}
+
+func (s *Session) HandleSiteNukes(args []string) bool {
+	query := ""
+	if len(args) > 0 && strings.TrimSpace(args[0]) != "" {
+		query = strings.TrimSpace(strings.Join(args, " "))
+	}
+	if db, err := GetNukeHistoryDB(s.Config.Debug); err == nil {
+		entries, err := db.List(query, siteSearchLimit)
+		if err == nil {
+			fmt.Fprintf(s.Conn, "200- Nuke history (%d):\r\n", len(entries))
+			for _, entry := range entries {
+				line := fmt.Sprintf("[%s] %s x%d by %s at %s :: %s :: %d users :: %s",
+					strings.ToUpper(entry.Status),
+					entry.OriginalPath,
+					entry.Multiplier,
+					entry.NukedBy,
+					formatUnixTime(entry.NukedAt),
+					formatBytes(entry.TotalBytes),
+					entry.UsersAffected,
+					formatBytes(entry.TotalCreditsRemoved),
+				)
+				if strings.TrimSpace(entry.Reason) != "" {
+					line += " :: " + entry.Reason
+				}
+				if strings.TrimSpace(entry.Nukees) != "" {
+					line += " :: " + entry.Nukees
+				}
+				if entry.Status == "unnuked" && strings.TrimSpace(entry.RestoredPath) != "" {
+					line += fmt.Sprintf(" :: restored by %s to %s (%s)", entry.UnnukedBy, entry.RestoredPath, formatBytes(entry.TotalCreditsRestored))
+				}
+				fmt.Fprintf(s.Conn, "200- %s\r\n", line)
+			}
+			fmt.Fprintf(s.Conn, "200 End of NUKES\r\n")
+			return false
+		}
+	}
+
+	if bridge, ok := s.masterBridge(); ok {
+		fallbackQuery := "[NUKED]-"
+		if strings.TrimSpace(query) != "" {
+			fallbackQuery = query
+		}
+		results := bridge.SearchDirs(fallbackQuery, siteSearchLimit)
+		var nuked []string
+		for _, result := range results {
+			if strings.HasPrefix(path.Base(result.Path), "[NUKED]-") {
+				nuked = append(nuked, result.Path)
+			}
+		}
+		sort.Strings(nuked)
+		fmt.Fprintf(s.Conn, "200- Nuked releases (%d):\r\n", len(nuked))
+		for _, item := range nuked {
+			fmt.Fprintf(s.Conn, "200- %s\r\n", item)
+		}
+		fmt.Fprintf(s.Conn, "200 End of NUKES\r\n")
+		return false
+	}
+
+	base := filepath.Join(s.Config.StoragePath, s.CurrentDir)
+	var nuked []string
+	entries, err := os.ReadDir(base)
+	if err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() && strings.HasPrefix(entry.Name(), "[NUKED]-") {
+				nuked = append(nuked, path.Join(s.CurrentDir, entry.Name()))
+			}
+		}
+	}
+	sort.Strings(nuked)
+	fmt.Fprintf(s.Conn, "200- Nuked releases (%d):\r\n", len(nuked))
+	for _, item := range nuked {
+		fmt.Fprintf(s.Conn, "200- %s\r\n", item)
+	}
+	fmt.Fprintf(s.Conn, "200 End of NUKES\r\n")
+	return false
 }
 
 func (s *Session) handleSiteNukeVFS(bridge MasterBridge, target string, multiplier int, reason string) bool {
@@ -260,6 +371,24 @@ func (s *Session) handleSiteNukeVFS(bridge MasterBridge, target string, multipli
 	if err != nil {
 		fmt.Fprintf(s.Conn, "550 Nuke failed: %v\r\n", err)
 		return false
+	}
+	if db, err := GetNukeHistoryDB(s.Config.Debug); err == nil {
+		if err := db.RecordNuke(NukeHistoryEntry{
+			OriginalPath:         dirPath,
+			CurrentPath:          result.NewPath,
+			ReleaseName:          result.ReleaseName,
+			Multiplier:           multiplier,
+			Reason:               reason,
+			NukedBy:              s.User.Name,
+			UsersAffected:        result.UsersAffected,
+			TotalBytes:           SumBytes(uploaderBytes),
+			TotalCreditsRemoved:  result.TotalCreditsRemoved,
+			Nukees:               nukeeLine,
+		}); err != nil && s.Config.Debug {
+			log.Printf("[NUKE-DB] record master nuke failed for %s: %v", dirPath, err)
+		}
+	} else if s.Config.Debug {
+		log.Printf("[NUKE-DB] init failed: %v", err)
 	}
 
 	s.emitEvent(EventNuke, dirPath, dirName, 0, 0, map[string]string{
@@ -290,11 +419,24 @@ func (s *Session) handleSiteUnnukeVFS(bridge MasterBridge, target string) bool {
 	}
 
 	uploaderBytes := DirUploaderBytes(bridge, dirPath)
-	totalRestored := ApplyUnnukeCredits(s.GroupMap, uploaderBytes, s.Config.NukeMaxMultiplier)
+	restoreMultiplier := s.Config.NukeMaxMultiplier
+	if db, err := GetNukeHistoryDB(s.Config.Debug); err == nil {
+		if entry, err := db.FindActiveByPath(dirPath); err == nil && entry != nil && entry.Multiplier > 0 {
+			restoreMultiplier = entry.Multiplier
+		}
+	}
+	totalRestored := ApplyUnnukeCredits(s.GroupMap, uploaderBytes, restoreMultiplier)
 	originalName := strings.TrimPrefix(dirName, "[NUKED]-")
 	bridge.RenameFile(dirPath, path.Dir(dirPath), originalName)
 
 	newPath := path.Join(path.Dir(dirPath), originalName)
+	if db, err := GetNukeHistoryDB(s.Config.Debug); err == nil {
+		if _, err := db.MarkUnnuked(dirPath, newPath, s.User.Name, totalRestored); err != nil && !errors.Is(err, sql.ErrNoRows) && s.Config.Debug {
+			log.Printf("[NUKE-DB] mark master unnuke failed for %s: %v", dirPath, err)
+		}
+	} else if s.Config.Debug {
+		log.Printf("[NUKE-DB] init failed: %v", err)
+	}
 	s.emitEvent(EventUnnuke, newPath, originalName, 0, 0, map[string]string{
 		"users": strconv.Itoa(len(uploaderBytes)),
 	})

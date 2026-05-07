@@ -5,10 +5,13 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"goftpd/internal/user"
+	"gopkg.in/yaml.v3"
 )
 
 const defaultUserTemplate = "etc/users/default.user"
@@ -52,8 +55,12 @@ func createUserFromArgs(s *Session, username, plaintextPassword, primaryGroup st
 			PrimaryGroup:  "NoGroup",
 			Credits:       15000,
 			Ratio:         3,
-			UploadSlots:   6,
-			DownloadSlots: 3,
+			LoginSlots:    16,
+			MaxSim:        0,
+			UploadSlots:   10,
+			DownloadSlots: 6,
+			GroupSlots:    0,
+			LeechSlots:    0,
 		}
 	}
 	newUser.Name = username
@@ -107,17 +114,23 @@ func (s *Session) HandleSiteAddUser(args []string) bool {
 }
 
 func (s *Session) HandleSiteGAddUser(args []string) bool {
-	if !s.User.HasFlag("1") {
-		fmt.Fprintf(s.Conn, "550 Access denied.\r\n")
-		return false
-	}
 	if len(args) < 3 {
 		fmt.Fprintf(s.Conn, "501 Usage: SITE GADDUSER <user> <pass> <group> [ident@ip ...]\r\n")
+		return false
+	}
+	if !s.User.HasFlag("1") && !s.canManageGroup(args[2]) {
+		fmt.Fprintf(s.Conn, "550 Access denied.\r\n")
 		return false
 	}
 	if _, ok := s.GroupMap[args[2]]; !ok {
 		fmt.Fprintf(s.Conn, "550 Group %s not found.\r\n", args[2])
 		return false
+	}
+	if !s.User.HasFlag("1") {
+		if !s.hasFreeGroupSlot(args[2]) {
+			fmt.Fprintf(s.Conn, "550 No group slots left for %s.\r\n", args[2])
+			return false
+		}
 	}
 	if _, err := user.LoadUser(args[0], s.GroupMap); err == nil {
 		fmt.Fprintf(s.Conn, "550 User %s already exists.\r\n", args[0])
@@ -154,9 +167,19 @@ func (s *Session) HandleSiteGrpAdd(args []string) bool {
 			nextGID = gid + 100
 		}
 	}
-	groupPath := filepath.Join("etc", "groups", groupName)
-	groupContent := fmt.Sprintf("GROUP %s\nSLOTS -1 0 0 0\nGROUPNFO %s\nSIMULT 0\n", groupName, desc)
-	os.WriteFile(groupPath, []byte(groupContent), 0644)
+	groupCfg := &GroupFile{
+		Name:         groupName,
+		Slots:        -1,
+		LeechSlots:   0,
+		AllotmentSlots: 0,
+		MaxAllotment: 0,
+		GroupNFO:     desc,
+		Simult:       0,
+	}
+	if err := groupCfg.Save(); err != nil {
+		fmt.Fprintf(s.Conn, "550 Failed to create group %s: %v\r\n", groupName, err)
+		return false
+	}
 	s.GroupMap[groupName] = nextGID
 	AddGroupToFile(groupName, desc, nextGID)
 	fmt.Fprintf(s.Conn, "200 Group %s added.\r\n", groupName)
@@ -346,6 +369,190 @@ func (s *Session) HandleSiteChPass(args []string) bool {
 	AddUserToPasswd(args[0], hashedPass, s.Config.PasswdFile)
 
 	fmt.Fprintf(s.Conn, "200 Password changed for %s.\r\n", args[0])
+	return false
+}
+
+// HandleSiteChRatio changes a user's ratio.
+// Usage: SITE CHRATIO <user> <ratio>
+func (s *Session) HandleSiteChRatio(args []string) bool {
+	if len(args) < 2 {
+		fmt.Fprintf(s.Conn, "501 Usage: SITE CHRATIO <user> <ratio>\r\n")
+		return false
+	}
+
+	u, err := user.LoadUser(args[0], s.GroupMap)
+	if err != nil {
+		fmt.Fprintf(s.Conn, "550 User %s not found.\r\n", args[0])
+		return false
+	}
+
+	ratio, err := parseSiteRatio(args[1])
+	if err != nil {
+		fmt.Fprintf(s.Conn, "550 Invalid ratio %q. Use a whole number >= 0.\r\n", args[1])
+		return false
+	}
+
+	if !s.User.HasFlag("1") {
+		if ratio != 0 {
+			fmt.Fprintf(s.Conn, "550 Access denied.\r\n")
+			return false
+		}
+		if !s.canGrantManagedLeech(u) {
+			fmt.Fprintf(s.Conn, "550 No free leech slots available for that group.\r\n")
+			return false
+		}
+	}
+
+	u.Ratio = ratio
+	if err := u.Save(); err != nil {
+		fmt.Fprintf(s.Conn, "550 Failed to save ratio for %s: %v\r\n", args[0], err)
+		return false
+	}
+
+	fmt.Fprintf(s.Conn, "200 Ratio changed for %s: %d.\r\n", args[0], ratio)
+	return false
+}
+
+func (s *Session) HandleSiteChange(args []string) bool {
+	if len(args) < 3 {
+		fmt.Fprintf(s.Conn, "501 Usage: SITE CHANGE <user|group> <field> <value...>\r\n")
+		return false
+	}
+	field := strings.ToUpper(strings.TrimSpace(args[1]))
+	switch field {
+	case "RATIO":
+		return s.HandleSiteChRatio([]string{args[0], args[2]})
+	case "NUM_LOGINS", "LOGINSLOTS":
+		return s.HandleSiteChNumLogins([]string{args[0], args[2]})
+	case "MAX_SIM", "MAXSIM":
+		return s.HandleSiteChMaxSim([]string{args[0], args[2]})
+	case "WKLY_ALLOTMENT", "WKLYALLOTMENT", "WEEKLYALLOTMENT":
+		return s.HandleSiteChWklyAllotment([]string{args[0], args[2]})
+	case "UPLOADSLOTS":
+		return s.HandleSiteChUploadSlots([]string{args[0], args[2]})
+	case "DOWNLOADSLOTS":
+		return s.HandleSiteChDownloadSlots([]string{args[0], args[2]})
+	case "GROUP_SLOTS", "GROUPSLOTS":
+		groupArgs := append([]string{args[0]}, args[2:]...)
+		return s.HandleSiteGroupSlots(groupArgs)
+	case "GROUP_SIMULT", "GROUPSIMULT", "SIMULT":
+		return s.HandleSiteGroupSimult([]string{args[0], args[2]})
+	case "TAGLINE":
+		taglineArgs := append([]string{args[0]}, args[2:]...)
+		return s.HandleSiteTagline(taglineArgs)
+	default:
+		fmt.Fprintf(s.Conn, "550 Unknown CHANGE field %s.\r\n", field)
+		return false
+	}
+}
+
+func (s *Session) HandleSiteBan(args []string) bool {
+	if !s.User.HasFlag("1") {
+		fmt.Fprintf(s.Conn, "550 Access denied.\r\n")
+		return false
+	}
+	if len(args) < 1 {
+		fmt.Fprintf(s.Conn, "501 Usage: SITE BAN <user> [reason]\r\n")
+		return false
+	}
+	target := strings.TrimSpace(args[0])
+	if target == "" {
+		fmt.Fprintf(s.Conn, "550 User is required.\r\n")
+		return false
+	}
+	if _, err := user.LoadUser(target, s.GroupMap); err != nil {
+		fmt.Fprintf(s.Conn, "550 User %s not found.\r\n", target)
+		return false
+	}
+	reason := ""
+	if len(args) > 1 {
+		reason = strings.TrimSpace(strings.Join(args[1:], " "))
+	}
+	if reason == "" {
+		reason = "Banned by siteop"
+	}
+	if err := AddUserBan(target, s.User.Name, reason); err != nil {
+		fmt.Fprintf(s.Conn, "550 Failed to ban %s: %v\r\n", target, err)
+		return false
+	}
+	fmt.Fprintf(s.Conn, "200 User %s banned.\r\n", target)
+	return false
+}
+
+func (s *Session) HandleSiteUnban(args []string) bool {
+	if !s.User.HasFlag("1") {
+		fmt.Fprintf(s.Conn, "550 Access denied.\r\n")
+		return false
+	}
+	if len(args) < 1 {
+		fmt.Fprintf(s.Conn, "501 Usage: SITE UNBAN <user>\r\n")
+		return false
+	}
+	target := strings.TrimSpace(args[0])
+	removed, err := RemoveUserBan(target)
+	if err != nil {
+		fmt.Fprintf(s.Conn, "550 Failed to unban %s: %v\r\n", target, err)
+		return false
+	}
+	if !removed {
+		fmt.Fprintf(s.Conn, "550 User %s is not banned.\r\n", target)
+		return false
+	}
+	fmt.Fprintf(s.Conn, "200 User %s unbanned.\r\n", target)
+	return false
+}
+
+type sitebotBlowfishConfig struct {
+	Encryption struct {
+		PrivateKey string            `yaml:"private_key"`
+		Keys       map[string]string `yaml:"keys"`
+	} `yaml:"encryption"`
+}
+
+func (s *Session) HandleSiteBlowfish(args []string) bool {
+	if !s.User.HasFlag("1") {
+		fmt.Fprintf(s.Conn, "550 Access denied.\r\n")
+		return false
+	}
+	cfg := &sitebotBlowfishConfig{}
+	if len(s.Config.BlowfishKeys) > 0 || strings.TrimSpace(s.Config.BlowfishPrivateKey) != "" {
+		cfg.Encryption.PrivateKey = s.Config.BlowfishPrivateKey
+		cfg.Encryption.Keys = s.Config.BlowfishKeys
+	} else {
+		if strings.TrimSpace(s.Config.SitebotConfig) == "" {
+			fmt.Fprintf(s.Conn, "550 Neither blowfish_keys nor sitebot_config is configured.\r\n")
+			return false
+		}
+		data, err := os.ReadFile(filepath.Clean(s.Config.SitebotConfig))
+		if err != nil {
+			fmt.Fprintf(s.Conn, "550 Could not read sitebot config: %v\r\n", err)
+			return false
+		}
+		if err := yaml.Unmarshal(data, cfg); err != nil {
+			fmt.Fprintf(s.Conn, "550 Could not parse sitebot config: %v\r\n", err)
+			return false
+		}
+	}
+	filter := ""
+	if len(args) > 0 {
+		filter = strings.TrimSpace(args[0])
+	}
+	fmt.Fprintf(s.Conn, "200- Blowfish keys:\r\n")
+	if cfg.Encryption.PrivateKey != "" && (filter == "" || strings.EqualFold(filter, "PM") || strings.EqualFold(filter, "PRIVATE")) {
+		fmt.Fprintf(s.Conn, "200- PM/NOTICE %s\r\n", cfg.Encryption.PrivateKey)
+	}
+	channels := make([]string, 0, len(cfg.Encryption.Keys))
+	for channel := range cfg.Encryption.Keys {
+		channels = append(channels, channel)
+	}
+	sort.Strings(channels)
+	for _, channel := range channels {
+		if filter != "" && !strings.EqualFold(filter, channel) {
+			continue
+		}
+		fmt.Fprintf(s.Conn, "200- %s %s\r\n", channel, cfg.Encryption.Keys[channel])
+	}
+	fmt.Fprintf(s.Conn, "200 End of blowfish keys.\r\n")
 	return false
 }
 
@@ -601,6 +808,389 @@ func containsExact(values []string, needle string) bool {
 			return true
 		}
 	}
+	return false
+}
+
+func parseSiteRatio(raw string) (int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, fmt.Errorf("empty ratio")
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, err
+	}
+	if value < 0 {
+		return 0, fmt.Errorf("negative ratio")
+	}
+	return value, nil
+}
+
+func (s *Session) canManageGroup(group string) bool {
+	if s == nil || s.User == nil {
+		return false
+	}
+	if s.User.HasFlag("1") {
+		return true
+	}
+	return s.User.IsGroupAdmin(group)
+}
+
+func (s *Session) hasFreeGroupSlot(group string) bool {
+	if s == nil || s.User == nil {
+		return false
+	}
+	if s.User.HasFlag("1") {
+		return true
+	}
+	if s.User.GroupSlots <= 0 {
+		return false
+	}
+	return countGroupMembers(group) < s.User.GroupSlots
+}
+
+func (s *Session) managedGroups() []string {
+	if s == nil || s.User == nil || s.User.Groups == nil {
+		return nil
+	}
+	var groups []string
+	for group, val := range s.User.Groups {
+		if val == 1 {
+			groups = append(groups, group)
+		}
+	}
+	sort.Strings(groups)
+	return groups
+}
+
+func (s *Session) canGrantManagedLeech(target *user.User) bool {
+	if s == nil || s.User == nil || target == nil {
+		return false
+	}
+	if s.User.HasFlag("1") {
+		return true
+	}
+	if target.Ratio == 0 {
+		for _, group := range s.managedGroups() {
+			if target.IsInGroup(group) {
+				return true
+			}
+		}
+		return false
+	}
+	if s.User.LeechSlots <= 0 {
+		return false
+	}
+	for _, group := range s.managedGroups() {
+		if !target.IsInGroup(group) {
+			continue
+		}
+		if countGroupLeechMembers(group) < s.User.LeechSlots {
+			return true
+		}
+	}
+	return false
+}
+
+func parseNonNegativeInt(raw string) (int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, fmt.Errorf("empty value")
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, err
+	}
+	if value < 0 {
+		return 0, fmt.Errorf("negative value")
+	}
+	return value, nil
+}
+
+func parseLimitInt(raw string) (int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, fmt.Errorf("empty value")
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, err
+	}
+	if value < -1 {
+		return 0, fmt.Errorf("value below -1")
+	}
+	return value, nil
+}
+
+func parseInt64Value(raw string) (int64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, fmt.Errorf("empty value")
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	if value < 0 {
+		return 0, fmt.Errorf("negative value")
+	}
+	return value, nil
+}
+
+func (s *Session) HandleSiteTagline(args []string) bool {
+	if len(args) == 0 {
+		fmt.Fprintf(s.Conn, "501 Usage: SITE TAGLINE [user] <text>\r\n")
+		return false
+	}
+
+	targetUserName := s.User.Name
+	textArgs := args
+	if len(args) > 1 && s.User.HasFlag("1") {
+		if _, err := user.LoadUser(args[0], s.GroupMap); err == nil {
+			targetUserName = args[0]
+			textArgs = args[1:]
+		}
+	}
+	if len(textArgs) == 0 {
+		fmt.Fprintf(s.Conn, "501 Usage: SITE TAGLINE [user] <text>\r\n")
+		return false
+	}
+	targetUser, err := user.LoadUser(targetUserName, s.GroupMap)
+	if err != nil {
+		fmt.Fprintf(s.Conn, "550 User %s not found.\r\n", targetUserName)
+		return false
+	}
+	if !strings.EqualFold(targetUser.Name, s.User.Name) && !s.User.HasFlag("1") {
+		fmt.Fprintf(s.Conn, "550 Access denied.\r\n")
+		return false
+	}
+	targetUser.Tagline = strings.TrimSpace(strings.Join(textArgs, " "))
+	if targetUser.Tagline == "" {
+		targetUser.Tagline = "No Tagline Set"
+	}
+	if err := targetUser.Save(); err != nil {
+		fmt.Fprintf(s.Conn, "550 Failed to save tagline for %s: %v\r\n", targetUser.Name, err)
+		return false
+	}
+	fmt.Fprintf(s.Conn, "200 Tagline changed for %s.\r\n", targetUser.Name)
+	return false
+}
+
+func (s *Session) HandleSiteChNumLogins(args []string) bool {
+	if !s.User.HasFlag("1") {
+		fmt.Fprintf(s.Conn, "550 Access denied.\r\n")
+		return false
+	}
+	if len(args) < 2 {
+		fmt.Fprintf(s.Conn, "501 Usage: SITE CHNUMLOGINS <user> <count>\r\n")
+		return false
+	}
+	u, err := user.LoadUser(args[0], s.GroupMap)
+	if err != nil {
+		fmt.Fprintf(s.Conn, "550 User %s not found.\r\n", args[0])
+		return false
+	}
+	value, err := parseLimitInt(args[1])
+	if err != nil {
+		fmt.Fprintf(s.Conn, "550 Invalid num_logins value %q.\r\n", args[1])
+		return false
+	}
+	u.LoginSlots = value
+	u.LoginSlotsSet = true
+	if err := u.Save(); err != nil {
+		fmt.Fprintf(s.Conn, "550 Failed to save user %s: %v\r\n", u.Name, err)
+		return false
+	}
+	fmt.Fprintf(s.Conn, "200 Num logins changed for %s: %d.\r\n", u.Name, value)
+	return false
+}
+
+func (s *Session) HandleSiteChMaxSim(args []string) bool {
+	if !s.User.HasFlag("1") {
+		fmt.Fprintf(s.Conn, "550 Access denied.\r\n")
+		return false
+	}
+	if len(args) < 2 {
+		fmt.Fprintf(s.Conn, "501 Usage: SITE CHMAXSIM <user> <count>\r\n")
+		return false
+	}
+	u, err := user.LoadUser(args[0], s.GroupMap)
+	if err != nil {
+		fmt.Fprintf(s.Conn, "550 User %s not found.\r\n", args[0])
+		return false
+	}
+	value, err := parseLimitInt(args[1])
+	if err != nil {
+		fmt.Fprintf(s.Conn, "550 Invalid max_sim value %q.\r\n", args[1])
+		return false
+	}
+	u.MaxSim = value
+	u.MaxSimSet = true
+	if err := u.Save(); err != nil {
+		fmt.Fprintf(s.Conn, "550 Failed to save user %s: %v\r\n", u.Name, err)
+		return false
+	}
+	fmt.Fprintf(s.Conn, "200 Max sim changed for %s: %d.\r\n", u.Name, value)
+	return false
+}
+
+func (s *Session) HandleSiteChWklyAllotment(args []string) bool {
+	if !s.User.HasFlag("1") {
+		fmt.Fprintf(s.Conn, "550 Access denied.\r\n")
+		return false
+	}
+	if len(args) < 2 {
+		fmt.Fprintf(s.Conn, "501 Usage: SITE CHWKLYALLOTMENT <user> <credits>\r\n")
+		return false
+	}
+	u, err := user.LoadUser(args[0], s.GroupMap)
+	if err != nil {
+		fmt.Fprintf(s.Conn, "550 User %s not found.\r\n", args[0])
+		return false
+	}
+	value, err := parseInt64Value(args[1])
+	if err != nil {
+		fmt.Fprintf(s.Conn, "550 Invalid wkly_allotment value %q.\r\n", args[1])
+		return false
+	}
+	u.WeeklyAllotment = value
+	u.WeeklyAllotmentSet = true
+	if err := u.Save(); err != nil {
+		fmt.Fprintf(s.Conn, "550 Failed to save user %s: %v\r\n", u.Name, err)
+		return false
+	}
+	fmt.Fprintf(s.Conn, "200 Weekly allotment changed for %s: %s.\r\n", u.Name, formatBytes(value))
+	return false
+}
+
+func (s *Session) HandleSiteChUploadSlots(args []string) bool {
+	if !s.User.HasFlag("1") {
+		fmt.Fprintf(s.Conn, "550 Access denied.\r\n")
+		return false
+	}
+	if len(args) < 2 {
+		fmt.Fprintf(s.Conn, "501 Usage: SITE CHUPLOADSLOTS <user> <count>\r\n")
+		return false
+	}
+	u, err := user.LoadUser(args[0], s.GroupMap)
+	if err != nil {
+		fmt.Fprintf(s.Conn, "550 User %s not found.\r\n", args[0])
+		return false
+	}
+	value, err := parseLimitInt(args[1])
+	if err != nil {
+		fmt.Fprintf(s.Conn, "550 Invalid upload slot value %q.\r\n", args[1])
+		return false
+	}
+	u.UploadSlots = value
+	u.UploadSlotsSet = true
+	if err := u.Save(); err != nil {
+		fmt.Fprintf(s.Conn, "550 Failed to save user %s: %v\r\n", u.Name, err)
+		return false
+	}
+	fmt.Fprintf(s.Conn, "200 Upload slots changed for %s: %d.\r\n", u.Name, value)
+	return false
+}
+
+func (s *Session) HandleSiteChDownloadSlots(args []string) bool {
+	if !s.User.HasFlag("1") {
+		fmt.Fprintf(s.Conn, "550 Access denied.\r\n")
+		return false
+	}
+	if len(args) < 2 {
+		fmt.Fprintf(s.Conn, "501 Usage: SITE CHDOWNLOADSLOTS <user> <count>\r\n")
+		return false
+	}
+	u, err := user.LoadUser(args[0], s.GroupMap)
+	if err != nil {
+		fmt.Fprintf(s.Conn, "550 User %s not found.\r\n", args[0])
+		return false
+	}
+	value, err := parseLimitInt(args[1])
+	if err != nil {
+		fmt.Fprintf(s.Conn, "550 Invalid download slot value %q.\r\n", args[1])
+		return false
+	}
+	u.DownloadSlots = value
+	u.DownloadSlotsSet = true
+	if err := u.Save(); err != nil {
+		fmt.Fprintf(s.Conn, "550 Failed to save user %s: %v\r\n", u.Name, err)
+		return false
+	}
+	fmt.Fprintf(s.Conn, "200 Download slots changed for %s: %d.\r\n", u.Name, value)
+	return false
+}
+
+func (s *Session) HandleSiteGroupSlots(args []string) bool {
+	if !s.User.HasFlag("1") {
+		fmt.Fprintf(s.Conn, "550 Access denied.\r\n")
+		return false
+	}
+	if len(args) < 2 {
+		fmt.Fprintf(s.Conn, "501 Usage: SITE GROUPSLOTS <user> <slots> [leech_slots]\r\n")
+		return false
+	}
+	u, err := user.LoadUser(args[0], s.GroupMap)
+	if err != nil {
+		fmt.Fprintf(s.Conn, "550 User %s not found.\r\n", args[0])
+		return false
+	}
+	value, err := parseLimitInt(args[1])
+	if err != nil {
+		fmt.Fprintf(s.Conn, "550 Invalid group slot value %q.\r\n", args[1])
+		return false
+	}
+	u.GroupSlots = value
+	u.GroupSlotsSet = true
+	if len(args) > 2 {
+		if u.LeechSlots, err = parseNonNegativeInt(args[2]); err != nil {
+			fmt.Fprintf(s.Conn, "550 Invalid leech slot value %q.\r\n", args[2])
+			return false
+		}
+		u.LeechSlotsSet = true
+	}
+	if err := u.Save(); err != nil {
+		fmt.Fprintf(s.Conn, "550 Failed to save user %s: %v\r\n", u.Name, err)
+		return false
+	}
+	fmt.Fprintf(s.Conn, "200 Group slots changed for %s: %d %d.\r\n", u.Name, u.GroupSlots, u.LeechSlots)
+	return false
+}
+
+func (s *Session) HandleSiteGroupSimult(args []string) bool {
+	if !s.User.HasFlag("1") {
+		fmt.Fprintf(s.Conn, "550 Access denied.\r\n")
+		return false
+	}
+	if len(args) < 2 {
+		fmt.Fprintf(s.Conn, "501 Usage: SITE GROUPSIMULT <group> <count>\r\n")
+		return false
+	}
+	group := strings.TrimSpace(args[0])
+	if group == "" {
+		fmt.Fprintf(s.Conn, "550 Group is required.\r\n")
+		return false
+	}
+	if !s.canManageGroup(group) {
+		fmt.Fprintf(s.Conn, "550 Access denied.\r\n")
+		return false
+	}
+	groupCfg, err := LoadGroupConfig(group)
+	if err != nil {
+		fmt.Fprintf(s.Conn, "550 Group %s not found.\r\n", group)
+		return false
+	}
+	value, err := parseLimitInt(args[1])
+	if err != nil {
+		fmt.Fprintf(s.Conn, "550 Invalid simult value %q.\r\n", args[1])
+		return false
+	}
+	groupCfg.Simult = value
+	if err := groupCfg.Save(); err != nil {
+		fmt.Fprintf(s.Conn, "550 Failed to save group %s: %v\r\n", group, err)
+		return false
+	}
+	fmt.Fprintf(s.Conn, "200 Group simult changed for %s: %d.\r\n", groupCfg.Name, value)
 	return false
 }
 

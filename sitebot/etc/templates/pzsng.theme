@@ -355,7 +355,7 @@ announce.STATS_HOF = "%b{%c01{STATS:}} ▂▃▅▇█▓▒░۩۞۩  %b{%c%sec
 
 announce.STATS_SPEEDS = "%b{%c01{STATS:}} %b{%c14{Slowest:}} %c%sec_c4{%u_slowest_name} %c14{at} %b{%c14{%u_slowest_speed}} %c14{-} %b{%c14{Fastest:}} %c%sec_c4{%u_fastest_name} %c14{at} %b{%c14{%u_fastest_speed}}%c14{.}"
 
-announce.STATS_USER = "%b{%c01{STATS:}} %b{%c%sec_c4{[%{u_rank}]}} %c%sec_c4{%{u_name}} %c01{/} %c%sec_c5{%{u_group}} %c14{-} %b{%c14{%{u_files}f}} %c14{-} %b{%c14{%{u_mb}MB}} %c14{-} %b{%c14{%{u_pct}%}} %c14{-} %b{%c14{%{u_speed}}} %c01{[ }%b{%c03{ALUP #%{u_alup}}} %c01{] [ }%b{%c03{WKUP #%{u_wkup}}} %c01{]}"
+announce.STATS_USER = "%b{%c01{STATS:}} %b{%c%sec_c4{[%{u_rank}]}} %c%sec_c4{%{u_name}} %c01{/} %c%sec_c5{%{u_group}} %c14{-} %b{%c14{%{u_files}f}} %c14{-} %b{%c14{%{u_mb}MB}} %c14{-} %b{%c14{%{u_pct}%}} %c14{-} %b{%c14{%{u_speed}}} %c01{[ }%b{%c03{ALLUP #%{u_alup}}} %c01{] [ }%b{%c03{WKUP #%{u_wkup}}} %c01{]}"
 
 announce.STATS_GROUP_HEADER = "%b{%c01{STATS:}} %b{%c14{[ GroupTop ]}}"
 
@@ -392,7 +392,7 @@ announce.TOPCMD_EMPTY = "%b{%c03{TOP:}} %c05{No uploads recorded for today.}"
 
 announce.TOPCMD_ERROR = "%b{%c03{TOP:}} %c04{%response}"
 
-announce.BW = "%b{%c01{BANDWiDTH:}} %c01{Checking GoFTPd bandwidth, please wait ...}"
+announce.BW = "%b{%c01{BANDWiDTH:}} %c01{Checking %{sitename} bandwidth, please wait ...}"
 
 announce.BW_LINE = "%c01{%response}"
 

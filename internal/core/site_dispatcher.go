@@ -53,8 +53,18 @@ func (s *Session) DispatchSiteCommand(args []string) bool {
 		return s.HandleSiteGroup(remainingArgs)
 	case "GRPNFO":
 		return s.HandleSiteGrpNfo(remainingArgs)
+	case "GROUPSLOTS":
+		return s.HandleSiteGroupSlots(remainingArgs)
+	case "GROUPSIMULT":
+		return s.HandleSiteGroupSimult(remainingArgs)
 	case "TRAFFIC":
 		return s.HandleSiteTraffic(remainingArgs)
+	case "ALLUP", "ALLDN", "WKUP", "WKDN", "DAYUP", "DAYDN", "MONTHUP", "MONTHDN":
+		return s.HandleSiteUserStatLine(siteCmd, remainingArgs)
+	case "TAGLINE":
+		return s.HandleSiteTagline(remainingArgs)
+	case "BLOWFISH":
+		return s.HandleSiteBlowfish(remainingArgs)
 
 	// Admin / User & Group Management (site_admin.go)
 	case "ADDUSER":
@@ -69,10 +79,28 @@ func (s *Session) DispatchSiteCommand(args []string) bool {
 		return s.HandleSiteRenUser(remainingArgs)
 	case "CHPASS":
 		return s.HandleSiteChPass(remainingArgs)
+	case "CHANGE":
+		return s.HandleSiteChange(remainingArgs)
+	case "CHRATIO":
+		return s.HandleSiteChRatio(remainingArgs)
+	case "CHNUMLOGINS":
+		return s.HandleSiteChNumLogins(remainingArgs)
+	case "CHMAXSIM":
+		return s.HandleSiteChMaxSim(remainingArgs)
+	case "CHWKLYALLOTMENT":
+		return s.HandleSiteChWklyAllotment(remainingArgs)
+	case "CHUPLOADSLOTS":
+		return s.HandleSiteChUploadSlots(remainingArgs)
+	case "CHDOWNLOADSLOTS":
+		return s.HandleSiteChDownloadSlots(remainingArgs)
 	case "ADDIP":
 		return s.HandleSiteAddIP(remainingArgs)
 	case "DELIP":
 		return s.HandleSiteDelIP(remainingArgs)
+	case "BAN":
+		return s.HandleSiteBan(remainingArgs)
+	case "UNBAN":
+		return s.HandleSiteUnban(remainingArgs)
 	case "SELFIP":
 		return s.HandleSiteSelfIP(remainingArgs)
 	case "FLAGS":
@@ -93,6 +121,8 @@ func (s *Session) DispatchSiteCommand(args []string) bool {
 	// Release Management (site_nuke.go)
 	case "NUKE":
 		return s.HandleSiteNuke(remainingArgs)
+	case "NUKES":
+		return s.HandleSiteNukes(remainingArgs)
 	case "UNNUKE":
 		return s.HandleSiteUnnuke(remainingArgs)
 	case "UNDUPE":
@@ -160,22 +190,33 @@ func requiredSiteCommandFlags(command string) string {
 		"SWHO",
 		"BW",
 		"ADDUSER",
-		"GADDUSER",
 		"DELUSER",
 		"READD",
 		"RENUSER",
+		"CHANGE",
 		"CHPASS",
+		"CHNUMLOGINS",
+		"CHMAXSIM",
+		"CHWKLYALLOTMENT",
+		"CHUPLOADSLOTS",
+		"CHDOWNLOADSLOTS",
 		"ADDIP",
 		"DELIP",
+		"BAN",
+		"UNBAN",
 		"FLAGS",
 		"CHGRP",
 		"CHPGRP",
 		"GADMIN",
 		"GRPADD",
 		"GRPDEL",
+		"GROUPSLOTS",
+		"GROUPSIMULT",
 		"USERS",
 		"GRPNFO",
 		"TRAFFIC",
+		"BLOWFISH",
+		"NUKES",
 		"UNDUPE",
 		"WIPE",
 		"KICK",

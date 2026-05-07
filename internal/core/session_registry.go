@@ -131,6 +131,69 @@ func countTransfersForUser(username, direction string) int {
 	return count
 }
 
+func countSessionsForUser(username string) int {
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return 0
+	}
+	count := 0
+	activeSessions.Range(func(key, value interface{}) bool {
+		s, ok := value.(*Session)
+		if !ok || s == nil || !s.IsLogged || s.User == nil {
+			return true
+		}
+		if strings.EqualFold(s.User.Name, username) {
+			count++
+		}
+		return true
+	})
+	return count
+}
+
+func countTransfersForUserAllDirections(username string) int {
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return 0
+	}
+	count := 0
+	activeSessions.Range(func(key, value interface{}) bool {
+		s, ok := value.(*Session)
+		if !ok || s == nil || !s.IsLogged || s.User == nil {
+			return true
+		}
+		if !strings.EqualFold(s.User.Name, username) {
+			return true
+		}
+		s.stateMu.RLock()
+		hasTransfer := strings.TrimSpace(s.TransferPath) != "" && strings.TrimSpace(s.TransferDirection) != ""
+		s.stateMu.RUnlock()
+		if hasTransfer {
+			count++
+		}
+		return true
+	})
+	return count
+}
+
+func countSessionsForGroup(group string) int {
+	group = strings.TrimSpace(group)
+	if group == "" {
+		return 0
+	}
+	count := 0
+	activeSessions.Range(func(key, value interface{}) bool {
+		s, ok := value.(*Session)
+		if !ok || s == nil || !s.IsLogged || s.User == nil {
+			return true
+		}
+		if s.User.IsInGroup(group) {
+			count++
+		}
+		return true
+	})
+	return count
+}
+
 func DisconnectActiveSession(id uint64) bool {
 	if id == 0 {
 		return false

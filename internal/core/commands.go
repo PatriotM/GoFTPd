@@ -302,6 +302,15 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				fmt.Fprintf(s.Conn, "530 Account disabled.\r\n")
 				return false
 			}
+			if ban, ok := FindUserBan(s.User.Name); ok {
+				s.emitLoginFailure(s.User.Name, remoteIP, "account_banned")
+				if strings.TrimSpace(ban.Reason) != "" {
+					fmt.Fprintf(s.Conn, "530 Account banned: %s.\r\n", ban.Reason)
+				} else {
+					fmt.Fprintf(s.Conn, "530 Account banned.\r\n")
+				}
+				return false
+			}
 
 			pass := ""
 			if len(args) > 0 {
@@ -367,6 +376,26 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				s.emitLoginFailure(s.User.Name, remoteIP, "tls_required")
 				fmt.Fprintf(s.Conn, "530 TLS required.\r\n")
 				return false
+			}
+			if s.User.LoginSlots > 0 {
+				activeSessionsForUser := countSessionsForUser(s.User.Name)
+				if activeSessionsForUser >= s.User.LoginSlots {
+					s.emitLoginFailure(s.User.Name, remoteIP, "max_logins_reached")
+					fmt.Fprintf(s.Conn, "530 Maximum simultaneous logins reached (%d).\r\n", s.User.LoginSlots)
+					return false
+				}
+			}
+			if s.User.PrimaryGroup != "" {
+				if groupCfg, err := LoadGroupConfig(s.User.PrimaryGroup); err == nil && groupCfg.Simult > 0 {
+					if countSessionsForGroup(s.User.PrimaryGroup) >= groupCfg.Simult {
+						s.emitLoginFailure(s.User.Name, remoteIP, "group_simult_reached")
+						fmt.Fprintf(s.Conn, "530 Group simultaneous login limit reached (%d).\r\n", groupCfg.Simult)
+						return false
+					}
+				}
+			}
+			if err := applyWeeklyAllotmentIfDue(s.User, time.Now()); err != nil && s.Config.Debug {
+				log.Printf("[WEEKLYALLOTMENT] apply failed for %s: %v", s.User.Name, err)
 			}
 
 			s.IsLogged = true
@@ -1575,7 +1604,13 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				return false
 			}
 		}
-
+		if s.User != nil && s.User.MaxSim > 0 {
+			activeTransfers := countTransfersForUserAllDirections(s.User.Name)
+			if activeTransfers >= s.User.MaxSim {
+				fmt.Fprintf(s.Conn, "550 Maximum simultaneous transfers reached (%d).\r\n", s.User.MaxSim)
+				return false
+			}
+		}
 		if s.Config.Passthrough && s.Config.Mode == "master" && s.MasterManager != nil && s.ActiveAddr != "" && s.PassthruSlave == nil {
 			if bridge, ok := s.MasterManager.(MasterBridge); ok {
 				filePath := uploadPath
@@ -2086,7 +2121,11 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				if restOffset > 0 && restOffset < fileSize {
 					remainingSize = fileSize - restOffset
 				}
-				if !isSpeedtest && !s.User.CanDownload("", remainingSize) {
+				if !isSpeedtest && !s.User.HasDownloadAccess() {
+					fmt.Fprintf(s.Conn, "550 No permission to download.\r\n")
+					return false
+				}
+				if !isSpeedtest && !s.User.HasEnoughCredits(remainingSize) {
 					fmt.Fprintf(s.Conn, "550 Not enough credits.\r\n")
 					return false
 				}
@@ -2097,7 +2136,13 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						return false
 					}
 				}
-
+				if s.User != nil && s.User.MaxSim > 0 {
+					activeTransfers := countTransfersForUserAllDirections(s.User.Name)
+					if activeTransfers >= s.User.MaxSim {
+						fmt.Fprintf(s.Conn, "550 Maximum simultaneous transfers reached (%d).\r\n", s.User.MaxSim)
+						return false
+					}
+				}
 				if s.Config.Passthrough && s.ActiveAddr != "" && s.PassthruSlave == nil {
 					portAddr := s.ActiveAddr
 					s.ActiveAddr = ""
@@ -2232,7 +2277,11 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		if restOffset > 0 && restOffset < fileSize {
 			remainingSize = fileSize - restOffset
 		}
-		if !isSpeedtest && !s.User.CanDownload("", remainingSize) {
+		if !isSpeedtest && !s.User.HasDownloadAccess() {
+			fmt.Fprintf(s.Conn, "550 No permission to download.\r\n")
+			return false
+		}
+		if !isSpeedtest && !s.User.HasEnoughCredits(remainingSize) {
 			fmt.Fprintf(s.Conn, "550 Not enough credits.\r\n")
 			return false
 		}
@@ -2243,7 +2292,13 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				return false
 			}
 		}
-
+		if s.User != nil && s.User.MaxSim > 0 {
+			activeTransfers := countTransfersForUserAllDirections(s.User.Name)
+			if activeTransfers >= s.User.MaxSim {
+				fmt.Fprintf(s.Conn, "550 Maximum simultaneous transfers reached (%d).\r\n", s.User.MaxSim)
+				return false
+			}
+		}
 		raw, err := s.getRawDataConn()
 		if err != nil {
 			fmt.Fprintf(s.Conn, "425 Data connection failed\r\n")

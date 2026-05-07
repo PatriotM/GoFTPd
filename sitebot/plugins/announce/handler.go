@@ -663,7 +663,7 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 		perVars["u_wkdn"] = vars["u_wkdn"]
 		perVars["u_monthdn"] = vars["u_monthdn"]
 		perVars["u_daydn"] = vars["u_daydn"]
-		fallback := fmt.Sprintf("%s. %s@%s [%sMB/%s Files/%s%%/%s] [ALUP #%s][WKUP #%s]",
+		fallback := fmt.Sprintf("%s. %s@%s [%sMB/%s Files/%s%%/%s] [ALLUP #%s][WKUP #%s]",
 			vars["u_rank"], perVars["u_name"], perVars["u_group"], perVars["u_mb"], perVars["u_files"], perVars["u_pct"], perVars["u_speed"], perVars["u_alup"], perVars["u_wkup"])
 		if line := strings.TrimSpace(p.render("STATS_USER", perVars, fallback)); line != "" {
 			outs = append(outs, plugin.Output{Type: "STATS", Text: line})
@@ -724,23 +724,41 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 	case event.EventLoginFail:
 		message := strings.TrimSpace(vars["message"])
 		if message == "" {
+			mask := strings.TrimSpace(vars["remote_mask"])
+			ip := strings.TrimSpace(vars["remote_ip"])
+			source := mask
+			if source == "" {
+				source = ip
+			}
+			banHint := ""
+			if mask != "" {
+				banHint = fmt.Sprintf(" Ban: SITE BAN %s", mask)
+			}
 			switch strings.TrimSpace(vars["reason"]) {
 			case "user_deleted":
 				message = fmt.Sprintf("%s could not log in, user deleted.", vars["username"])
 			case "account_disabled":
 				message = fmt.Sprintf("%s could not log in, account disabled.", vars["username"])
+			case "account_banned":
+				message = fmt.Sprintf("%s could not log in, account banned.", vars["username"])
 			case "bad_password":
-				message = fmt.Sprintf("%s could not log in, bad password.", vars["username"])
+				message = fmt.Sprintf("%s could not log in, bad password from %s.%s", vars["username"], source, banHint)
 			case "ip_not_allowed":
-				message = fmt.Sprintf("%s could not log in, ip %s not allowed.", vars["username"], vars["remote_ip"])
+				message = fmt.Sprintf("%s could not log in, ip %s not allowed (%s).%s", vars["username"], ip, source, banHint)
 			case "ip_restricted":
-				message = fmt.Sprintf("%s could not log in, ip %s not in whitelist.", vars["username"], vars["remote_ip"])
+				message = fmt.Sprintf("%s could not log in, ip %s not in whitelist (%s).%s", vars["username"], ip, source, banHint)
 			case "account_expired":
 				message = fmt.Sprintf("%s could not log in, account expired.", vars["username"])
 			case "tls_required":
 				message = fmt.Sprintf("%s could not log in, TLS required.", vars["username"])
+			case "plugin_rejected":
+				message = fmt.Sprintf("%s could not log in, denied by plugin from %s.%s", vars["username"], source, banHint)
+			case "max_logins_reached":
+				message = fmt.Sprintf("%s could not log in, login limit reached.", vars["username"])
+			case "group_simult_reached":
+				message = fmt.Sprintf("%s could not log in, group login limit reached.", vars["username"])
 			default:
-				message = fmt.Sprintf("denied unknown connection from %s at ip %s.", vars["remote_mask"], vars["remote_ip"])
+				message = fmt.Sprintf("denied unknown connection from %s at ip %s.%s", source, ip, banHint)
 			}
 		}
 		vars["message"] = message
