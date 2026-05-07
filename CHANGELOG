@@ -29,13 +29,6 @@ GoFTPd Changelog
     allowances
   - allowed managed-group leech assignment only through the narrow leech-slot
     path while keeping full ratio changes siteop-only
-- Refined sitebot output and themes:
-  - bandwidth plugin uses the configured site name instead of a hardcoded
-    daemon name
-  - failed-login staff notices include ready-to-copy ban hints for rejected
-    IPs
-  - race stats labels/colors were cleaned up, including `ALLUP` naming and
-    more consistent rank, speed, and header styling
 - Refreshed README and wiki content for the newer slave-mode, remerge, and
   transfer behavior.
 
