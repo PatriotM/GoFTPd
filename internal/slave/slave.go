@@ -45,6 +45,7 @@ type Slave struct {
 	tlsKey               string
 	bindIP               string
 	ignorePartialRemerge bool
+	debug                bool
 
 	conn            net.Conn
 	stream          *protocol.ObjectStream
@@ -84,6 +85,7 @@ type SlaveConfig struct {
 	BindIP               string   `yaml:"bind_ip"`
 	Timeout              int      `yaml:"timeout"` // seconds, default 60
 	IgnorePartialRemerge bool     `yaml:"ignore_partial_remerge"`
+	Debug                bool
 }
 
 func NewSlave(cfg SlaveConfig) *Slave {
@@ -107,6 +109,7 @@ func NewSlave(cfg SlaveConfig) *Slave {
 		bindIP:               cfg.BindIP,
 		timeout:              timeout,
 		ignorePartialRemerge: cfg.IgnorePartialRemerge,
+		debug:                cfg.Debug,
 	}
 }
 
@@ -210,7 +213,9 @@ func (s *Slave) listenForCommands() error {
 		}
 
 		lastActivity = time.Now()
-		log.Printf("[Slave] Received command: %s", ac)
+		if s.debug {
+			log.Printf("[Slave] Received command: %s", ac)
+		}
 
 		// Handle command in its own goroutine ( thread)
 		go func(cmd *protocol.AsyncCommand) {
@@ -520,7 +525,9 @@ func (s *Slave) handleMakeDir(ac *protocol.AsyncCommand) interface{} {
 		}
 	}
 
-	log.Printf("[Slave] Created directory %s", dirPath)
+	if s.debug {
+		log.Printf("[Slave] Created directory %s", dirPath)
+	}
 	return &protocol.AsyncResponse{Index: ac.Index}
 }
 

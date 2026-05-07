@@ -530,6 +530,7 @@ func startSlave(cfg *core.Config) {
 		BindIP:               bindIP,
 		Timeout:              timeout,
 		IgnorePartialRemerge: ignorePartialRemerge,
+		Debug:                cfg.Debug,
 	})
 
 	// Boot blocks until disconnected
