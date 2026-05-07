@@ -447,10 +447,11 @@ Implemented daemon SITE commands include:
 | Area | Commands |
 |------|----------|
 | Info | `HELP`, `RULES`, `WHO`, `SWHO`, `BW`, `USERS`, `USER`, `SEEN`, `LASTLOGIN`, `GROUPS`, `GROUP`, `GINFO`, `GRPNFO`, `TRAFFIC` |
-| Users/groups | `ADDUSER`, `GADDUSER`, `DELUSER`, `READD`, `RENUSER`, `CHPASS`, `ADDIP`, `DELIP`, `SELFIP`, `FLAGS`, `CHGRP`, `CHPGRP`, `GADMIN`, `GRPADD`, `GRPDEL`, `GRP` |
-| Release/admin | `NUKE`, `UNNUKE`, `UNDUPE`, `WIPE`, `KICK`, `REHASH`, `REMERGE`, `CHMOD` |
+| Users/groups | `ADDUSER`, `GADDUSER`, `DELUSER`, `READD`, `RENUSER`, `CHANGE`, `CHPASS`, `CHRATIO`, `CHNUMLOGINS`, `CHMAXSIM`, `CHWKLYALLOTMENT`, `CHUPLOADSLOTS`, `CHDOWNLOADSLOTS`, `GROUPSLOTS`, `GROUPSIMULT`, `ADDIP`, `DELIP`, `SELFIP`, `BAN`, `UNBAN`, `FLAGS`, `CHGRP`, `CHPGRP`, `TAGLINE`, `GADMIN`, `GRPADD`, `GRPDEL`, `GRP` |
+| Release/admin | `NUKE`, `UNNUKE`, `NUKES`, `UNDUPE`, `WIPE`, `KICK`, `REHASH`, `REMERGE`, `CHMOD` |
 | Search/rescan | `SEARCH`, `RACE`, `RESCAN`, `XDUPE` |
-| IRC/sitebot | `INVITE` |
+| Stats/traffic | `ALLUP`, `ALLDN`, `WKUP`, `WKDN`, `DAYUP`, `DAYDN`, `MONTHUP`, `MONTHDN` |
+| IRC/sitebot | `INVITE`, `BLOWFISH` |
 | Plugins | `PRE`, `ADDAFFIL`, `DELAFFIL`, `AFFILS`, `REQUEST`, `REQUESTS`, `REQFILL`, `REQFILLED`, `REQDEL`, `REQWIPE`, `BANNED`, `SELFIP` |
 
 Command access is controlled through `sitecmd` ACL rules in
@@ -460,12 +461,24 @@ Account command notes:
 
 - `GADDUSER <user> <pass> <group> [ident@ip ...]` creates a user and places it
   in the given group immediately.
+- `GADDUSER` is the only built-in gadmin-capable account-management command by
+  default. A group admin can only add users for groups they manage.
 - `DELUSER <user>` now moves the user into `etc/users/.deleted/` instead of
   permanently removing the account file.
 - `READD <user> [newpass]` restores a user deleted with `DELUSER`. If the old
   password hash was preserved, `newpass` is optional.
 - `RENUSER <olduser> <newuser>` renames both the user file and the passwd
   entry.
+- `CHANGE` is a convenience wrapper for built-in user/group limit edits such as
+  ratio, login limits, slot counts, weekly allotment, and group simult.
+- `GROUPSLOTS <gadmin-user> <slots> [leech_slots]` stores how many users that
+  gadmin may create and how many of those may be leech users.
+- `CHWKLYALLOTMENT <user> <credits>` sets the weekly credit replacement amount.
+  GoFTPd persists the applied week and replaces credits once per week instead
+  of adding to the current credit total.
+- `CHRATIO <user> 0` is still siteop-controlled overall, but the current build
+  also allows the narrow managed-group leech path when a gadmin has free
+  `leech_slots`.
 
 ## Sitebot
 
