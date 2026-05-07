@@ -1,6 +1,88 @@
 GoFTPd Changelog
 ================
 
+1.1.0b
+------
+
+- Expanded built-in SITE command coverage and user management:
+  - added `SITE CHANGE`
+  - added `SITE CHNUMLOGINS`, `CHMAXSIM`, `CHWKLYALLOTMENT`,
+    `CHUPLOADSLOTS`, `CHDOWNLOADSLOTS`, `GROUPSLOTS`, `GROUPSIMULT`,
+    `BAN`, `UNBAN`, `BLOWFISH`, `TAGLINE`, and `NUKES`
+  - added `SITE ALLUP`, `ALLDN`, `WKUP`, `WKDN`, `DAYUP`, `DAYDN`,
+    `MONTHUP`, and `MONTHDN`
+  - tightened built-in siteop/gadmin command boundaries so group admins are
+    limited to adding users for their own managed groups
+- Added persistent nuke history in `userdata/nukes.db` and wired both manual
+  and automatic nukes through the same history path, including stored reason,
+  multiplier, affected users, bytes, credits, and unnuke tracking.
+- Added persistent weekly allotment state in `userdata/weekly_allotment.db`
+  so weekly credit replacement survives restarts and only reapplies once per
+  week.
+- Added banlist-backed login bans in `etc/banlist.txt`.
+- Expanded the shipped userfile model and defaults:
+  - fuller compatibility fields such as `LOGINS`, `LOGINSLOTS`, `MAXSIM`,
+    `UPLOADSLOTS`, `DOWNLOADSLOTS`, `WKLYALLOTMENT`, `GROUPSLOTS`, and
+    `PRIMARY_GROUP`
+  - corrected runtime enforcement for login slots, max simultaneous
+    transfers, upload/download slots, weekly allotment, and grouped admin
+    allowances
+  - allowed managed-group leech assignment only through the narrow leech-slot
+    path while keeping full ratio changes siteop-only
+- Refined sitebot output and themes:
+  - bandwidth plugin uses the configured site name instead of a hardcoded
+    daemon name
+  - failed-login staff notices include ready-to-copy ban hints for rejected
+    IPs
+  - race stats labels/colors were cleaned up, including `ALLUP` naming and
+    more consistent rank, speed, and header styling
+- Refreshed README and wiki content for the newer slave-mode, remerge, and
+  transfer behavior.
+
+1.0.9b
+------
+
+- Preserved more VFS directory metadata across restarts and reused cached VFS
+  state on the first slave reconnect after master startup instead of forcing a
+  pointless initial full remerge.
+- Fixed race-complete and race-stats announce edge cases caused by stale
+  live-transfer state and over-aggressive complete dedupe.
+- Fixed race-complete timing around the last uploaded file so `COMPLETE` and
+  follow-up stats lines no longer disappear on successful finishes.
+- Reduced race polling pressure on slaves by keeping fresh transfer-state
+  reads limited to the completion-critical paths.
+
+1.0.8b
+------
+
+- Reduced routine console noise:
+  - quieter master/slave non-debug logging
+  - hidden routine slave command spam unless debug logging is enabled
+  - trimmed successful transfer checksum chatter while keeping mismatch
+    warnings
+- Tightened slave-mode config handling so slave roots are explicit and
+  role-specific config expectations are clearer.
+- Refined sitebot output and themes:
+  - bandwidth plugin uses the configured site name instead of a hardcoded
+    daemon name
+  - failed-login staff notices include ready-to-copy ban hints for rejected
+    IPs
+  - race stats labels/colors were cleaned up, including `ALLUP` naming and
+    more consistent rank, speed, and header styling
+
+1.0.7b
+------
+
+- Reworked the active/passive transfer path for better secure FXP and
+  passthrough stability, including cleaner SSCN/CPSV state handling,
+  corrected active TLS role behavior, deferred slave connect timing, and
+  tighter transfer-state handoff between master and slave.
+- Improved live race transfer behavior, including better secure active upload
+  handling, cleaner duplicate-file responses, and more consistent complete
+  banner timing under load.
+- Added handling for zip-integrity slave responses and improved rescan /
+  remerge reporting during large recovery runs.
+
 1.0.6b
 ------
 
