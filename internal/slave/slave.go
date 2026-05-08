@@ -28,6 +28,8 @@ import (
 const (
 	socketTimeout = 10 * time.Second
 	actualTimeout = 60 * time.Second
+	minTransferBufferSize = 32 * 1024
+	defaultTransferBufferSize = 256 * 1024
 )
 
 // Slave is the slave daemon,
@@ -45,6 +47,7 @@ type Slave struct {
 	tlsKey               string
 	bindIP               string
 	ignorePartialRemerge bool
+	transferBufferSize   int
 	debug                bool
 
 	conn            net.Conn
@@ -85,6 +88,7 @@ type SlaveConfig struct {
 	BindIP               string   `yaml:"bind_ip"`
 	Timeout              int      `yaml:"timeout"` // seconds, default 60
 	IgnorePartialRemerge bool     `yaml:"ignore_partial_remerge"`
+	TransferBufferSize   int      `yaml:"transfer_buffer_size"`
 	Debug                bool
 }
 
@@ -95,6 +99,13 @@ func NewSlave(cfg SlaveConfig) *Slave {
 	}
 	if len(cfg.Roots) == 0 {
 		cfg.Roots = []string{"./site"}
+	}
+	bufferSize := cfg.TransferBufferSize
+	if bufferSize <= 0 {
+		bufferSize = defaultTransferBufferSize
+	}
+	if bufferSize < minTransferBufferSize {
+		bufferSize = minTransferBufferSize
 	}
 	return &Slave{
 		name:                 cfg.Name,
@@ -109,8 +120,16 @@ func NewSlave(cfg SlaveConfig) *Slave {
 		bindIP:               cfg.BindIP,
 		timeout:              timeout,
 		ignorePartialRemerge: cfg.IgnorePartialRemerge,
+		transferBufferSize:   bufferSize,
 		debug:                cfg.Debug,
 	}
+}
+
+func (s *Slave) getTransferBufferSize() int {
+	if s == nil || s.transferBufferSize < minTransferBufferSize {
+		return defaultTransferBufferSize
+	}
+	return s.transferBufferSize
 }
 
 // Boot connects to master, performs handshake, sends disk status, then enters command loop.

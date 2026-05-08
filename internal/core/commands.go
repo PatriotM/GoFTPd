@@ -1654,6 +1654,8 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						if expectedCRC, exists := cachedExpectedCRC(sfvEntries, fileName); exists {
 							if expectedCRC != checksum {
 								bridge.DeleteFile(filePath)
+								_ = bridge.MarkFileMissing(filePath)
+								createMasterSFVMissingMarker(s.Config, bridge, uploadDir, fileName)
 								log.Printf("[MASTER-ZS] CRC mismatch for %s: got %08X, expected %08X — deleted",
 									fileName, checksum, expectedCRC)
 								fmt.Fprintf(s.Conn, "226- checksum mismatch: SLAVE: %08X SFV: %08X\r\n", checksum, expectedCRC)
@@ -1670,6 +1672,9 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					sfvEntries := bridge.GetSFVData(uploadDir)
 					if expectedCRC, exists := cachedExpectedCRC(sfvEntries, fileName); exists {
 						writeUploadSFVStatus(s.Conn, checksum, expectedCRC, true, fileSize)
+						if checksum == expectedCRC && checksum != 0 {
+							clearMasterSFVMissingMarker(bridge, uploadDir, fileName)
+						}
 					} else {
 						writeUploadNoSFVEntryStatus(s.Conn, sfvEntries, fileName)
 					}
@@ -1679,6 +1684,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					if sfvEntries, err := bridge.GetSFVInfo(filePath); err == nil {
 						log.Printf("[MASTER-ZS] Parsed SFV %s: %d entries", fileName, len(sfvEntries))
 						bridge.CacheSFV(uploadDir, fileName, sfvEntries)
+						syncMasterSFVMissingMarkers(s.Config, bridge, uploadDir)
 					}
 				}
 				if err := refreshZipDIZFromArchive(bridge, uploadDir, filePath, fileName); err != nil && s.Config.Debug {
@@ -1825,6 +1831,8 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						if expectedCRC, exists := cachedExpectedCRC(sfvEntries, fileName); exists {
 							if expectedCRC != checksum {
 								bridge.DeleteFile(filePath)
+								_ = bridge.MarkFileMissing(filePath)
+								createMasterSFVMissingMarker(s.Config, bridge, uploadDir, fileName)
 								log.Printf("[MASTER-ZS] CRC mismatch for %s: got %08X, expected %08X — deleted",
 									fileName, checksum, expectedCRC)
 								fmt.Fprintf(s.Conn, "226- checksum mismatch: SLAVE: %08X SFV: %08X\r\n", checksum, expectedCRC)
@@ -1841,6 +1849,9 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					sfvEntries := bridge.GetSFVData(uploadDir)
 					if expectedCRC, exists := cachedExpectedCRC(sfvEntries, fileName); exists {
 						writeUploadSFVStatus(s.Conn, checksum, expectedCRC, true, fileSize)
+						if checksum == expectedCRC && checksum != 0 {
+							clearMasterSFVMissingMarker(bridge, uploadDir, fileName)
+						}
 					} else {
 						writeUploadNoSFVEntryStatus(s.Conn, sfvEntries, fileName)
 					}
@@ -1850,6 +1861,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					if sfvEntries, err := bridge.GetSFVInfo(filePath); err == nil {
 						log.Printf("[MASTER-ZS] Parsed SFV %s: %d entries", fileName, len(sfvEntries))
 						bridge.CacheSFV(uploadDir, fileName, sfvEntries)
+						syncMasterSFVMissingMarkers(s.Config, bridge, uploadDir)
 					}
 				}
 				if err := refreshZipDIZFromArchive(bridge, uploadDir, filePath, fileName); err != nil && s.Config.Debug {
@@ -2026,6 +2038,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		if checksum > 0 && zipscript.ShouldDeleteBadCRCForDir(s.Config.Zipscript, uploadDir) && !strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
 			if expectedCRC, ok := localExpectedCRCForFile(localPath); ok && expectedCRC != checksum {
 				_ = os.Remove(localPath)
+				createLocalSFVMissingMarker(s.Config, filepath.Dir(localPath), fileName)
 				fmt.Fprintf(s.Conn, "226- checksum mismatch: SLAVE: %08X SFV: %08X\r\n", checksum, expectedCRC)
 				fmt.Fprintf(s.Conn, "226 Checksum mismatch, deleting file\r\n")
 				return false
@@ -2035,9 +2048,14 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			sfvEntries := localSFVEntriesForDir(filepath.Dir(localPath))
 			if expectedCRC, ok := cachedExpectedCRC(sfvEntries, fileName); ok {
 				writeUploadSFVStatus(s.Conn, checksum, expectedCRC, true, fileSize)
+				if checksum == expectedCRC && checksum != 0 {
+					clearLocalSFVMissingMarker(filepath.Dir(localPath), fileName)
+				}
 			} else {
 				writeUploadNoSFVEntryStatus(s.Conn, sfvEntries, fileName)
 			}
+		} else {
+			syncLocalSFVMissingMarkers(s.Config, filepath.Dir(localPath))
 		}
 
 		isSpeedtest := isSpeedtestPath(uploadPath)
@@ -3253,6 +3271,15 @@ func activeIncompleteIndicator(cfg *Config) string {
 }
 
 func trimRaceUsers(cfg *Config, users []VFSRaceUser) []VFSRaceUser {
+	if cfg != nil && cfg.Zipscript.Race.MaskUserGroupNames {
+		masked := make([]VFSRaceUser, len(users))
+		copy(masked, users)
+		for i := range masked {
+			masked[i].Name = maskRaceName(masked[i].Name)
+			masked[i].Group = maskRaceName(masked[i].Group)
+		}
+		users = masked
+	}
 	if cfg == nil || cfg.Zipscript.Race.MaxUsersInTop <= 0 || len(users) <= cfg.Zipscript.Race.MaxUsersInTop {
 		return users
 	}
@@ -3260,10 +3287,32 @@ func trimRaceUsers(cfg *Config, users []VFSRaceUser) []VFSRaceUser {
 }
 
 func trimRaceGroups(cfg *Config, groups []VFSRaceGroup) []VFSRaceGroup {
+	if cfg != nil && cfg.Zipscript.Race.MaskUserGroupNames {
+		masked := make([]VFSRaceGroup, len(groups))
+		copy(masked, groups)
+		for i := range masked {
+			masked[i].Name = maskRaceName(masked[i].Name)
+		}
+		groups = masked
+	}
 	if cfg == nil || cfg.Zipscript.Race.MaxGroupsInTop <= 0 || len(groups) <= cfg.Zipscript.Race.MaxGroupsInTop {
 		return groups
 	}
 	return groups[:cfg.Zipscript.Race.MaxGroupsInTop]
+}
+
+func maskRaceName(name string) string {
+	runes := []rune(strings.TrimSpace(name))
+	switch len(runes) {
+	case 0:
+		return name
+	case 1:
+		return string(runes)
+	case 2:
+		return string(runes[0]) + "*"
+	default:
+		return string(runes[0]) + strings.Repeat("*", len(runes)-2) + string(runes[len(runes)-1])
+	}
 }
 
 func raceCRCKey(name string) string {
@@ -3346,6 +3395,57 @@ func shouldTreatDownloadAsMissing(cfg *Config, bridge MasterBridge, filePath str
 		}
 	}
 	return true
+}
+
+func syncMasterSFVMissingMarkers(cfg *Config, bridge MasterBridge, dirPath string) {
+	if cfg == nil || bridge == nil || !zipscript.ShowMissingFilesForDir(cfg.Zipscript, dirPath) {
+		return
+	}
+	sfvEntries := bridge.GetSFVData(dirPath)
+	if sfvEntries == nil {
+		return
+	}
+	verifiedPresent := bridge.GetVerifiedSFVPresentFiles(dirPath)
+	existingFiles := map[string]bool{}
+	for _, entry := range bridge.ListDir(dirPath) {
+		if entry.IsDir || strings.HasSuffix(strings.ToUpper(strings.TrimSpace(entry.Name)), "-MISSING") {
+			continue
+		}
+		existingFiles[raceCRCKey(entry.Name)] = true
+	}
+	for fileName := range sfvEntries {
+		key := raceCRCKey(fileName)
+		missingPath := path.Join(dirPath, fileName+"-MISSING")
+		if (verifiedPresent != nil && verifiedPresent[key]) || existingFiles[key] {
+			if bridge.GetFileSize(missingPath) >= 0 {
+				_ = bridge.DeleteFile(missingPath)
+			}
+			continue
+		}
+		if bridge.GetFileSize(missingPath) < 0 {
+			_ = bridge.WriteFile(missingPath, []byte{})
+		}
+	}
+}
+
+func clearMasterSFVMissingMarker(bridge MasterBridge, dirPath, fileName string) {
+	if bridge == nil {
+		return
+	}
+	missingPath := path.Join(dirPath, fileName+"-MISSING")
+	if bridge.GetFileSize(missingPath) >= 0 {
+		_ = bridge.DeleteFile(missingPath)
+	}
+}
+
+func createMasterSFVMissingMarker(cfg *Config, bridge MasterBridge, dirPath, fileName string) {
+	if cfg == nil || bridge == nil || !zipscript.ShowMissingFilesForDir(cfg.Zipscript, dirPath) {
+		return
+	}
+	missingPath := path.Join(dirPath, fileName+"-MISSING")
+	if bridge.GetFileSize(missingPath) < 0 {
+		_ = bridge.WriteFile(missingPath, []byte{})
+	}
 }
 
 func zipscriptMediaInfoSettings(cfg *Config) (string, int) {

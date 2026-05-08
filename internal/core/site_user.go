@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -503,43 +504,73 @@ func (s *Session) HandleSiteUnban(args []string) bool {
 }
 
 type sitebotBlowfishConfig struct {
+	IRC struct {
+		Host     string `yaml:"host"`
+		Port     int    `yaml:"port"`
+		Nick     string `yaml:"nick"`
+		Password string `yaml:"password"`
+		SSL      bool   `yaml:"ssl"`
+	} `yaml:"irc"`
 	Encryption struct {
 		PrivateKey string            `yaml:"private_key"`
 		Keys       map[string]string `yaml:"keys"`
 	} `yaml:"encryption"`
 }
 
-func (s *Session) HandleSiteBlowfish(args []string) bool {
-	if !s.User.HasFlag("1") {
-		fmt.Fprintf(s.Conn, "550 Access denied.\r\n")
-		return false
-	}
+func (s *Session) loadSitebotBlowfishConfig() (*sitebotBlowfishConfig, error) {
 	cfg := &sitebotBlowfishConfig{}
 	if len(s.Config.BlowfishKeys) > 0 || strings.TrimSpace(s.Config.BlowfishPrivateKey) != "" {
 		cfg.Encryption.PrivateKey = s.Config.BlowfishPrivateKey
 		cfg.Encryption.Keys = s.Config.BlowfishKeys
-	} else {
-		if strings.TrimSpace(s.Config.SitebotConfig) == "" {
-			fmt.Fprintf(s.Conn, "550 Neither blowfish_keys nor sitebot_config is configured.\r\n")
-			return false
+	}
+	if strings.TrimSpace(s.Config.SitebotConfig) == "" {
+		if len(cfg.Encryption.Keys) == 0 && strings.TrimSpace(cfg.Encryption.PrivateKey) == "" {
+			return nil, fmt.Errorf("neither blowfish_keys nor sitebot_config is configured")
 		}
-		data, err := os.ReadFile(filepath.Clean(s.Config.SitebotConfig))
-		if err != nil {
-			fmt.Fprintf(s.Conn, "550 Could not read sitebot config: %v\r\n", err)
-			return false
-		}
-		if err := yaml.Unmarshal(data, cfg); err != nil {
-			fmt.Fprintf(s.Conn, "550 Could not parse sitebot config: %v\r\n", err)
-			return false
-		}
+		return cfg, nil
+	}
+	data, err := os.ReadFile(filepath.Clean(s.Config.SitebotConfig))
+	if err != nil {
+		return nil, fmt.Errorf("could not read sitebot config: %w", err)
+	}
+	if err := yaml.Unmarshal(data, cfg); err != nil {
+		return nil, fmt.Errorf("could not parse sitebot config: %w", err)
+	}
+	return cfg, nil
+}
+
+func renderSiteInfoBlock(w io.Writer, version, title string, lines []string) {
+	width := 70
+
+	raw(w, line(cpTL, cpHZ, cpTR, width))
+	text(w, "   ____       _____ _____ ____     _  ", width)
+	text(w, "  / ___| ___ |  ___|_   _|  _ \\ __| | ", width)
+	text(w, " | |  _ / _ \\| |_    | | | |_) / _` | ", width)
+	text(w, " | |_| | (_) |  _|   | | |  __/ (_| | ", width)
+	text(w, "  \\____|\\___/|_|     |_| |_|   \\__,_| ", width)
+	text(w, fmt.Sprintf(" You are using GoFTPd v%s ", version), width)
+	raw(w, line(cpLT, cpHZ, cpRT, width))
+	text(w, fmt.Sprintf(" %s ", title), width)
+	raw(w, line(cpLT, cpHZ, cpRT, width))
+	for _, lineText := range lines {
+		text(w, " "+strings.TrimSpace(lineText), width)
+	}
+	raw(w, line(cpBL, cpHZ, cpBR, width))
+}
+
+func (s *Session) HandleSiteBlowfish(args []string) bool {
+	cfg, err := s.loadSitebotBlowfishConfig()
+	if err != nil {
+		fmt.Fprintf(s.Conn, "550 %v\r\n", err)
+		return false
 	}
 	filter := ""
 	if len(args) > 0 {
 		filter = strings.TrimSpace(args[0])
 	}
-	fmt.Fprintf(s.Conn, "200- Blowfish keys:\r\n")
+	var lines []string
 	if cfg.Encryption.PrivateKey != "" && (filter == "" || strings.EqualFold(filter, "PM") || strings.EqualFold(filter, "PRIVATE")) {
-		fmt.Fprintf(s.Conn, "200- PM/NOTICE %s\r\n", cfg.Encryption.PrivateKey)
+		lines = append(lines, fmt.Sprintf("PM/NOTICE  %s", cfg.Encryption.PrivateKey))
 	}
 	channels := make([]string, 0, len(cfg.Encryption.Keys))
 	for channel := range cfg.Encryption.Keys {
@@ -550,10 +581,50 @@ func (s *Session) HandleSiteBlowfish(args []string) bool {
 		if filter != "" && !strings.EqualFold(filter, channel) {
 			continue
 		}
-		fmt.Fprintf(s.Conn, "200- %s %s\r\n", channel, cfg.Encryption.Keys[channel])
+		lines = append(lines, fmt.Sprintf("%-12s %s", channel, cfg.Encryption.Keys[channel]))
 	}
-	fmt.Fprintf(s.Conn, "200 End of blowfish keys.\r\n")
+	if len(lines) == 0 {
+		lines = append(lines, "No matching blowfish keys configured.")
+	}
+	RenderFTPReplyBlock(s.Conn, 200, "End of blowfish keys.", func(w io.Writer) {
+		renderSiteInfoBlock(w, s.Config.Version, "Blowfish Keys", lines)
+	})
 	return false
+}
+
+func (s *Session) HandleSiteIRC(args []string) bool {
+	cfg, err := s.loadSitebotBlowfishConfig()
+	if err != nil {
+		fmt.Fprintf(s.Conn, "550 %v\r\n", err)
+		return false
+	}
+	password := cfg.IRC.Password
+	if strings.TrimSpace(password) == "" {
+		password = "(none)"
+	}
+	sslMode := "off"
+	if cfg.IRC.SSL {
+		sslMode = "on"
+	}
+	lines := []string{
+		fmt.Sprintf("Server     %s", fallbackSiteInfoValue(cfg.IRC.Host)),
+		fmt.Sprintf("Port       %s", fallbackSiteInfoValue(fmt.Sprintf("%d", cfg.IRC.Port))),
+		fmt.Sprintf("SSL        %s", sslMode),
+		fmt.Sprintf("Nick       %s", fallbackSiteInfoValue(cfg.IRC.Nick)),
+		fmt.Sprintf("Password   %s", password),
+	}
+	RenderFTPReplyBlock(s.Conn, 200, "End of IRC info.", func(w io.Writer) {
+		renderSiteInfoBlock(w, s.Config.Version, "IRC Info", lines)
+	})
+	return false
+}
+
+func fallbackSiteInfoValue(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" || v == "0" {
+		return "(unset)"
+	}
+	return v
 }
 
 // HandleSiteAddIP adds one or more IPs to an existing user.

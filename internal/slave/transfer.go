@@ -186,10 +186,12 @@ func (t *Transfer) ReceiveFile(path string, position int64, expectedPeer string)
 	// Transfer with CRC32
 	h := crc32.NewIEEE()
 	var out io.Writer = io.MultiWriter(file, h)
-	buf := make([]byte, 32768)
+	buf := make([]byte, t.slave.getTransferBufferSize())
 	lastStatus := time.Now()
 	firstMinCheck := true
 	lastMinCheck := time.Now()
+	nextReadDeadline := time.Now().Add(transferPollTick)
+	_ = t.conn.SetReadDeadline(nextReadDeadline)
 
 	for {
 		if t.abortReason != "" {
@@ -197,7 +199,6 @@ func (t *Transfer) ReceiveFile(path string, position int64, expectedPeer string)
 			return t.errorStatus("aborted: " + t.abortReason)
 		}
 
-		_ = t.conn.SetReadDeadline(time.Now().Add(transferPollTick))
 		n, err := t.conn.Read(buf)
 		if n > 0 {
 			out.Write(buf[:n])
@@ -216,6 +217,8 @@ func (t *Transfer) ReceiveFile(path string, position int64, expectedPeer string)
 		}
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				nextReadDeadline = time.Now().Add(transferPollTick)
+				_ = t.conn.SetReadDeadline(nextReadDeadline)
 				continue
 			}
 			if err == io.EOF {
@@ -223,6 +226,10 @@ func (t *Transfer) ReceiveFile(path string, position int64, expectedPeer string)
 			}
 			cleanupFailedReceive(file, fullPath, position)
 			return t.errorStatus(fmt.Sprintf("read error: %v", err))
+		}
+		if time.Until(nextReadDeadline) <= 0 {
+			nextReadDeadline = time.Now().Add(transferPollTick)
+			_ = t.conn.SetReadDeadline(nextReadDeadline)
 		}
 	}
 
@@ -304,7 +311,7 @@ func (t *Transfer) SendFile(path string, position int64, expectedPeer string) pr
 	// Transfer with CRC32
 	h := crc32.NewIEEE()
 	r := io.TeeReader(file, h)
-	buf := make([]byte, 32768)
+	buf := make([]byte, t.slave.getTransferBufferSize())
 	lastStatus := time.Now()
 	firstMinCheck := true
 	lastMinCheck := time.Now()

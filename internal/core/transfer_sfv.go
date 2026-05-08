@@ -78,6 +78,41 @@ func localSFVEntriesForDir(dirPath string) map[string]uint32 {
 	return parsed
 }
 
+func syncLocalSFVMissingMarkers(cfg *Config, dirPath string) {
+	if cfg == nil || !zipscript.ShowMissingFilesForDir(cfg.Zipscript, filepath.ToSlash(dirPath)) {
+		return
+	}
+	sfvEntries := localSFVEntriesForDir(dirPath)
+	if sfvEntries == nil {
+		return
+	}
+	for trackedName := range sfvEntries {
+		missingPath := filepath.Join(dirPath, trackedName+"-MISSING")
+		if _, err := os.Stat(filepath.Join(dirPath, trackedName)); err == nil {
+			_ = os.Remove(missingPath)
+			continue
+		}
+		if _, err := os.Stat(missingPath); err != nil {
+			_ = os.WriteFile(missingPath, []byte{}, 0644)
+		}
+	}
+}
+
+func clearLocalSFVMissingMarker(dirPath, fileName string) {
+	_ = os.Remove(filepath.Join(dirPath, fileName+"-MISSING"))
+}
+
+func createLocalSFVMissingMarker(cfg *Config, dirPath, fileName string) {
+	if cfg == nil || !zipscript.ShowMissingFilesForDir(cfg.Zipscript, filepath.ToSlash(dirPath)) {
+		return
+	}
+	missingPath := filepath.Join(dirPath, fileName+"-MISSING")
+	if _, err := os.Stat(missingPath); err == nil {
+		return
+	}
+	_ = os.WriteFile(missingPath, []byte{}, 0644)
+}
+
 func parseLocalSFVEntryLine(line string) (string, uint32, bool) {
 	line = strings.TrimRight(line, "\r\n")
 	if strings.TrimSpace(line) == "" {

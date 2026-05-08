@@ -451,7 +451,7 @@ Implemented daemon SITE commands include:
 | Release/admin | `NUKE`, `UNNUKE`, `NUKES`, `UNDUPE`, `WIPE`, `KICK`, `REHASH`, `REMERGE`, `CHMOD` |
 | Search/rescan | `SEARCH`, `RACE`, `RESCAN`, `XDUPE` |
 | Stats/traffic | `ALLUP`, `ALLDN`, `WKUP`, `WKDN`, `DAYUP`, `DAYDN`, `MONTHUP`, `MONTHDN` |
-| IRC/sitebot | `INVITE`, `BLOWFISH` |
+| IRC/sitebot | `INVITE`, `BLOWFISH`, `IRC` |
 | Plugins | `PRE`, `ADDAFFIL`, `DELAFFIL`, `AFFILS`, `REQUEST`, `REQUESTS`, `REQFILL`, `REQFILLED`, `REQDEL`, `REQWIPE`, `BANNED`, `SELFIP` |
 
 Command access is controlled through `sitecmd` ACL rules in
@@ -476,9 +476,10 @@ Account command notes:
 - `CHWKLYALLOTMENT <user> <credits>` sets the weekly credit replacement amount.
   GoFTPd persists the applied week and replaces credits once per week instead
   of adding to the current credit total.
-- `CHRATIO <user> 0` is still siteop-controlled overall, but the current build
-  also allows the narrow managed-group leech path when a gadmin has free
-  `leech_slots`.
+- `CHRATIO` stays siteop-controlled in the shipped ACL defaults.
+- `BLOWFISH` and `IRC` are informational sitebot helpers. `SITE IRC` reads the
+  sitebot connection info from `sitebot_config`, and `SITE BLOWFISH` falls back
+  to `sitebot_config` when no daemon-side Blowfish mirror is configured.
 
 ## Sitebot
 

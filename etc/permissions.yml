@@ -103,6 +103,7 @@ rules:
         - XDUPE
         - INVITE
         - BLOWFISH
+        - IRC
         - GRP
         - TAGLINE
         - ALLUP

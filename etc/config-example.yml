@@ -86,6 +86,8 @@ slave:
                                 # Keep this aligned with master.heartbeat_timeout.
   ignore_partial_remerge: false # If true, the slave ignores partial remerge requests
                                 # and always performs a full scan.
+  transfer_buffer_size: 262144  # Optional slave data-transfer buffer size in bytes.
+                                # Default is 262144 (256 KiB). Minimum is 32768.
 
 
 # =============================================================================
@@ -217,7 +219,7 @@ exclude_vfs_paths:
 # =============================================================================
 #  Storage + paths
 # =============================================================================
-storage_path:   ./site          # Master: local fallback tree. Slave: default root if `roots:` empty.
+storage_path:   ./site          # Master: local fallback tree.
 acl_base_path:  "/"             # Match ACL rules against the visible virtual FTP tree.
 passwd_file:    "etc/passwd"    # Password hash file (bcrypt / apr1)
 msg_path:       "etc/msgs"      # Directory with welcome/rules/goodbye message templates
@@ -310,6 +312,7 @@ zipscript:
     enabled: true              # enables race tracking derived labels/stats
     max_users_in_top: 15       # limit HOF / SITE RACE user rows (0 = unlimited)
     max_groups_in_top: 0       # limit FTP group rows (0 = unlimited)
+    mask_user_group_names: false # mask rendered race user/group names as F****y / A***n
     complete_banner: true      # show [SITE] - ( ... COMPLETE ... ) - [SITE]
     music_complete_genre: true # add genre/year on MP3/FLAC COMPLETE banner
     announce_norace: true      # emit COMPLETE for first payload in non-SFV dirs too
@@ -589,6 +592,7 @@ plugins:
 #    - sitebot_config: Path to the sitebot's config.yml. SITE INVITE reads
 #                      irc.channels + invite_channels from there (flag rules
 #                      restricting which channels which users can be invited to).
+#                      SITE IRC also reads the IRC connection info from there.
 #    - blowfish_*:     Optional daemon-side mirror for SITE BLOWFISH. If left
 #                      empty, SITE BLOWFISH falls back to parsing sitebot_config.
 # =============================================================================
