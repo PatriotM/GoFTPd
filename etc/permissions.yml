@@ -102,7 +102,17 @@ rules:
         - RESCAN
         - XDUPE
         - INVITE
+        - BLOWFISH
         - GRP
+        - TAGLINE
+        - ALLUP
+        - ALLDN
+        - WKUP
+        - WKDN
+        - DAYUP
+        - DAYDN
+        - MONTHUP
+        - MONTHDN
         - NUKE
         - UNNUKE
         - REQUEST
@@ -127,15 +137,25 @@ rules:
         - DELUSER
         - READD
         - RENUSER
+        - CHANGE
         - CHPASS
+        - CHNUMLOGINS
+        - CHMAXSIM
+        - CHWKLYALLOTMENT
+        - CHUPLOADSLOTS
+        - CHDOWNLOADSLOTS
         - ADDIP
         - DELIP
+        - BAN
+        - UNBAN
         - FLAGS
         - CHGRP
         - CHPGRP
         - GADMIN
         - GRPADD
         - GRPDEL
+        - GROUPSLOTS
+        - GROUPSIMULT
         - USERS
         - GRPNFO
         - UNDUPE
@@ -144,6 +164,7 @@ rules:
         - CHMOD
         - REHASH
         - REMERGE
+        - NUKES
         - SLAVEBANS
         - SLAVEBAN
         - SLAVEUNBAN
@@ -151,6 +172,14 @@ rules:
         - DELAFFIL
         - REQWIPE
       required: $siteop
+
+    # These commands have extra built-in handler checks. They stay visible in
+    # the ACL so group admins can use their narrow allowed paths while the
+    # daemon still rejects broader misuse.
+    - allow:
+        - GADDUSER
+        - CHRATIO
+      required: $anyone
 
     # Any SITE command not listed above is denied.
     - deny: ["*"]
