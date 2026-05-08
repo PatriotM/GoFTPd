@@ -310,6 +310,7 @@ zipscript:
     enabled: true              # enables race tracking derived labels/stats
     max_users_in_top: 15       # limit HOF / SITE RACE user rows (0 = unlimited)
     max_groups_in_top: 0       # limit FTP group rows (0 = unlimited)
+    mask_user_group_names: false # mask rendered race user/group names as F****y / A***n
     complete_banner: true      # show [SITE] - ( ... COMPLETE ... ) - [SITE]
     music_complete_genre: true # add genre/year on MP3/FLAC COMPLETE banner
     announce_norace: true      # emit COMPLETE for first payload in non-SFV dirs too
@@ -589,6 +590,7 @@ plugins:
 #    - sitebot_config: Path to the sitebot's config.yml. SITE INVITE reads
 #                      irc.channels + invite_channels from there (flag rules
 #                      restricting which channels which users can be invited to).
+#                      SITE IRC also reads the IRC connection info from there.
 #    - blowfish_*:     Optional daemon-side mirror for SITE BLOWFISH. If left
 #                      empty, SITE BLOWFISH falls back to parsing sitebot_config.
 # =============================================================================

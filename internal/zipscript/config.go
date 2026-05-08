@@ -35,6 +35,7 @@ type RaceConfig struct {
 	Enabled            bool  `yaml:"enabled"`
 	MaxUsersInTop      int   `yaml:"max_users_in_top"`
 	MaxGroupsInTop     int   `yaml:"max_groups_in_top"`
+	MaskUserGroupNames bool  `yaml:"mask_user_group_names"`
 	CompleteBanner     bool  `yaml:"complete_banner"`
 	MusicCompleteGenre bool  `yaml:"music_complete_genre"`
 	AnnounceNoRace     bool  `yaml:"announce_norace"`

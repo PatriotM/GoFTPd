@@ -85,6 +85,7 @@ var baseSiteHelpEntries = []siteHelpEntry{
 	{Command: "XDUPE", Usage: "", Summary: "Enable XDUPE mode", Area: "Search/rescan"},
 	{Command: "INVITE", Usage: "", Summary: "Show site invite channels", Area: "IRC/sitebot"},
 	{Command: "BLOWFISH", Usage: "[channel]", Summary: "Show configured sitebot blowfish keys", Area: "IRC/sitebot"},
+	{Command: "IRC", Usage: "", Summary: "Show configured sitebot IRC connection info", Area: "IRC/sitebot"},
 }
 
 var pluginSiteHelpEntries = map[string]siteHelpEntry{

@@ -3253,6 +3253,15 @@ func activeIncompleteIndicator(cfg *Config) string {
 }
 
 func trimRaceUsers(cfg *Config, users []VFSRaceUser) []VFSRaceUser {
+	if cfg != nil && cfg.Zipscript.Race.MaskUserGroupNames {
+		masked := make([]VFSRaceUser, len(users))
+		copy(masked, users)
+		for i := range masked {
+			masked[i].Name = maskRaceName(masked[i].Name)
+			masked[i].Group = maskRaceName(masked[i].Group)
+		}
+		users = masked
+	}
 	if cfg == nil || cfg.Zipscript.Race.MaxUsersInTop <= 0 || len(users) <= cfg.Zipscript.Race.MaxUsersInTop {
 		return users
 	}
@@ -3260,10 +3269,32 @@ func trimRaceUsers(cfg *Config, users []VFSRaceUser) []VFSRaceUser {
 }
 
 func trimRaceGroups(cfg *Config, groups []VFSRaceGroup) []VFSRaceGroup {
+	if cfg != nil && cfg.Zipscript.Race.MaskUserGroupNames {
+		masked := make([]VFSRaceGroup, len(groups))
+		copy(masked, groups)
+		for i := range masked {
+			masked[i].Name = maskRaceName(masked[i].Name)
+		}
+		groups = masked
+	}
 	if cfg == nil || cfg.Zipscript.Race.MaxGroupsInTop <= 0 || len(groups) <= cfg.Zipscript.Race.MaxGroupsInTop {
 		return groups
 	}
 	return groups[:cfg.Zipscript.Race.MaxGroupsInTop]
+}
+
+func maskRaceName(name string) string {
+	runes := []rune(strings.TrimSpace(name))
+	switch len(runes) {
+	case 0:
+		return name
+	case 1:
+		return string(runes)
+	case 2:
+		return string(runes[0]) + "*"
+	default:
+		return string(runes[0]) + strings.Repeat("*", len(runes)-2) + string(runes[len(runes)-1])
+	}
 }
 
 func raceCRCKey(name string) string {

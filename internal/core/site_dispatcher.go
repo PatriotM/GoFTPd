@@ -65,6 +65,8 @@ func (s *Session) DispatchSiteCommand(args []string) bool {
 		return s.HandleSiteTagline(remainingArgs)
 	case "BLOWFISH":
 		return s.HandleSiteBlowfish(remainingArgs)
+	case "IRC":
+		return s.HandleSiteIRC(remainingArgs)
 
 	// Admin / User & Group Management (site_admin.go)
 	case "ADDUSER":
@@ -215,7 +217,6 @@ func requiredSiteCommandFlags(command string) string {
 		"USERS",
 		"GRPNFO",
 		"TRAFFIC",
-		"BLOWFISH",
 		"NUKES",
 		"UNDUPE",
 		"WIPE",
