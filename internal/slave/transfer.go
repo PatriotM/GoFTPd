@@ -22,6 +22,7 @@ const (
 	TransferUnknown    = 'U'
 	TransferReceiving  = 'R' // upload from client to slave
 	TransferSending    = 'S' // download from slave to client
+	transferBufferSize = 256 * 1024
 	transferPollTick   = 100 * time.Millisecond
 	transferStatusTick = time.Second
 )
@@ -186,7 +187,7 @@ func (t *Transfer) ReceiveFile(path string, position int64, expectedPeer string)
 	// Transfer with CRC32
 	h := crc32.NewIEEE()
 	var out io.Writer = io.MultiWriter(file, h)
-	buf := make([]byte, 32768)
+	buf := make([]byte, transferBufferSize)
 	lastStatus := time.Now()
 	firstMinCheck := true
 	lastMinCheck := time.Now()
@@ -304,7 +305,7 @@ func (t *Transfer) SendFile(path string, position int64, expectedPeer string) pr
 	// Transfer with CRC32
 	h := crc32.NewIEEE()
 	r := io.TeeReader(file, h)
-	buf := make([]byte, 32768)
+	buf := make([]byte, transferBufferSize)
 	lastStatus := time.Now()
 	firstMinCheck := true
 	lastMinCheck := time.Now()
