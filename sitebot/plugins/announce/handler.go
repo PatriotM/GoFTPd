@@ -127,6 +127,16 @@ func (p *AnnouncePlugin) appendTargeted(outs []plugin.Output, outType, text stri
 	return outs
 }
 
+func raceStateReady(st *releaseState, vars map[string]string) bool {
+	if st != nil && st.HasSFV {
+		return true
+	}
+	if vars == nil {
+		return false
+	}
+	return strings.TrimSpace(vars["t_files"]) != ""
+}
+
 func releaseName(evt *event.Event) string {
 	if rel := strings.TrimSpace(evt.Data["release_name"]); rel != "" {
 		return rel
@@ -557,9 +567,13 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 			if st.Completed {
 				return nil, nil
 			}
+			trackedRace := raceStateReady(st, vars)
+			if !trackedRace {
+				return nil, nil
+			}
 			if evt.User != "" && !st.Users[evt.User] {
-				st.Users[evt.User] = true
 				if !st.FirstRar {
+					st.Users[evt.User] = true
 					st.FirstRar = true
 					key := "UPDATE_RAR"
 					fallback := fmt.Sprintf("RACE: [%s] %s%s got its first rar file from %s at %s.", section, vars["subdir_prefix"], rel, evt.User, speedMB(evt))
@@ -582,6 +596,7 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 					}
 					outs = append(outs, plugin.Output{Type: "RACE", Text: p.render(key, vars, fallback)})
 				} else {
+					st.Users[evt.User] = true
 					joinVars := map[string]string{}
 					for k, v := range vars {
 						joinVars[k] = v

@@ -1724,6 +1724,12 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						data["t_file_label"] = zipscript.ExpectedFileLabel(s.Config.Zipscript, uploadDir)
 					}
 				}
+				if strings.HasSuffix(strings.ToLower(fileName), ".sfv") && zipscript.RaceStatsOnSTORForDir(s.Config.Zipscript, uploadDir) {
+					raceUsers, raceTotalBytes, raceTotalFiles, raceComplete := populateUploadRaceData(bridge, s.Config, uploadDir, firstTrackedRaceFileName(bridge, uploadDir), fileSize, data)
+					if raceComplete && raceTotalFiles > 0 {
+						go emitRaceEndAfter(s, uploadDir, raceUsers, raceTotalBytes, raceTotalFiles, xferMs, zipscript.MediaInfoGraceDelayForDir(s.Config.Zipscript, uploadDir, fileName))
+					}
+				}
 				raceUsers, raceTotalBytes, raceTotalFiles, raceComplete := populateUploadRaceData(bridge, s.Config, uploadDir, fileName, fileSize, data)
 				enrichUploadRaceUserData(data, raceUsers, s.User.Name)
 				s.emitEvent(EventUpload, filePath, fileName, transferredBytes, speedMB, data)
@@ -1899,6 +1905,12 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					if sfvEntries := bridge.GetSFVData(uploadDir); sfvEntries != nil {
 						data["t_filecount"] = fmt.Sprintf("%d", len(sfvEntries))
 						data["t_file_label"] = zipscript.ExpectedFileLabel(s.Config.Zipscript, uploadDir)
+					}
+				}
+				if strings.HasSuffix(strings.ToLower(fileName), ".sfv") && zipscript.RaceStatsOnSTORForDir(s.Config.Zipscript, uploadDir) {
+					raceUsers, raceTotalBytes, raceTotalFiles, raceComplete := populateUploadRaceData(bridge, s.Config, uploadDir, firstTrackedRaceFileName(bridge, uploadDir), fileSize, data)
+					if raceComplete && raceTotalFiles > 0 {
+						go emitRaceEndAfter(s, uploadDir, raceUsers, raceTotalBytes, raceTotalFiles, xferMs, zipscript.MediaInfoGraceDelayForDir(s.Config.Zipscript, uploadDir, fileName))
 					}
 				}
 				raceUsers, raceTotalBytes, raceTotalFiles, raceComplete := populateUploadRaceData(bridge, s.Config, uploadDir, fileName, fileSize, data)
@@ -4205,6 +4217,16 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 		}
 	}
 	return nil, 0, 0, false
+}
+
+func firstTrackedRaceFileName(bridge MasterBridge, dirPath string) string {
+	sfvEntries := bridge.GetSFVData(dirPath)
+	for name := range sfvEntries {
+		if strings.TrimSpace(name) != "" {
+			return name
+		}
+	}
+	return ""
 }
 
 func enrichUploadRaceUserData(data map[string]string, users []VFSRaceUser, username string) {
