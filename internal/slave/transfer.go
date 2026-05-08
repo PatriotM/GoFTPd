@@ -191,6 +191,8 @@ func (t *Transfer) ReceiveFile(path string, position int64, expectedPeer string)
 	lastStatus := time.Now()
 	firstMinCheck := true
 	lastMinCheck := time.Now()
+	nextReadDeadline := time.Now().Add(transferPollTick)
+	_ = t.conn.SetReadDeadline(nextReadDeadline)
 
 	for {
 		if t.abortReason != "" {
@@ -198,7 +200,6 @@ func (t *Transfer) ReceiveFile(path string, position int64, expectedPeer string)
 			return t.errorStatus("aborted: " + t.abortReason)
 		}
 
-		_ = t.conn.SetReadDeadline(time.Now().Add(transferPollTick))
 		n, err := t.conn.Read(buf)
 		if n > 0 {
 			out.Write(buf[:n])
@@ -217,6 +218,8 @@ func (t *Transfer) ReceiveFile(path string, position int64, expectedPeer string)
 		}
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				nextReadDeadline = time.Now().Add(transferPollTick)
+				_ = t.conn.SetReadDeadline(nextReadDeadline)
 				continue
 			}
 			if err == io.EOF {
@@ -224,6 +227,10 @@ func (t *Transfer) ReceiveFile(path string, position int64, expectedPeer string)
 			}
 			cleanupFailedReceive(file, fullPath, position)
 			return t.errorStatus(fmt.Sprintf("read error: %v", err))
+		}
+		if time.Until(nextReadDeadline) <= 0 {
+			nextReadDeadline = time.Now().Add(transferPollTick)
+			_ = t.conn.SetReadDeadline(nextReadDeadline)
 		}
 	}
 
