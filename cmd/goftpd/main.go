@@ -508,6 +508,7 @@ func startSlave(cfg *core.Config) {
 	bindIP, _ := slaveCfg["bind_ip"].(string)
 	timeout := intFromCfg(slaveCfg, "timeout", 60)
 	ignorePartialRemerge := boolFromCfg(slaveCfg, "ignore_partial_remerge", false)
+	transferBufferSize := intFromCfg(slaveCfg, "transfer_buffer_size", 0)
 
 	log.Printf("[STARTUP] Slave mode [name=%s] [master=%s:%d] [roots=%v] [bind_ip=%s] [pasv=%d-%d]",
 		name, masterHost, masterPort, roots, bindIP, pasvMin, pasvMax)
@@ -525,6 +526,7 @@ func startSlave(cfg *core.Config) {
 		BindIP:               bindIP,
 		Timeout:              timeout,
 		IgnorePartialRemerge: ignorePartialRemerge,
+		TransferBufferSize:   transferBufferSize,
 		Debug:                cfg.Debug,
 	})
 

@@ -86,6 +86,8 @@ slave:
                                 # Keep this aligned with master.heartbeat_timeout.
   ignore_partial_remerge: false # If true, the slave ignores partial remerge requests
                                 # and always performs a full scan.
+  transfer_buffer_size: 262144  # Optional slave data-transfer buffer size in bytes.
+                                # Default is 262144 (256 KiB). Minimum is 32768.
 
 
 # =============================================================================
@@ -217,7 +219,7 @@ exclude_vfs_paths:
 # =============================================================================
 #  Storage + paths
 # =============================================================================
-storage_path:   ./site          # Master: local fallback tree. Slave: default root if `roots:` empty.
+storage_path:   ./site          # Master: local fallback tree.
 acl_base_path:  "/"             # Match ACL rules against the visible virtual FTP tree.
 passwd_file:    "etc/passwd"    # Password hash file (bcrypt / apr1)
 msg_path:       "etc/msgs"      # Directory with welcome/rules/goodbye message templates
