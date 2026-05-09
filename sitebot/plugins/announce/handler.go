@@ -717,6 +717,7 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 		if skipReleaseAnnounce {
 			return nil, nil
 		}
+		appendRaceStatsLine(st, "")
 		if line := strings.TrimSpace(p.render("STATS_GROUP_HEADER", vars, "GroupTop")); line != "" {
 			appendRaceStatsLine(st, line)
 		}

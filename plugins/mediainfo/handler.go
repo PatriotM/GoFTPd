@@ -213,6 +213,16 @@ func (h *Handler) probe(j job) {
 	fields["path"] = j.relPath
 	fields["relname"] = j.relName
 	fields["section"] = j.section
+	if existing := h.svc.Bridge.GetDirMediaInfo(j.relPath); existing != nil {
+		if j.eventType == "AUDIOINFO" && zipscript.AudioInfoLooksUsable(existing) {
+			h.unmarkReleaseQueued(j.eventType, j.relPath)
+			return
+		}
+		if j.eventType == "MEDIAINFO" && mediaInfoLooksUsable(existing) {
+			h.unmarkReleaseQueued(j.eventType, j.relPath)
+			return
+		}
+	}
 	h.svc.Bridge.CacheMediaInfo(j.relPath, fields)
 	if h.debug {
 		log.Printf("[MEDIAINFO] emitting %s for %s (%d fields)", j.eventType, j.filePath, len(fields))

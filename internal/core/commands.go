@@ -1687,8 +1687,9 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						syncMasterSFVMissingMarkers(s.Config, bridge, uploadDir)
 					}
 				}
+				mediaInfoDir := storReleaseMediaDir(uploadDir, filePath)
 				hadAudioInfo := zipscript.AudioInfoLooksUsable(bridge.GetDirMediaInfo(uploadDir))
-				hadMediaInfo := releaseMediaInfoLooksUsable(bridge.GetDirMediaInfo(uploadDir))
+				hadMediaInfo := releaseMediaInfoLooksUsable(bridge.GetDirMediaInfo(mediaInfoDir))
 				if err := refreshZipDIZFromArchive(bridge, uploadDir, filePath, fileName); err != nil && s.Config.Debug {
 					log.Printf("[MASTER-ZS] zip diz refresh skipped for %s: %v", filePath, err)
 				}
@@ -1713,8 +1714,8 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					speedMB = (float64(transferredBytes) / 1024.0 / 1024.0) / (float64(xferMs) / 1000.0)
 				}
 				emitSTORSitebotAudioInfo(s, uploadDir, filePath, fileName, transferredBytes, speedMB, audioFields, hadAudioInfo)
-				mediaFields := probeSTORSitebotMediaInfo(s, bridge, uploadDir, filePath, fileName, hadMediaInfo)
-				emitSTORSitebotMediaInfo(s, uploadDir, filePath, fileName, transferredBytes, speedMB, mediaFields, hadMediaInfo)
+				mediaFields := probeSTORSitebotMediaInfo(s, bridge, mediaInfoDir, filePath, fileName, hadMediaInfo)
+				emitSTORSitebotMediaInfo(s, mediaInfoDir, filePath, fileName, transferredBytes, speedMB, mediaFields, hadMediaInfo)
 				data := map[string]string{}
 				if subdir := zipscript.ReleaseSubdirLabel(s.Config.Zipscript, uploadDir); subdir != "" {
 					data["release_subdir"] = subdir
@@ -1875,8 +1876,9 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						syncMasterSFVMissingMarkers(s.Config, bridge, uploadDir)
 					}
 				}
+				mediaInfoDir := storReleaseMediaDir(uploadDir, filePath)
 				hadAudioInfo := zipscript.AudioInfoLooksUsable(bridge.GetDirMediaInfo(uploadDir))
-				hadMediaInfo := releaseMediaInfoLooksUsable(bridge.GetDirMediaInfo(uploadDir))
+				hadMediaInfo := releaseMediaInfoLooksUsable(bridge.GetDirMediaInfo(mediaInfoDir))
 				if err := refreshZipDIZFromArchive(bridge, uploadDir, filePath, fileName); err != nil && s.Config.Debug {
 					log.Printf("[MASTER-ZS] zip diz refresh skipped for %s: %v", filePath, err)
 				}
@@ -1901,8 +1903,8 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					speedMB = (float64(transferredBytes) / 1024.0 / 1024.0) / (float64(xferMs) / 1000.0)
 				}
 				emitSTORSitebotAudioInfo(s, uploadDir, filePath, fileName, transferredBytes, speedMB, audioFields, hadAudioInfo)
-				mediaFields := probeSTORSitebotMediaInfo(s, bridge, uploadDir, filePath, fileName, hadMediaInfo)
-				emitSTORSitebotMediaInfo(s, uploadDir, filePath, fileName, transferredBytes, speedMB, mediaFields, hadMediaInfo)
+				mediaFields := probeSTORSitebotMediaInfo(s, bridge, mediaInfoDir, filePath, fileName, hadMediaInfo)
+				emitSTORSitebotMediaInfo(s, mediaInfoDir, filePath, fileName, transferredBytes, speedMB, mediaFields, hadMediaInfo)
 				data := map[string]string{}
 				if subdir := zipscript.ReleaseSubdirLabel(s.Config.Zipscript, uploadDir); subdir != "" {
 					data["release_subdir"] = subdir
@@ -3693,6 +3695,9 @@ func emitReleaseMetadataEvent(s *Session, evtType EventType, dirPath, filePath, 
 	if s == nil || len(fields) == 0 {
 		return
 	}
+	if evtType == EventMediaInfo {
+		dirPath = storReleaseMediaDir(dirPath, filePath)
+	}
 	data := cloneStringMap(fields)
 	if data == nil {
 		data = map[string]string{}
@@ -3702,6 +3707,21 @@ func emitReleaseMetadataEvent(s *Session, evtType EventType, dirPath, filePath, 
 	data["path"] = dirPath
 	data["relname"] = path.Base(dirPath)
 	s.emitEvent(evtType, dirPath, path.Base(dirPath), size, speedMB, data)
+}
+
+func storReleaseMediaDir(uploadDir, filePath string) string {
+	cleanDir := path.Clean(uploadDir)
+	if cleanDir == "." || cleanDir == "/" || cleanDir == "" {
+		return cleanDir
+	}
+	lowerBase := strings.ToLower(path.Base(cleanDir))
+	if lowerBase == "sample" || lowerBase == "samples" || isSampleMediaPath(filePath) {
+		parent := path.Dir(cleanDir)
+		if parent != "." && parent != "" {
+			return parent
+		}
+	}
+	return cleanDir
 }
 
 func emitSTORSitebotAudioInfo(s *Session, dirPath, filePath, fileName string, size int64, speedMB float64, fields map[string]string, hadAudioInfo bool) {
