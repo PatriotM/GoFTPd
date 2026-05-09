@@ -4174,6 +4174,7 @@ func zipDirCurrentPartState(bridge MasterBridge, dirPath string, entries []Maste
 	highestDigit = 0
 	highestLetter = 0
 	mode = ""
+	sawMainZip := false
 	for _, e := range entries {
 		if e.IsDir || e.IsSymlink || strings.HasPrefix(strings.TrimSpace(e.Name), ".") || !isZipPayloadName(e.Name) {
 			continue
@@ -4182,6 +4183,10 @@ func zipDirCurrentPartState(bridge MasterBridge, dirPath string, entries []Maste
 			continue
 		}
 		total++
+		if isZipMainArchiveName(e.Name) {
+			sawMainZip = true
+			continue
+		}
 		base := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(e.Name)), ".zip")
 		if m := regexp.MustCompile(`(\d+)$`).FindStringSubmatch(base); len(m) == 2 {
 			n, err := strconv.Atoi(m[1])
@@ -4217,7 +4222,13 @@ func zipDirCurrentPartState(bridge MasterBridge, dirPath string, entries []Maste
 		}
 		return 0, 0, 0, "", false
 	}
-	if total == 0 || mode == "" {
+	if total == 0 {
+		return 0, 0, 0, "", false
+	}
+	if mode == "" {
+		if sawMainZip && total == 1 {
+			return total, 0, 0, "single", true
+		}
 		return 0, 0, 0, "", false
 	}
 	return total, highestDigit, highestLetter, mode, true
