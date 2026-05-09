@@ -180,8 +180,9 @@ func releaseName(evt *event.Event) string {
 	}
 	clean := path.Clean(evt.Path)
 	base := path.Base(clean)
-	// For MKDIR/RMDIR/RACEEND/PRE, Path IS the release directory itself.
+	// For directory-scoped events, Path IS the release directory itself.
 	if evt.Type == event.EventMKDir || evt.Type == event.EventRMDir || evt.Type == event.EventRaceEnd ||
+		evt.Type == event.EventMediaInfo || evt.Type == event.EventAudioInfo ||
 		evt.Type == event.EventPre || evt.Type == event.EventPreBW ||
 		evt.Type == event.EventPreBWUser || evt.Type == event.EventPreBWInterval {
 		return base

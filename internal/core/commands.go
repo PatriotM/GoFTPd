@@ -191,7 +191,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					slaveIP, port, xferIdx, slaveName, err = bridge.SlaveListenForPassthrough(targetPath, s.DataTLS, true)
 				}
 				if err != nil {
-					log.Printf("[CPSV] Passthrough slave listen failed: %v", err)
+					log.Printf("[CPSV] Passthrough slave listen failed for user %s path %s: %v", s.User.Name, targetPath, err)
 					fmt.Fprintf(s.Conn, "450 No available slave for upcoming transfer.\r\n")
 					return false
 				}
@@ -1629,7 +1629,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					if writeDuplicateUploadResponse(s, bridge, uploadDir, fileName, err) {
 						return false
 					}
-					log.Printf("[Passthrough] PORT upload failed: %v", err)
+					log.Printf("[Passthrough] PORT upload failed for user %s path %s: %v", s.User.Name, filePath, err)
 					writeTransferFailure(s.Conn, "Upload", err)
 					return false
 				}
@@ -2189,13 +2189,13 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					portAddr := s.ActiveAddr
 					s.ActiveAddr = ""
 					fmt.Fprintf(s.Conn, "150 Opening %s mode data connection for %s (%d bytes).\r\n", transferTypeReplyName(s.TransferType), args[0], fileSize)
-					log.Printf("[Passthrough] PORT RETR %s -> %s", filePath, portAddr)
+					log.Printf("[Passthrough] PORT RETR %s by %s -> %s", filePath, s.User.Name, portAddr)
 					s.beginTransfer("download", filePath)
 					defer s.endTransfer()
 
 					transferChecksum, xferMs, err := bridge.SlaveConnectAndSend(filePath, portAddr, restOffset, s.DataTLS, s.SSCN, s.currentTransferTypeByte())
 					if err != nil {
-						log.Printf("[Passthrough] PORT download failed: %v", err)
+						log.Printf("[Passthrough] PORT download failed for user %s path %s: %v", s.User.Name, filePath, err)
 						writeTransferFailure(s.Conn, "Download", err)
 						return false
 					}
@@ -2216,7 +2216,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				if s.PassthruSlave != nil && s.Config.Passthrough {
 					slaveName := s.PassthruSlave.(string)
 					fmt.Fprintf(s.Conn, "150 Opening %s mode data connection for %s (%d bytes).\r\n", transferTypeReplyName(s.TransferType), args[0], fileSize)
-					log.Printf("[Passthrough] RETR %s via slave %s (xferIdx=%d)", filePath, slaveName, s.PassthruXferIdx)
+					log.Printf("[Passthrough] RETR %s by %s via slave %s (xferIdx=%d)", filePath, s.User.Name, slaveName, s.PassthruXferIdx)
 					s.beginTransferOnSlave("download", filePath, slaveName, s.PassthruXferIdx)
 					defer s.endTransfer()
 
@@ -2230,7 +2230,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					s.PretArg = ""
 
 					if err != nil {
-						log.Printf("[Passthrough] Download failed: %v", err)
+						log.Printf("[Passthrough] Download failed for user %s path %s: %v", s.User.Name, filePath, err)
 						writeTransferFailure(s.Conn, "Download", err)
 					} else {
 						if restOffset == 0 && transferChecksum != 0 {
@@ -3710,12 +3710,20 @@ func emitReleaseMetadataEvent(s *Session, evtType EventType, dirPath, filePath, 
 }
 
 func storReleaseMediaDir(uploadDir, filePath string) string {
+	cleanFileDir := path.Dir(path.Clean(filePath))
+	lowerFileBase := strings.ToLower(path.Base(cleanFileDir))
+	if lowerFileBase == "sample" || lowerFileBase == "samples" {
+		parent := path.Dir(cleanFileDir)
+		if parent != "." && parent != "" {
+			return parent
+		}
+	}
 	cleanDir := path.Clean(uploadDir)
 	if cleanDir == "." || cleanDir == "/" || cleanDir == "" {
 		return cleanDir
 	}
 	lowerBase := strings.ToLower(path.Base(cleanDir))
-	if lowerBase == "sample" || lowerBase == "samples" || isSampleMediaPath(filePath) {
+	if lowerBase == "sample" || lowerBase == "samples" {
 		parent := path.Dir(cleanDir)
 		if parent != "." && parent != "" {
 			return parent
