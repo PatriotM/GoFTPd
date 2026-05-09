@@ -126,10 +126,11 @@ type Config struct {
 	FreeSpaceMB  int  `yaml:"free_space_mb"`
 
 	// Display
-	DisplaySize   string `yaml:"display_size_unit"`
-	DisplaySpeed  string `yaml:"display_speed_unit"`
-	ColorMode     int    `yaml:"color_mode"`
-	ShowCWDBanner bool   `yaml:"show_cwd_banner"`
+	DisplaySize        string `yaml:"display_size_unit"`
+	DisplaySpeed       string `yaml:"display_speed_unit"`
+	ColorMode          int    `yaml:"color_mode"`
+	ShowCWDBanner      bool   `yaml:"show_cwd_banner"`
+	ShowRealOwnerGroup bool   `yaml:"show_real_owner_group"`
 	// Nuke
 	NukeMaxMultiplier int              `yaml:"nuke_max_multiplier"`
 	NukeDirStyle      string           `yaml:"nukedir_style"`
@@ -485,6 +486,7 @@ func (c *Config) Rehash() (string, error) {
 
 	// File-show-diz map
 	c.ShowDiz = fresh.ShowDiz
+	c.ShowRealOwnerGroup = fresh.ShowRealOwnerGroup
 
 	// Release management
 	c.NukeMaxMultiplier = fresh.NukeMaxMultiplier
