@@ -86,9 +86,9 @@ func (h *Handler) OnEvent(evt *plugin.Event) error {
 	if evt == nil || evt.Type != plugin.EventUpload {
 		return nil
 	}
-	if h.svc == nil || h.svc.Bridge == nil || h.svc.EmitEvent == nil {
+	if h.svc == nil || h.svc.Bridge == nil {
 		if h.debug {
-			log.Printf("[MEDIAINFO] skipping %s: bridge/event emitter not available", evt.Path)
+			log.Printf("[MEDIAINFO] skipping %s: bridge not available", evt.Path)
 		}
 		return nil
 	}
@@ -225,9 +225,9 @@ func (h *Handler) probe(j job) {
 	}
 	h.svc.Bridge.CacheMediaInfo(j.relPath, fields)
 	if h.debug {
-		log.Printf("[MEDIAINFO] emitting %s for %s (%d fields)", j.eventType, j.filePath, len(fields))
+		log.Printf("[MEDIAINFO] cached %s for %s (%d fields)", j.eventType, j.filePath, len(fields))
 	}
-	h.svc.EmitEvent(j.eventType, j.relPath, j.relName, j.section, j.size, j.speed, fields)
+	h.unmarkReleaseQueued(j.eventType, j.relPath)
 }
 
 func isMissingMediaInfoPath(err error) bool {
