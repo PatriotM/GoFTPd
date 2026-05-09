@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"goftpd/internal/plugin"
+	"goftpd/internal/zipscript"
 )
 
 type Handler struct {
@@ -119,6 +120,20 @@ func (h *Handler) OnEvent(evt *plugin.Event) error {
 	}
 
 	relPath := releasePath(evt.Path)
+	if existing := h.svc.Bridge.GetDirMediaInfo(relPath); existing != nil {
+		if eventType == "AUDIOINFO" && zipscript.AudioInfoLooksUsable(existing) {
+			if h.debug {
+				log.Printf("[MEDIAINFO] skipping %s: %s already cached for %s", evt.Path, eventType, relPath)
+			}
+			return nil
+		}
+		if eventType == "MEDIAINFO" && mediaInfoLooksUsable(existing) {
+			if h.debug {
+				log.Printf("[MEDIAINFO] skipping %s: %s already cached for %s", evt.Path, eventType, relPath)
+			}
+			return nil
+		}
+	}
 	if !h.markReleaseQueued(eventType, relPath) {
 		if h.debug {
 			log.Printf("[MEDIAINFO] skipping %s: %s already queued for %s", evt.Path, eventType, relPath)
@@ -345,6 +360,22 @@ func normalizeDuration(s string) string {
 		return fmt.Sprintf("%ds", sec)
 	}
 	return raw
+}
+
+func mediaInfoLooksUsable(fields map[string]string) bool {
+	if len(fields) == 0 {
+		return false
+	}
+	return strings.TrimSpace(firstNonEmpty(fields, "video_format", "audio_format", "duration", "width", "height")) != ""
+}
+
+func firstNonEmpty(fields map[string]string, keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(fields[key]); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func extensionSet(exts []string) map[string]bool {

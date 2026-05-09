@@ -23,6 +23,7 @@ type releaseState struct {
 	Completed     bool
 	HalfwayDone   bool
 	CurrentLeader string
+	StatsLines    []string
 	LastSeen      time.Time
 }
 
@@ -125,6 +126,39 @@ func (p *AnnouncePlugin) appendTargeted(outs []plugin.Output, outType, text stri
 		outs = append(outs, plugin.Output{Type: outType, Target: target, Text: text})
 	}
 	return outs
+}
+
+func resetRaceOutputState(st *releaseState) {
+	if st == nil {
+		return
+	}
+	st.Completed = false
+	st.HalfwayDone = false
+	st.CurrentLeader = ""
+	st.StatsLines = nil
+}
+
+func appendRaceStatsLine(st *releaseState, line string) {
+	if st == nil {
+		return
+	}
+	line = strings.TrimRight(line, "\r")
+	if line == "" {
+		return
+	}
+	if strings.TrimSpace(line) == "" && line != "\u00a0" {
+		return
+	}
+	st.StatsLines = append(st.StatsLines, line)
+}
+
+func flushRaceStats(st *releaseState) string {
+	if st == nil || len(st.StatsLines) == 0 {
+		return ""
+	}
+	lines := append([]string(nil), st.StatsLines...)
+	st.StatsLines = nil
+	return strings.Join(lines, "\n")
 }
 
 func raceStateReady(st *releaseState, vars map[string]string) bool {
@@ -526,9 +560,7 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 		}
 		if isReleaseDir(evt.Path, section) {
 			if !st.Created {
-				st.Completed = false
-				st.HalfwayDone = false
-				st.CurrentLeader = ""
+				resetRaceOutputState(st)
 				st.Created = true
 				if p.shouldInlinePretime() && p.asyncEmit != nil {
 					p.queueInlinePretime(syntheticNewRelPath(evt, section), section, vars)
@@ -542,9 +574,7 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 			return nil, nil
 		}
 		if !st.Created && shouldEmitSyntheticNew(evt, section) {
-			st.Completed = false
-			st.HalfwayDone = false
-			st.CurrentLeader = ""
+			resetRaceOutputState(st)
 			st.Created = true
 			if p.shouldInlinePretime() && p.asyncEmit != nil {
 				p.queueInlinePretime(syntheticNewRelPath(evt, section), section, vars)
@@ -651,10 +681,10 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 			return nil, nil
 		}
 		if line := strings.TrimSpace(p.render("STATS_HOF", vars, "STATS: Users Hall Of Fame")); line != "" {
-			outs = append(outs, plugin.Output{Type: "STATS", Text: line})
+			appendRaceStatsLine(st, line)
 		}
 		if line := strings.TrimSpace(p.render("STATS_SPEEDS", vars, fmt.Sprintf("STATS: Slowest: %s at %s - Fastest: %s at %s.", vars["u_slowest_name"], vars["u_slowest_speed"], vars["u_fastest_name"], vars["u_fastest_speed"]))); line != "" {
-			outs = append(outs, plugin.Output{Type: "STATS", Text: line})
+			appendRaceStatsLine(st, line)
 		}
 	case event.EventRaceUser:
 		if skipReleaseAnnounce {
@@ -681,14 +711,14 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 		fallback := fmt.Sprintf("%s. %s@%s [%sMB/%s Files/%s%%/%s] [ALLUP #%s][WKUP #%s]",
 			vars["u_rank"], perVars["u_name"], perVars["u_group"], perVars["u_mb"], perVars["u_files"], perVars["u_pct"], perVars["u_speed"], perVars["u_alup"], perVars["u_wkup"])
 		if line := strings.TrimSpace(p.render("STATS_USER", perVars, fallback)); line != "" {
-			outs = append(outs, plugin.Output{Type: "STATS", Text: line})
+			appendRaceStatsLine(st, line)
 		}
 	case event.EventRaceGroupHeader:
 		if skipReleaseAnnounce {
 			return nil, nil
 		}
 		if line := strings.TrimSpace(p.render("STATS_GROUP_HEADER", vars, "GroupTop")); line != "" {
-			outs = append(outs, plugin.Output{Type: "STATS", Text: line})
+			appendRaceStatsLine(st, line)
 		}
 	case event.EventRaceGroup:
 		if skipReleaseAnnounce {
@@ -706,15 +736,18 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 		perVars["g_speed"] = vars["g_speed"]
 		fallback := fmt.Sprintf("%s. %s [%sMB/%s Files/%s%%/%s]", perVars["g_rank"], perVars["g_name"], perVars["g_mb"], perVars["g_files"], perVars["g_pct"], perVars["g_speed"])
 		if line := strings.TrimSpace(p.render("STATS_GROUP", perVars, fallback)); line != "" {
-			outs = append(outs, plugin.Output{Type: "STATS", Text: line})
+			appendRaceStatsLine(st, line)
 		}
 	case event.EventRaceFooter:
 		if skipReleaseAnnounce {
 			return nil, nil
 		}
 		if line := p.render("STATS_END", vars, "STATS: -----------====>>>>           END          <<<<====-----------"); strings.TrimSpace(line) != "" {
-			outs = append(outs, plugin.Output{Type: "STATS", Text: line})
-			outs = append(outs, plugin.Output{Type: "STATS", Text: "\u00a0"})
+			appendRaceStatsLine(st, line)
+			appendRaceStatsLine(st, "\u00a0")
+		}
+		if block := flushRaceStats(st); strings.TrimSpace(block) != "" {
+			outs = append(outs, plugin.Output{Type: "STATS", Text: block})
 		}
 	case event.EventNuke:
 		nuker := strings.TrimSpace(vars["u_name"])

@@ -45,6 +45,8 @@ const (
 	EventInvite           EventType = "INVITE"
 	EventDiskStatus       EventType = "DISKSTATUS"
 	EventSpeedtest        EventType = "SPEEDTEST"
+	EventAudioInfo        EventType = "AUDIOINFO"
+	EventMediaInfo        EventType = "MEDIAINFO"
 	EventPre              EventType = "PRE"           // release pre'd — relname, section, group, files, mbytes
 	EventPreAudioInfo     EventType = "PREAUDIOINFO"  // extra music metadata line for PRE
 	EventPreMovieInfo     EventType = "PREMOVIEINFO"  // extra movie metadata line for PRE

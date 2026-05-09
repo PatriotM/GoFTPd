@@ -1687,6 +1687,8 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						syncMasterSFVMissingMarkers(s.Config, bridge, uploadDir)
 					}
 				}
+				hadAudioInfo := zipscript.AudioInfoLooksUsable(bridge.GetDirMediaInfo(uploadDir))
+				hadMediaInfo := releaseMediaInfoLooksUsable(bridge.GetDirMediaInfo(uploadDir))
 				if err := refreshZipDIZFromArchive(bridge, uploadDir, filePath, fileName); err != nil && s.Config.Debug {
 					log.Printf("[MASTER-ZS] zip diz refresh skipped for %s: %v", filePath, err)
 				}
@@ -1710,6 +1712,9 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				if xferMs > 0 {
 					speedMB = (float64(transferredBytes) / 1024.0 / 1024.0) / (float64(xferMs) / 1000.0)
 				}
+				emitSTORSitebotAudioInfo(s, uploadDir, filePath, fileName, transferredBytes, speedMB, audioFields, hadAudioInfo)
+				mediaFields := probeSTORSitebotMediaInfo(s, bridge, uploadDir, filePath, fileName, hadMediaInfo)
+				emitSTORSitebotMediaInfo(s, uploadDir, filePath, fileName, transferredBytes, speedMB, mediaFields, hadMediaInfo)
 				data := map[string]string{}
 				if subdir := zipscript.ReleaseSubdirLabel(s.Config.Zipscript, uploadDir); subdir != "" {
 					data["release_subdir"] = subdir
@@ -1870,6 +1875,8 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						syncMasterSFVMissingMarkers(s.Config, bridge, uploadDir)
 					}
 				}
+				hadAudioInfo := zipscript.AudioInfoLooksUsable(bridge.GetDirMediaInfo(uploadDir))
+				hadMediaInfo := releaseMediaInfoLooksUsable(bridge.GetDirMediaInfo(uploadDir))
 				if err := refreshZipDIZFromArchive(bridge, uploadDir, filePath, fileName); err != nil && s.Config.Debug {
 					log.Printf("[MASTER-ZS] zip diz refresh skipped for %s: %v", filePath, err)
 				}
@@ -1893,6 +1900,9 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				if xferMs > 0 {
 					speedMB = (float64(transferredBytes) / 1024.0 / 1024.0) / (float64(xferMs) / 1000.0)
 				}
+				emitSTORSitebotAudioInfo(s, uploadDir, filePath, fileName, transferredBytes, speedMB, audioFields, hadAudioInfo)
+				mediaFields := probeSTORSitebotMediaInfo(s, bridge, uploadDir, filePath, fileName, hadMediaInfo)
+				emitSTORSitebotMediaInfo(s, uploadDir, filePath, fileName, transferredBytes, speedMB, mediaFields, hadMediaInfo)
 				data := map[string]string{}
 				if subdir := zipscript.ReleaseSubdirLabel(s.Config.Zipscript, uploadDir); subdir != "" {
 					data["release_subdir"] = subdir
@@ -3483,6 +3493,260 @@ func zipscriptMediaInfoSettings(cfg *Config) (string, int) {
 		}
 	}
 	return "mediainfo", 10
+}
+
+func mediaInfoPluginSettings(cfg *Config) (binary string, timeoutSeconds int, sections []string, sampleOnly bool, audioExts map[string]bool, videoExts map[string]bool) {
+	binary = "mediainfo"
+	timeoutSeconds = 10
+	sections = []string{"FLAC", "MP3", "TV", "X264-HD-1080P", "X264-HD-720P", "X264-SD", "X265", "BLURAY"}
+	sampleOnly = true
+	audioExts = extensionSetLower([]string{"flac", "mp3", "m4a", "wav"})
+	videoExts = extensionSetLower([]string{"mkv", "mp4", "avi", "m2ts"})
+	if cfg == nil || cfg.Plugins == nil {
+		return
+	}
+	pluginCfg, ok := cfg.Plugins["mediainfo"]
+	if !ok || pluginCfg == nil {
+		return
+	}
+	if raw, ok := pluginCfg["binary"].(string); ok && strings.TrimSpace(raw) != "" {
+		binary = strings.TrimSpace(raw)
+	}
+	switch v := pluginCfg["timeout_seconds"].(type) {
+	case int:
+		timeoutSeconds = v
+	case int64:
+		timeoutSeconds = int(v)
+	case float64:
+		timeoutSeconds = int(v)
+	}
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = 10
+	}
+	if timeoutSeconds > 10 {
+		timeoutSeconds = 10
+	}
+	if raw, ok := interfaceStringSlice(pluginCfg["sections"]); ok && len(raw) > 0 {
+		sections = raw
+	}
+	if raw, ok := pluginCfg["sample_only"].(bool); ok {
+		sampleOnly = raw
+	}
+	if raw, ok := interfaceStringSlice(pluginCfg["audio_extensions"]); ok && len(raw) > 0 {
+		audioExts = extensionSetLower(raw)
+	}
+	if raw, ok := interfaceStringSlice(pluginCfg["video_extensions"]); ok && len(raw) > 0 {
+		videoExts = extensionSetLower(raw)
+	}
+	return
+}
+
+func interfaceStringSlice(raw interface{}) ([]string, bool) {
+	switch v := raw.(type) {
+	case []string:
+		out := make([]string, 0, len(v))
+		for _, s := range v {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				out = append(out, s)
+			}
+		}
+		return out, len(out) > 0
+	case []interface{}:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			s, ok := item.(string)
+			if !ok {
+				continue
+			}
+			s = strings.TrimSpace(s)
+			if s != "" {
+				out = append(out, s)
+			}
+		}
+		return out, len(out) > 0
+	default:
+		return nil, false
+	}
+}
+
+func extensionSetLower(values []string) map[string]bool {
+	out := make(map[string]bool, len(values))
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(value, ".")))
+		if value != "" {
+			out[value] = true
+		}
+	}
+	return out
+}
+
+func mediaInfoSectionMatch(section string, patterns []string) bool {
+	section = strings.ToLower(strings.TrimSpace(section))
+	for _, pat := range patterns {
+		pat = strings.ToLower(strings.TrimSpace(pat))
+		if pat != "" && strings.Contains(section, pat) {
+			return true
+		}
+	}
+	return false
+}
+
+func isSampleMediaPath(filePath string) bool {
+	lower := strings.ToLower(filePath)
+	return strings.Contains(lower, "/sample/") || strings.Contains(lower, "/samples/") || strings.Contains(lower, ".sample.")
+}
+
+func normalizeReleaseMediaInfoFields(fields map[string]string) {
+	if fields == nil {
+		return
+	}
+	fields["year"] = normalizeReleaseMediaYear(fields["year"])
+	fields["bitrate"] = normalizeReleaseMediaBitrate(fields["bitrate"])
+	fields["sample_rate"] = normalizeReleaseMediaSampleRate(fields["sample_rate"])
+	fields["channels"] = normalizeReleaseMediaChannels(fields["channels"])
+	fields["duration"] = normalizeReleaseMediaDuration(fields["duration"])
+}
+
+func normalizeReleaseMediaYear(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) >= 4 {
+		year := s[:4]
+		if _, err := strconv.Atoi(year); err == nil {
+			return year
+		}
+	}
+	return s
+}
+
+func normalizeReleaseMediaBitrate(s string) string {
+	raw := strings.TrimSpace(s)
+	if raw == "" {
+		return raw
+	}
+	lower := strings.ToLower(raw)
+	if strings.Contains(lower, "kb") || strings.Contains(lower, "mb") {
+		return raw
+	}
+	digits := strings.NewReplacer(" ", "", ",", "", ".", "").Replace(raw)
+	if n, err := strconv.Atoi(digits); err == nil && n > 0 {
+		if n >= 1000 {
+			return fmt.Sprintf("%dkbps", n/1000)
+		}
+		return fmt.Sprintf("%dbps", n)
+	}
+	return raw
+}
+
+func normalizeReleaseMediaSampleRate(s string) string {
+	raw := strings.TrimSpace(s)
+	lower := strings.ToLower(raw)
+	if strings.Contains(lower, "hz") {
+		return strings.TrimSuffix(strings.TrimSuffix(lower, " hz"), "hz")
+	}
+	return raw
+}
+
+func normalizeReleaseMediaChannels(s string) string {
+	switch strings.TrimSpace(s) {
+	case "1":
+		return "Mono"
+	case "2":
+		return "Stereo"
+	case "6":
+		return "5.1"
+	case "8":
+		return "7.1"
+	default:
+		return strings.TrimSpace(s)
+	}
+}
+
+func normalizeReleaseMediaDuration(s string) string {
+	raw := strings.TrimSpace(s)
+	if raw == "" {
+		return raw
+	}
+	lower := strings.ToLower(raw)
+	if strings.Contains(lower, "min") || strings.Contains(raw, ":") {
+		return raw
+	}
+	if seconds, err := strconv.ParseFloat(raw, 64); err == nil && seconds > 0 {
+		min := int(seconds) / 60
+		sec := int(seconds) % 60
+		if min > 0 {
+			return fmt.Sprintf("%dm%02ds", min, sec)
+		}
+		return fmt.Sprintf("%ds", sec)
+	}
+	return raw
+}
+
+func releaseMediaInfoLooksUsable(fields map[string]string) bool {
+	if len(fields) == 0 {
+		return false
+	}
+	return strings.TrimSpace(firstNonEmptyMap(fields, "video_format", "audio_format", "duration", "width", "height")) != ""
+}
+
+func emitReleaseMetadataEvent(s *Session, evtType EventType, dirPath, filePath, fileName string, size int64, speedMB float64, fields map[string]string) {
+	if s == nil || len(fields) == 0 {
+		return
+	}
+	data := cloneStringMap(fields)
+	if data == nil {
+		data = map[string]string{}
+	}
+	data["filepath"] = filePath
+	data["filename"] = fileName
+	data["path"] = dirPath
+	data["relname"] = path.Base(dirPath)
+	s.emitEvent(evtType, dirPath, path.Base(dirPath), size, speedMB, data)
+}
+
+func emitSTORSitebotAudioInfo(s *Session, dirPath, filePath, fileName string, size int64, speedMB float64, fields map[string]string, hadAudioInfo bool) {
+	if hadAudioInfo || s == nil || !zipscript.AudioInfoLooksUsable(fields) || !zipscript.ShowAudioInfoOnSTORForDir(s.Config.Zipscript, dirPath, fields) {
+		return
+	}
+	emitReleaseMetadataEvent(s, EventAudioInfo, dirPath, filePath, fileName, size, speedMB, fields)
+}
+
+func probeSTORSitebotMediaInfo(s *Session, bridge MasterBridge, dirPath, filePath, fileName string, hadMediaInfo bool) map[string]string {
+	if hadMediaInfo || s == nil || bridge == nil || s.Config == nil {
+		return nil
+	}
+	binary, timeoutSeconds, sections, sampleOnly, _, videoExts := mediaInfoPluginSettings(s.Config)
+	section := sectionFromPathWithConfig(s.Config, dirPath)
+	if len(sections) > 0 && !mediaInfoSectionMatch(section, sections) {
+		return nil
+	}
+	ext := strings.ToLower(strings.TrimPrefix(path.Ext(fileName), "."))
+	if !videoExts[ext] {
+		return nil
+	}
+	if sampleOnly && !isSampleMediaPath(filePath) {
+		return nil
+	}
+	fields, err := bridge.ProbeMediaInfo(filePath, binary, timeoutSeconds)
+	if err != nil {
+		if s.Config.Debug {
+			log.Printf("[MASTER-ZS] stor mediainfo probe skipped for %s: %v", filePath, err)
+		}
+		return nil
+	}
+	normalizeReleaseMediaInfoFields(fields)
+	if !releaseMediaInfoLooksUsable(fields) {
+		return nil
+	}
+	bridge.CacheMediaInfo(dirPath, fields)
+	return fields
+}
+
+func emitSTORSitebotMediaInfo(s *Session, dirPath, filePath, fileName string, size int64, speedMB float64, fields map[string]string, hadMediaInfo bool) {
+	if hadMediaInfo || !releaseMediaInfoLooksUsable(fields) {
+		return
+	}
+	emitReleaseMetadataEvent(s, EventMediaInfo, dirPath, filePath, fileName, size, speedMB, fields)
 }
 
 func applyAudioZipscriptChecks(s *Session, bridge MasterBridge, filePath, fileName string) (map[string]string, error) {
