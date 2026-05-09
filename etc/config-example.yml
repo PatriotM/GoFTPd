@@ -19,6 +19,8 @@ sitename_short: "GoFTPd"            # 2-3 char site tag used in race stats
 timezone:       "Europe/Amsterdam" # IANA timezone for FTP LIST/MLSD/MDTM and dated dirs; empty/"Local" uses OS local time
 show_cwd_banner: true           # Show the GoFTPd logo banner on CWD when there is no actual race data.
                                 # Real race-stat banners are still shown regardless of this setting.
+show_real_owner_group: false    # Show stored file owner/group in LIST and STAT -l for real VFS files.
+                                # false keeps the virtual GoFTPd/GoFTPd ownership look.
 
 
 # =============================================================================

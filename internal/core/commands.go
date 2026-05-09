@@ -1406,6 +1406,16 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					ts := timeutil.Unix(e.ModTime).Format("Jan _2 15:04")
 					owner := "GoFTPd"
 					group := "GoFTPd"
+					if s.Config.ShowRealOwnerGroup {
+						owner = strings.TrimSpace(e.Owner)
+						group = strings.TrimSpace(e.Group)
+						if owner == "" {
+							owner = "GoFTPd"
+						}
+						if group == "" {
+							group = "GoFTPd"
+						}
+					}
 					output.WriteString(fmt.Sprintf("%s   1 %-8s %-8s %10s %s %s\r\n",
 						mode, owner, group, size, ts, name))
 				}
@@ -2499,8 +2509,20 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						size = "4096"
 					}
 					ts := timeutil.Unix(e.ModTime).Format("Jan _2 15:04")
+					owner := "GoFTPd"
+					group := "GoFTPd"
+					if s.Config.ShowRealOwnerGroup {
+						owner = strings.TrimSpace(e.Owner)
+						group = strings.TrimSpace(e.Group)
+						if owner == "" {
+							owner = "GoFTPd"
+						}
+						if group == "" {
+							group = "GoFTPd"
+						}
+					}
 					fmt.Fprintf(s.Conn, " %s   1 %-8s %-8s %10s %s %s\r\n",
-						mode, "GoFTPd", "GoFTPd", size, ts, name)
+						mode, owner, group, size, ts, name)
 				}
 
 				if zipscript.ShowMissingFilesForDir(s.Config.Zipscript, target) && total > 0 && present < total {
