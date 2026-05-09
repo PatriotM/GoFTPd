@@ -74,6 +74,9 @@ func renderExpr(s string, vars map[string]string) string {
 				i = next
 				continue
 			}
+			b.WriteByte(0x02) // bare %b toggle, drftpd/pzsng-style themes
+			i += 2
+			continue
 		case 'u':
 			if body, next, ok := parseWrapped(s, i+2); ok {
 				b.WriteByte(0x1f) // underline
@@ -82,6 +85,9 @@ func renderExpr(s string, vars map[string]string) string {
 				i = next
 				continue
 			}
+			b.WriteByte(0x1f) // bare %u toggle
+			i += 2
+			continue
 		case 'c':
 			j := i + 2
 			colorCode := ""
