@@ -730,12 +730,11 @@ func (e *Engine) CanPerform(u *user.User, action string, vpath string) bool {
 	action = strings.ToLower(action)
 	vpath = filepath.ToSlash(filepath.Clean(vpath))
 
-	// Map FTP commands to rule types
-	ruleType := ruleTypeForAction(action)
-
-	// Check rules for this action type only
-	if rules, ok := e.RulesByType[ruleType]; ok {
-		for _, rule := range rules {
+	// Private-path rules are an override gate. If a path is marked private,
+	// the user must satisfy that rule before any broader action allow-list
+	// is considered.
+	if privRules, ok := e.RulesByType["privpath"]; ok {
+		for _, rule := range privRules {
 			rulePath := filepath.ToSlash(filepath.Clean(strings.ReplaceAll(strings.TrimSpace(rule.Path), "\\", "/")))
 			if pathMatches(rule.Path, vpath) || pathIsBelow(vpath, rulePath) {
 				return ruleAllows(rule, u)
@@ -743,9 +742,12 @@ func (e *Engine) CanPerform(u *user.User, action string, vpath string) bool {
 		}
 	}
 
-	// Check privpath rules
-	if privRules, ok := e.RulesByType["privpath"]; ok {
-		for _, rule := range privRules {
+	// Map FTP commands to rule types
+	ruleType := ruleTypeForAction(action)
+
+	// Check rules for this action type only
+	if rules, ok := e.RulesByType[ruleType]; ok {
+		for _, rule := range rules {
 			rulePath := filepath.ToSlash(filepath.Clean(strings.ReplaceAll(strings.TrimSpace(rule.Path), "\\", "/")))
 			if pathMatches(rule.Path, vpath) || pathIsBelow(vpath, rulePath) {
 				return ruleAllows(rule, u)

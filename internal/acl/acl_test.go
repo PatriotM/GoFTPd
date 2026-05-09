@@ -239,6 +239,47 @@ func TestCanPerformCoversExactPathDescendants(t *testing.T) {
 	}
 }
 
+func TestPrivpathOverridesBroadListAllow(t *testing.T) {
+	e := &Engine{RulesByType: map[string][]Rule{
+		"list": {
+			{Type: "list", Path: "/*", Requirement: &Requirement{Anyone: true}},
+		},
+		"privpath": {
+			{
+				Type: "privpath",
+				Path: "/PRIVATE",
+				Requirement: &Requirement{
+					AllFlags:  []string{"1"},
+					AllGroups: []string{"BFF"},
+				},
+			},
+		},
+	}}
+
+	denied := &user.User{
+		Name:         "regular",
+		Flags:        "3",
+		PrimaryGroup: "USERS",
+		Groups:       map[string]int{"USERS": 0},
+	}
+	allowed := &user.User{
+		Name:         "staff",
+		Flags:        "13",
+		PrimaryGroup: "BFF",
+		Groups:       map[string]int{"BFF": 0},
+	}
+
+	if e.CanPerform(denied, "LIST", "/PRIVATE") {
+		t.Fatal("privpath should hide /PRIVATE even when a broad LIST allow exists")
+	}
+	if !e.CanPerform(allowed, "LIST", "/PRIVATE") {
+		t.Fatal("privpath should allow user matching all_flags and all_groups")
+	}
+	if e.CanPerform(denied, "LIST", "/PRIVATE/Release-GRP") {
+		t.Fatal("privpath should also hide descendants of /PRIVATE")
+	}
+}
+
 func TestLoadEngineRejectsInvalidYAMLPermissionsFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "permissions.yml")
