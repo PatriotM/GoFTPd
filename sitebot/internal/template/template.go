@@ -74,9 +74,23 @@ func renderExpr(s string, vars map[string]string) string {
 				i = next
 				continue
 			}
-			b.WriteByte(0x02) // bare %b toggle, drftpd/pzsng-style themes
-			i += 2
-			continue
+			if i+2 >= len(s) || !isVarChar(rune(s[i+2])) {
+				b.WriteByte(0x02) // bare %b toggle, drftpd/pzsng-style themes
+				i += 2
+				continue
+			}
+			j := i + 1
+			for j < len(s) && isVarChar(rune(s[j])) {
+				j++
+			}
+			if j > i+1 {
+				key := s[i+1 : j]
+				if val, ok := vars[key]; ok {
+					b.WriteString(val)
+				}
+				i = j
+				continue
+			}
 		case 'u':
 			if body, next, ok := parseWrapped(s, i+2); ok {
 				b.WriteByte(0x1f) // underline
@@ -85,9 +99,23 @@ func renderExpr(s string, vars map[string]string) string {
 				i = next
 				continue
 			}
-			b.WriteByte(0x1f) // bare %u toggle
-			i += 2
-			continue
+			if i+2 >= len(s) || !isVarChar(rune(s[i+2])) {
+				b.WriteByte(0x1f) // bare %u toggle
+				i += 2
+				continue
+			}
+			j := i + 1
+			for j < len(s) && isVarChar(rune(s[j])) {
+				j++
+			}
+			if j > i+1 {
+				key := s[i+1 : j]
+				if val, ok := vars[key]; ok {
+					b.WriteString(val)
+				}
+				i = j
+				continue
+			}
 		case 'c':
 			j := i + 2
 			colorCode := ""
