@@ -1600,6 +1600,10 @@ func (b *Bridge) CacheMediaInfo(dirPath string, fields map[string]string) {
 	}
 }
 
+func (b *Bridge) ClaimReleaseMetadataAnnouncement(dirPath, key string) bool {
+	return b.sm.GetVFS().ClaimAnnouncement(dirPath, key)
+}
+
 // GetVFSRaceStats returns race statistics for a directory,
 // counting ONLY files that are listed in the cached SFV data.
 func (b *Bridge) GetVFSRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRaceGroup, int64, int, int) {
