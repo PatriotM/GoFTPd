@@ -280,6 +280,37 @@ func TestPrivpathOverridesBroadListAllow(t *testing.T) {
 	}
 }
 
+func TestPrivpathSupportsBuiltInNobodyRoleRef(t *testing.T) {
+	data := []byte(`
+rules:
+  list:
+    - allow: ["/*"]
+      required: $anyone
+  privpath:
+    - path: /PRIVATE
+      required: $nobody
+`)
+
+	e := &Engine{RulesByType: map[string][]Rule{}}
+	if loaded, err := loadYAMLRules(e, data); err != nil || !loaded {
+		t.Fatalf("loadYAMLRules() = (%v, %v), want (true, nil)", loaded, err)
+	}
+
+	u := &user.User{
+		Name:         "regular",
+		Flags:        "3",
+		PrimaryGroup: "USERS",
+		Groups:       map[string]int{"USERS": 0},
+	}
+
+	if e.CanPerform(u, "LIST", "/PRIVATE") {
+		t.Fatal("privpath with $nobody should hide /PRIVATE from every user")
+	}
+	if e.CanPerform(u, "LIST", "/PRIVATE/Release-GRP") {
+		t.Fatal("privpath with $nobody should also hide descendants")
+	}
+}
+
 func TestLoadEngineRejectsInvalidYAMLPermissionsFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "permissions.yml")

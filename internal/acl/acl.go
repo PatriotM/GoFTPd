@@ -431,6 +431,12 @@ func resolveRoleRequirement(name string, rawRoles map[string]yamlRequirementRef,
 	if name == "" {
 		return nil, false
 	}
+	switch name {
+	case "anyone":
+		return &Requirement{Anyone: true}, true
+	case "nobody":
+		return &Requirement{Nobody: true}, true
+	}
 	if expanded != nil {
 		if req, ok := expanded[name]; ok {
 			return cloneRequirement(req), true
