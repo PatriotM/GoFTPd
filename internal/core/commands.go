@@ -562,14 +562,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				}
 
 				if raceStatusEligibleDir(s.CurrentDir) && zipscript.RaceStatsOnCWDForDir(s.Config.Zipscript, s.CurrentDir) {
-					users, groups, totalBytes, present, total := []VFSRaceUser(nil), []VFSRaceGroup(nil), int64(0), 0, 0
-					releaseEntries := bridge.ListDir(s.CurrentDir)
-					fastTotalBytes, fastPresent, fastTotal, usedImmediate := dirRaceProgressForListing(bridge, s.Config, s.CurrentDir, releaseEntries)
-					if usedImmediate && fastTotal > 0 && fastPresent >= fastTotal {
-						totalBytes, present, total = fastTotalBytes, fastPresent, fastTotal
-					} else {
-						users, groups, totalBytes, present, total = bridge.GetVFSRaceStats(s.CurrentDir)
-					}
+					users, groups, totalBytes, present, total := bridge.GetVFSRaceStats(s.CurrentDir)
 					users = trimRaceUsers(s.Config, users)
 					groups = trimRaceGroups(s.Config, groups)
 
@@ -1112,9 +1105,8 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				if siteName == "" {
 					siteName = "GoFTPd"
 				}
-				listSnap := buildReleaseListSnapshot(bridge, s.Config, targetPath, siteName, entries)
 				if zipscript.ShowStatusBarForDir(s.Config.Zipscript, targetPath) {
-					if statusName := strings.TrimSpace(listSnap.StatusName); statusName != "" {
+					if statusName := dirRaceStatusName(bridge, s.Config, targetPath, siteName); strings.TrimSpace(statusName) != "" {
 						nowTs := timeutil.FTPMachine(time.Now())
 						entryType := "file"
 						if zipscript.StatusBarDirectoryForDir(s.Config.Zipscript, targetPath) {
@@ -1372,15 +1364,19 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					siteName = "GoFTPd"
 				}
 
-				listSnap := buildReleaseListSnapshot(bridge, s.Config, targetPath, siteName, entries)
-				totalBytes, present, total := listSnap.TotalBytes, listSnap.Present, listSnap.Total
+				totalBytes, present, total := dirRaceProgress(bridge, s.Config, targetPath)
 				if s.Config.Debug {
 					log.Printf("[LIST/RACESTATS] dir=%s totalBytes=%d present=%d total=%d",
 						targetPath, totalBytes, present, total)
 				}
 
+				existingFiles := make(map[string]bool)
+				for _, e := range entries {
+					existingFiles[e.Name] = true
+				}
+
 				if zipscript.ShowStatusBarForDir(s.Config.Zipscript, targetPath) {
-					if statusName := strings.TrimSpace(listSnap.StatusName); statusName != "" {
+					if statusName := dirRaceStatusName(bridge, s.Config, targetPath, siteName); strings.TrimSpace(statusName) != "" {
 						mode := "drwxr-xr-x"
 						size := "4096"
 						if !zipscript.StatusBarDirectoryForDir(s.Config.Zipscript, targetPath) {
@@ -1448,14 +1444,16 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				}
 
 				if zipscript.ShowMissingFilesForDir(s.Config.Zipscript, targetPath) && total > 0 && present < total {
-					if listSnap.SFVMeta != nil {
-						for fileName := range listSnap.SFVMeta {
+					sfvMeta := bridge.GetSFVData(targetPath)
+					verifiedPresent := bridge.GetVerifiedSFVPresentFiles(targetPath)
+					if sfvMeta != nil {
+						for fileName := range sfvMeta {
 							key := raceCRCKey(fileName)
-							if listSnap.VerifiedPresent != nil {
-								if listSnap.VerifiedPresent[key] {
+							if verifiedPresent != nil {
+								if verifiedPresent[key] {
 									continue
 								}
-							} else if listSnap.ExistingFiles[fileName] {
+							} else if existingFiles[fileName] {
 								continue
 							}
 							output.WriteString(fmt.Sprintf("-rw-r--r--   1 %-8s %-8s %10s %s %s-MISSING\r\n",
@@ -2954,78 +2952,12 @@ func dirRaceProgress(bridge MasterBridge, cfg *Config, dirPath string) (totalByt
 	return totalBytes, present, total
 }
 
-type releaseListSnapshot struct {
-	TotalBytes      int64
-	Present         int
-	Total           int
-	StatusName      string
-	ExistingFiles   map[string]bool
-	SFVMeta         map[string]uint32
-	VerifiedPresent map[string]bool
-}
-
-func dirVisibleBytes(entries []MasterFileEntry) int64 {
-	var totalBytes int64
-	for _, e := range entries {
-		if e.IsDir || e.IsSymlink || strings.HasPrefix(e.Name, ".") {
-			continue
-		}
-		if strings.HasSuffix(strings.ToUpper(strings.TrimSpace(e.Name)), "-MISSING") {
-			continue
-		}
-		totalBytes += e.Size
-	}
-	return totalBytes
-}
-
-func dirRaceProgressForListing(bridge MasterBridge, cfg *Config, dirPath string, entries []MasterFileEntry) (totalBytes int64, present int, total int, usedImmediate bool) {
-	if bridge == nil || cfg == nil {
-		return 0, 0, 0, false
-	}
-	if zipscript.UsesZip(cfg.Zipscript, dirPath) {
-		totalBytes, present, total = dirRaceProgress(bridge, cfg, dirPath)
-		return totalBytes, present, total, false
-	}
-	parentDir := path.Dir(dirPath)
-	if parentDir != "." && parentDir != "/" {
-		if progress := bridge.GetImmediateReleaseProgress(parentDir); progress != nil {
-			if stat, ok := progress[dirPath]; ok && stat.Total > 0 {
-				return dirVisibleBytes(entries), stat.Present, stat.Total, true
-			}
-		}
-	}
-	totalBytes, present, total = dirRaceProgress(bridge, cfg, dirPath)
-	return totalBytes, present, total, false
-}
-
-func buildReleaseListSnapshot(bridge MasterBridge, cfg *Config, dirPath, siteName string, entries []MasterFileEntry) releaseListSnapshot {
-	snap := releaseListSnapshot{}
-	if bridge == nil || cfg == nil {
-		return snap
-	}
-	snap.TotalBytes, snap.Present, snap.Total, _ = dirRaceProgressForListing(bridge, cfg, dirPath, entries)
-	snap.StatusName = dirRaceStatusNameWithProgress(bridge, cfg, dirPath, siteName, snap.TotalBytes, snap.Present, snap.Total)
-	if zipscript.ShowMissingFilesForDir(cfg.Zipscript, dirPath) && snap.Total > 0 && snap.Present < snap.Total {
-		snap.SFVMeta = bridge.GetSFVData(dirPath)
-		snap.VerifiedPresent = bridge.GetVerifiedSFVPresentFiles(dirPath)
-		snap.ExistingFiles = make(map[string]bool, len(entries))
-		for _, e := range entries {
-			snap.ExistingFiles[e.Name] = true
-		}
-	}
-	return snap
-}
-
 func dirRaceStatusName(bridge MasterBridge, cfg *Config, dirPath, siteName string) string {
-	totalBytes, present, total := dirRaceProgress(bridge, cfg, dirPath)
-	return dirRaceStatusNameWithProgress(bridge, cfg, dirPath, siteName, totalBytes, present, total)
-}
-
-func dirRaceStatusNameWithProgress(bridge MasterBridge, cfg *Config, dirPath, siteName string, totalBytes int64, present int, total int) string {
 	if !raceStatusEligibleDir(dirPath) {
 		return ""
 	}
 	var statusEntries []string
+	totalBytes, present, total := dirRaceProgress(bridge, cfg, dirPath)
 	if total > 0 {
 		totalMB := float64(totalBytes) / (1024 * 1024)
 		if present >= total {
@@ -3037,11 +2969,7 @@ func dirRaceStatusNameWithProgress(bridge MasterBridge, cfg *Config, dirPath, si
 	}
 	extra := listStatusAudioExtra(bridge, cfg, dirPath)
 	if extra != "" {
-		if total > 0 && present >= total && len(statusEntries) > 0 {
-			statusEntries[0] = fmt.Sprintf("[%s] - ( %.0fM %dF - COMPLETE - %s ) - [%s]", siteName, float64(totalBytes)/(1024*1024), total, extra, siteName)
-		} else {
-			statusEntries = append(statusEntries, extra)
-		}
+		statusEntries = append(statusEntries, extra)
 	}
 	switch len(statusEntries) {
 	case 0:
