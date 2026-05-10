@@ -250,23 +250,32 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			fmt.Fprintf(s.Conn, "501 Syntax error.\r\n")
 			return false
 		}
-		s.PendingUser = args[0]
+		requestedUser := strings.TrimSpace(args[0])
+		normalizedUser := normalizeLoginUsername(requestedUser)
+		if normalizedUser == "" {
+			s.PendingUser = requestedUser
+			s.PendingReason = "unknown_user"
+			s.User = nil
+			fmt.Fprintf(s.Conn, "331 Password required for %s\r\n", requestedUser)
+			return false
+		}
+		s.PendingUser = normalizedUser
 		s.PendingReason = ""
 		s.User = nil
-		u, err := user.LoadUser(args[0], s.GroupMap)
+		u, err := user.LoadUser(normalizedUser, s.GroupMap)
 		if err != nil {
-			if _, statErr := os.Stat(deletedUserPath(args[0])); statErr == nil {
+			if _, statErr := os.Stat(deletedUserPath(normalizedUser)); statErr == nil {
 				s.PendingReason = "user_deleted"
 			} else {
 				s.PendingReason = "unknown_user"
 			}
 			if s.Config.Debug {
-				log.Printf("[AUTH] Failed to load user '%s': %v", args[0], err)
+				log.Printf("[AUTH] Failed to load user '%s' (requested as '%s'): %v", normalizedUser, requestedUser, err)
 			}
 		} else {
 			s.User = u
 		}
-		fmt.Fprintf(s.Conn, "331 Password required for %s\r\n", args[0])
+		fmt.Fprintf(s.Conn, "331 Password required for %s\r\n", normalizedUser)
 
 	case "PASS":
 		if s.User != nil {
@@ -1639,7 +1648,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					if writeDuplicateUploadResponse(s, bridge, uploadDir, fileName, err) {
 						return false
 					}
-					log.Printf("[Passthrough] PORT upload failed for user %s path %s: %v", s.User.Name, filePath, err)
+					log.Printf("[Passthrough] PORT upload failed for user %s path %s: %s", s.User.Name, filePath, formatTransferFailureLog(err))
 					writeTransferFailure(s.Conn, "Upload", err)
 					return false
 				}
@@ -1723,52 +1732,8 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				if xferMs > 0 {
 					speedMB = (float64(transferredBytes) / 1024.0 / 1024.0) / (float64(xferMs) / 1000.0)
 				}
-				emitSTORSitebotAudioInfo(s, uploadDir, filePath, fileName, transferredBytes, speedMB, audioFields, hadAudioInfo)
-				mediaFields := probeSTORSitebotMediaInfo(s, bridge, mediaInfoDir, filePath, fileName, hadMediaInfo)
-				emitSTORSitebotMediaInfo(s, mediaInfoDir, filePath, fileName, transferredBytes, speedMB, mediaFields, hadMediaInfo)
-				data := map[string]string{}
-				if subdir := zipscript.ReleaseSubdirLabel(s.Config.Zipscript, uploadDir); subdir != "" {
-					data["release_subdir"] = subdir
-					data["release_name"] = path.Base(path.Dir(uploadDir))
-					if zipscript.IsIgnoredReleaseSubdir(s.Config.Zipscript, uploadDir) || !zipscript.AnnounceReleaseSubdirs(s.Config.Zipscript) {
-						data["skip_release_announce"] = "true"
-					}
-				}
-				if strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
-					if sfvEntries := bridge.GetSFVData(uploadDir); sfvEntries != nil {
-						data["t_filecount"] = fmt.Sprintf("%d", len(sfvEntries))
-						data["t_file_label"] = zipscript.ExpectedFileLabel(s.Config.Zipscript, uploadDir)
-					}
-				}
-				if strings.HasSuffix(strings.ToLower(fileName), ".sfv") && zipscript.RaceStatsOnSTORForDir(s.Config.Zipscript, uploadDir) {
-					raceUsers, raceTotalBytes, raceTotalFiles, raceComplete := populateUploadRaceData(bridge, s.Config, uploadDir, firstTrackedRaceFileName(bridge, uploadDir), fileSize, data)
-					if raceComplete && raceTotalFiles > 0 {
-						go emitRaceEndAfter(s, uploadDir, raceUsers, raceTotalBytes, raceTotalFiles, xferMs, zipscript.MediaInfoGraceDelayForDir(s.Config.Zipscript, uploadDir, fileName))
-					}
-				}
-				raceUsers, raceTotalBytes, raceTotalFiles, raceComplete := populateUploadRaceData(bridge, s.Config, uploadDir, fileName, fileSize, data)
-				enrichUploadRaceUserData(data, raceUsers, s.User.Name)
-				s.emitEvent(EventUpload, filePath, fileName, transferredBytes, speedMB, data)
-				if shouldAnnounceNoRace(s.Config, uploadDir, existingNames, fileName) && zipscript.RaceStatsOnSTORForDir(s.Config.Zipscript, uploadDir) {
-					go emitRaceEndAfter(s, uploadDir, nil, fileSize, 1, xferMs, 0)
-				}
-				if zipscript.UsesZip(s.Config.Zipscript, uploadDir) {
-					expectedZipParts := zipExpectedPartsFromDIZ(bridge, uploadDir)
-					if zipscript.RaceStatsOnSTORForDir(s.Config.Zipscript, uploadDir) && shouldEmitZipRaceEnd(s.Config, uploadDir, fileName) && zipDirComplete(bridge, uploadDir, bridge.ListDir(uploadDir), expectedZipParts) && raceTotalFiles > 0 {
-						go emitZipRaceEndAfter(s, uploadDir, xferMs, zipscript.MediaInfoGraceDelayForDir(s.Config.Zipscript, uploadDir, fileName))
-					}
-				} else if sfvEntries := bridge.GetSFVData(uploadDir); sfvEntries != nil {
-					if zipscript.RaceStatsOnSTORForDir(s.Config.Zipscript, uploadDir) && raceComplete && zipscript.CanTriggerRaceEndForDir(s.Config.Zipscript, uploadDir, sfvEntries, fileName) {
-						// Race complete: fire COMPLETE/STATS sequence in a
-						// goroutine so the client gets 226 immediately. The
-						// FIFO writes + plugin dispatches were stacking up on
-						// the connection's hot path and delaying the final
-						// transfer ack by the time it took to do all that work.
-						go emitRaceEndAfter(s, uploadDir, raceUsers, raceTotalBytes, raceTotalFiles, xferMs, zipscript.MediaInfoGraceDelayForDir(s.Config.Zipscript, uploadDir, fileName))
-					}
-				}
-
 				fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
+				queueMasterUploadPostHooks(s, bridge, uploadDir, mediaInfoDir, filePath, fileName, transferredBytes, fileSize, speedMB, xferMs, hadAudioInfo, hadMediaInfo, audioFields, existingNames)
 				return false
 			}
 		}
@@ -1806,7 +1771,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						if writeDuplicateUploadResponse(s, bridge, uploadDir, fileName, err) {
 							return false
 						}
-						log.Printf("[Passthrough] Upload failed: %v", err)
+						log.Printf("[Passthrough] Upload failed for user %s path %s: %s", s.User.Name, filePath, formatTransferFailureLog(err))
 						writeTransferFailure(s.Conn, "Upload", err)
 						return false
 					}
@@ -1912,47 +1877,8 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				if xferMs > 0 {
 					speedMB = (float64(transferredBytes) / 1024.0 / 1024.0) / (float64(xferMs) / 1000.0)
 				}
-				emitSTORSitebotAudioInfo(s, uploadDir, filePath, fileName, transferredBytes, speedMB, audioFields, hadAudioInfo)
-				mediaFields := probeSTORSitebotMediaInfo(s, bridge, mediaInfoDir, filePath, fileName, hadMediaInfo)
-				emitSTORSitebotMediaInfo(s, mediaInfoDir, filePath, fileName, transferredBytes, speedMB, mediaFields, hadMediaInfo)
-				data := map[string]string{}
-				if subdir := zipscript.ReleaseSubdirLabel(s.Config.Zipscript, uploadDir); subdir != "" {
-					data["release_subdir"] = subdir
-					data["release_name"] = path.Base(path.Dir(uploadDir))
-					if zipscript.IsIgnoredReleaseSubdir(s.Config.Zipscript, uploadDir) || !zipscript.AnnounceReleaseSubdirs(s.Config.Zipscript) {
-						data["skip_release_announce"] = "true"
-					}
-				}
-				if strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
-					if sfvEntries := bridge.GetSFVData(uploadDir); sfvEntries != nil {
-						data["t_filecount"] = fmt.Sprintf("%d", len(sfvEntries))
-						data["t_file_label"] = zipscript.ExpectedFileLabel(s.Config.Zipscript, uploadDir)
-					}
-				}
-				if strings.HasSuffix(strings.ToLower(fileName), ".sfv") && zipscript.RaceStatsOnSTORForDir(s.Config.Zipscript, uploadDir) {
-					raceUsers, raceTotalBytes, raceTotalFiles, raceComplete := populateUploadRaceData(bridge, s.Config, uploadDir, firstTrackedRaceFileName(bridge, uploadDir), fileSize, data)
-					if raceComplete && raceTotalFiles > 0 {
-						go emitRaceEndAfter(s, uploadDir, raceUsers, raceTotalBytes, raceTotalFiles, xferMs, zipscript.MediaInfoGraceDelayForDir(s.Config.Zipscript, uploadDir, fileName))
-					}
-				}
-				raceUsers, raceTotalBytes, raceTotalFiles, raceComplete := populateUploadRaceData(bridge, s.Config, uploadDir, fileName, fileSize, data)
-				enrichUploadRaceUserData(data, raceUsers, s.User.Name)
-				s.emitEvent(EventUpload, filePath, fileName, transferredBytes, speedMB, data)
-				if shouldAnnounceNoRace(s.Config, uploadDir, existingNames, fileName) && zipscript.RaceStatsOnSTORForDir(s.Config.Zipscript, uploadDir) {
-					go emitRaceEndAfter(s, uploadDir, nil, fileSize, 1, xferMs, 0)
-				}
-				if zipscript.UsesZip(s.Config.Zipscript, uploadDir) {
-					expectedZipParts := zipExpectedPartsFromDIZ(bridge, uploadDir)
-					if zipscript.RaceStatsOnSTORForDir(s.Config.Zipscript, uploadDir) && shouldEmitZipRaceEnd(s.Config, uploadDir, fileName) && zipDirComplete(bridge, uploadDir, bridge.ListDir(uploadDir), expectedZipParts) && raceTotalFiles > 0 {
-						go emitZipRaceEndAfter(s, uploadDir, xferMs, zipscript.MediaInfoGraceDelayForDir(s.Config.Zipscript, uploadDir, fileName))
-					}
-				} else if sfvEntries := bridge.GetSFVData(uploadDir); sfvEntries != nil {
-					if zipscript.RaceStatsOnSTORForDir(s.Config.Zipscript, uploadDir) && raceComplete && zipscript.CanTriggerRaceEndForDir(s.Config.Zipscript, uploadDir, sfvEntries, fileName) {
-						// Async - see explanation at the other emitRaceEnd call.
-						go emitRaceEndAfter(s, uploadDir, raceUsers, raceTotalBytes, raceTotalFiles, xferMs, zipscript.MediaInfoGraceDelayForDir(s.Config.Zipscript, uploadDir, fileName))
-					}
-				}
 				fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
+				queueMasterUploadPostHooks(s, bridge, uploadDir, mediaInfoDir, filePath, fileName, transferredBytes, fileSize, speedMB, xferMs, hadAudioInfo, hadMediaInfo, audioFields, existingNames)
 			} else {
 				fmt.Fprintf(s.Conn, "550 Master not initialized\r\n")
 				if raw != nil {
@@ -2098,12 +2024,13 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			s.User.UpdateStatsWithCredits(transferredBytes, true, !isSpeedtest)
 		}
 		speedMB := transferSpeedMB(transferredBytes, xferMs)
-		s.emitEvent(EventUpload, uploadPath, fileName, transferredBytes, speedMB, nil)
-		if err := localRefreshZipDIZFromArchive(filepath.Dir(localPath), localPath, fileName); err != nil && s.Config.Debug {
-			log.Printf("[LOCAL-ZS] zip diz refresh skipped for %s: %v", uploadPath, err)
-		}
-
 		fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
+		go func(uploadPath, fileName, localPath string, transferredBytes int64, speedMB float64) {
+			s.emitEvent(EventUpload, uploadPath, fileName, transferredBytes, speedMB, nil)
+			if err := localRefreshZipDIZFromArchive(filepath.Dir(localPath), localPath, fileName); err != nil && s.Config.Debug {
+				log.Printf("[LOCAL-ZS] zip diz refresh skipped for %s: %v", uploadPath, err)
+			}
+		}(uploadPath, fileName, localPath, transferredBytes, speedMB)
 		return false
 
 	case "RETR":
@@ -2205,7 +2132,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 
 					transferChecksum, xferMs, err := bridge.SlaveConnectAndSend(filePath, portAddr, restOffset, s.DataTLS, s.SSCN, s.currentTransferTypeByte())
 					if err != nil {
-						log.Printf("[Passthrough] PORT download failed for user %s path %s: %v", s.User.Name, filePath, err)
+						log.Printf("[Passthrough] PORT download failed for user %s path %s: %s", s.User.Name, filePath, formatTransferFailureLog(err))
 						writeTransferFailure(s.Conn, "Download", err)
 						return false
 					}
@@ -2240,7 +2167,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					s.PretArg = ""
 
 					if err != nil {
-						log.Printf("[Passthrough] Download failed for user %s path %s: %v", s.User.Name, filePath, err)
+						log.Printf("[Passthrough] Download failed for user %s path %s: %s", s.User.Name, filePath, formatTransferFailureLog(err))
 						writeTransferFailure(s.Conn, "Download", err)
 					} else {
 						if restOffset == 0 && transferChecksum != 0 {
@@ -3185,6 +3112,60 @@ func emitZipRaceEndAfter(s *Session, dirPath string, xferMs int64, delay time.Du
 	emitRaceEnd(s, dirPath, users, totalBytes, total, xferMs)
 }
 
+func queueMasterUploadPostHooks(s *Session, bridge MasterBridge, uploadDir, mediaInfoDir, filePath, fileName string, transferredBytes, fileSize int64, speedMB float64, xferMs int64, hadAudioInfo, hadMediaInfo bool, audioFields map[string]string, existingNames []string) {
+	if s == nil || s.Config == nil || bridge == nil {
+		return
+	}
+	existingNamesCopy := append([]string(nil), existingNames...)
+	audioFieldsCopy := cloneStringMap(audioFields)
+	go func() {
+		emitSTORSitebotAudioInfo(s, bridge, uploadDir, filePath, fileName, transferredBytes, speedMB, audioFieldsCopy, hadAudioInfo)
+		mediaFields := probeSTORSitebotMediaInfo(s, bridge, mediaInfoDir, filePath, fileName, hadMediaInfo)
+		emitSTORSitebotMediaInfo(s, mediaInfoDir, filePath, fileName, transferredBytes, speedMB, mediaFields, hadMediaInfo)
+
+		data := map[string]string{}
+		if subdir := zipscript.ReleaseSubdirLabel(s.Config.Zipscript, uploadDir); subdir != "" {
+			data["release_subdir"] = subdir
+			data["release_name"] = path.Base(path.Dir(uploadDir))
+			if zipscript.IsIgnoredReleaseSubdir(s.Config.Zipscript, uploadDir) || !zipscript.AnnounceReleaseSubdirs(s.Config.Zipscript) {
+				data["skip_release_announce"] = "true"
+			}
+		}
+		if strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
+			if sfvEntries := bridge.GetSFVData(uploadDir); sfvEntries != nil {
+				data["t_filecount"] = fmt.Sprintf("%d", len(sfvEntries))
+				data["t_file_label"] = zipscript.ExpectedFileLabel(s.Config.Zipscript, uploadDir)
+			}
+		}
+		if strings.HasSuffix(strings.ToLower(fileName), ".sfv") && zipscript.RaceStatsOnSTORForDir(s.Config.Zipscript, uploadDir) {
+			raceUsers, raceTotalBytes, raceTotalFiles, raceComplete := populateUploadRaceData(bridge, s.Config, uploadDir, firstTrackedRaceFileName(bridge, uploadDir), fileSize, data)
+			if raceComplete && raceTotalFiles > 0 {
+				go emitRaceEndAfter(s, uploadDir, raceUsers, raceTotalBytes, raceTotalFiles, xferMs, zipscript.MediaInfoGraceDelayForDir(s.Config.Zipscript, uploadDir, fileName))
+			}
+		}
+		raceUsers, raceTotalBytes, raceTotalFiles, raceComplete := populateUploadRaceData(bridge, s.Config, uploadDir, fileName, fileSize, data)
+		userName := ""
+		if s.User != nil {
+			userName = s.User.Name
+		}
+		enrichUploadRaceUserData(data, raceUsers, userName)
+		s.emitEvent(EventUpload, filePath, fileName, transferredBytes, speedMB, data)
+		if shouldAnnounceNoRace(s.Config, uploadDir, existingNamesCopy, fileName) && zipscript.RaceStatsOnSTORForDir(s.Config.Zipscript, uploadDir) {
+			go emitRaceEndAfter(s, uploadDir, nil, fileSize, 1, xferMs, 0)
+		}
+		if zipscript.UsesZip(s.Config.Zipscript, uploadDir) {
+			expectedZipParts := zipExpectedPartsFromDIZ(bridge, uploadDir)
+			if zipscript.RaceStatsOnSTORForDir(s.Config.Zipscript, uploadDir) && shouldEmitZipRaceEnd(s.Config, uploadDir, fileName) && zipDirCompleteAfterUpload(bridge, uploadDir, fileName, bridge.ListDir(uploadDir), expectedZipParts) && raceTotalFiles > 0 {
+				go emitZipRaceEndAfter(s, uploadDir, xferMs, zipscript.MediaInfoGraceDelayForDir(s.Config.Zipscript, uploadDir, fileName))
+			}
+		} else if sfvEntries := bridge.GetSFVData(uploadDir); sfvEntries != nil {
+			if zipscript.RaceStatsOnSTORForDir(s.Config.Zipscript, uploadDir) && raceComplete && zipscript.CanTriggerRaceEndForDir(s.Config.Zipscript, uploadDir, sfvEntries, fileName) {
+				go emitRaceEndAfter(s, uploadDir, raceUsers, raceTotalBytes, raceTotalFiles, xferMs, zipscript.MediaInfoGraceDelayForDir(s.Config.Zipscript, uploadDir, fileName))
+			}
+		}
+	}()
+}
+
 func zipscriptExistingNames(bridge MasterBridge, dirPath string) []string {
 	entries := bridge.ListDir(dirPath)
 	out := make([]string, 0, len(entries))
@@ -3754,8 +3735,11 @@ func storReleaseMediaDir(uploadDir, filePath string) string {
 	return cleanDir
 }
 
-func emitSTORSitebotAudioInfo(s *Session, dirPath, filePath, fileName string, size int64, speedMB float64, fields map[string]string, hadAudioInfo bool) {
-	if hadAudioInfo || s == nil || !zipscript.AudioInfoLooksUsable(fields) || !zipscript.ShowAudioInfoOnSTORForDir(s.Config.Zipscript, dirPath, fields) {
+func emitSTORSitebotAudioInfo(s *Session, bridge MasterBridge, dirPath, filePath, fileName string, size int64, speedMB float64, fields map[string]string, hadAudioInfo bool) {
+	if hadAudioInfo || s == nil || bridge == nil || !zipscript.AudioInfoLooksUsable(fields) || !zipscript.ShowAudioInfoOnSTORForDir(s.Config.Zipscript, dirPath, fields) {
+		return
+	}
+	if !bridge.ClaimReleaseMetadataAnnouncement(dirPath, "audioinfo") {
 		return
 	}
 	emitReleaseMetadataEvent(s, EventAudioInfo, dirPath, filePath, fileName, size, speedMB, fields)
@@ -3806,6 +3790,9 @@ func applyAudioZipscriptChecks(s *Session, bridge MasterBridge, filePath, fileNa
 func applyAudioZipscriptChecksForDir(s *Session, bridge MasterBridge, dirPath, filePath, fileName string) (map[string]string, error) {
 	if !zipscript.AudioCheckEnabled(s.Config.Zipscript, dirPath, fileName) {
 		return nil, nil
+	}
+	if cached := bridge.GetDirMediaInfo(dirPath); zipscript.AudioInfoLooksUsable(cached) {
+		return cached, nil
 	}
 	binary, timeoutSeconds := zipscriptMediaInfoSettings(s.Config)
 	fields, err := bridge.ProbeMediaInfo(filePath, binary, timeoutSeconds)
@@ -4098,7 +4085,7 @@ func isZipPayloadName(name string) bool {
 	return regexp.MustCompile(`(?i)\.(zip|z\d\d)$`).MatchString(name)
 }
 
-func isZipMainArchiveName(name string) bool {
+func isZipRecoverableArchiveName(name string) bool {
 	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(name)), ".zip")
 }
 
@@ -4169,12 +4156,8 @@ func zipDirRaceStats(bridge MasterBridge, dirPath string, entries []MasterFileEn
 	return users, totalBytes, total
 }
 
-func zipDirCurrentPartState(bridge MasterBridge, dirPath string, entries []MasterFileEntry) (total int, highestDigit int, highestLetter int, mode string, ok bool) {
-	total = 0
-	highestDigit = 0
-	highestLetter = 0
-	mode = ""
-	sawMainZip := false
+func zipDirPayloadCount(bridge MasterBridge, dirPath string, entries []MasterFileEntry) int {
+	total := 0
 	for _, e := range entries {
 		if e.IsDir || e.IsSymlink || strings.HasPrefix(strings.TrimSpace(e.Name), ".") || !isZipPayloadName(e.Name) {
 			continue
@@ -4183,55 +4166,8 @@ func zipDirCurrentPartState(bridge MasterBridge, dirPath string, entries []Maste
 			continue
 		}
 		total++
-		if isZipMainArchiveName(e.Name) {
-			sawMainZip = true
-			continue
-		}
-		base := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(e.Name)), ".zip")
-		if m := regexp.MustCompile(`(\d+)$`).FindStringSubmatch(base); len(m) == 2 {
-			n, err := strconv.Atoi(m[1])
-			if err != nil || n <= 0 {
-				return 0, 0, 0, "", false
-			}
-			if mode == "" {
-				mode = "digit"
-			}
-			if mode != "digit" {
-				return 0, 0, 0, "", false
-			}
-			if n > highestDigit {
-				highestDigit = n
-			}
-			continue
-		}
-		if m := regexp.MustCompile(`([a-z])$`).FindStringSubmatch(base); len(m) == 2 {
-			n := int(m[1][0]-'a') + 1
-			if n <= 0 {
-				return 0, 0, 0, "", false
-			}
-			if mode == "" {
-				mode = "letter"
-			}
-			if mode != "letter" {
-				return 0, 0, 0, "", false
-			}
-			if n > highestLetter {
-				highestLetter = n
-			}
-			continue
-		}
-		return 0, 0, 0, "", false
 	}
-	if total == 0 {
-		return 0, 0, 0, "", false
-	}
-	if mode == "" {
-		if sawMainZip && total == 1 {
-			return total, 0, 0, "single", true
-		}
-		return 0, 0, 0, "", false
-	}
-	return total, highestDigit, highestLetter, mode, true
+	return total
 }
 
 func zipExpectedPartsFromDIZ(bridge MasterBridge, dirPath string) int {
@@ -4386,7 +4322,7 @@ func recoverZipDIZFromDirectory(bridge MasterBridge, dirPath string) ([]byte, er
 		if entry.Size <= 0 || entry.XferTime <= 0 {
 			continue
 		}
-		if isZipMainArchiveName(entry.Name) {
+		if isZipRecoverableArchiveName(entry.Name) {
 			archivePath := path.Join(dirPath, entry.Name)
 			if activeUploadForPathWithBridge(bridge, archivePath) {
 				continue
@@ -4435,7 +4371,7 @@ func checkUploadedZipIntegrity(bridge MasterBridge, cfg *Config, dirPath, filePa
 }
 
 func refreshZipDIZFromArchive(bridge MasterBridge, dirPath, archivePath, fileName string) error {
-	if bridge == nil || !isZipMainArchiveName(fileName) {
+	if bridge == nil || !isZipRecoverableArchiveName(fileName) {
 		return nil
 	}
 	dizPath := path.Join(dirPath, "file_id.diz")
@@ -4453,11 +4389,34 @@ func zipDirComplete(bridge MasterBridge, dirPath string, entries []MasterFileEnt
 	if expected <= 0 {
 		return false
 	}
-	total, _, _, _, ok := zipDirCurrentPartState(bridge, dirPath, entries)
-	if !ok {
+	total := zipDirPayloadCount(bridge, dirPath, entries)
+	return total == expected
+}
+
+func zipDirCompleteAfterUpload(bridge MasterBridge, dirPath, fileName string, entries []MasterFileEntry, expected int) bool {
+	if zipDirComplete(bridge, dirPath, entries, expected) {
+		return true
+	}
+	if expected <= 0 || !isZipPayloadName(fileName) {
 		return false
 	}
-	return total == expected
+
+	currentPath := path.Join(dirPath, fileName)
+	if !activeUploadForPathWithBridge(bridge, currentPath) {
+		return false
+	}
+
+	for _, e := range entries {
+		if e.IsDir || e.IsSymlink {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(e.Name), strings.TrimSpace(fileName)) {
+			continue
+		}
+		total := zipDirPayloadCount(bridge, dirPath, entries) + 1
+		return total == expected
+	}
+	return false
 }
 
 func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName string, fileSize int64, data map[string]string) ([]VFSRaceUser, int64, int, bool) {
@@ -4479,7 +4438,8 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 	data["file_mbytes"] = mbString(fileSize)
 	if zipscript.UsesZip(cfg.Zipscript, dirPath) {
 		expected := zipExpectedPartsFromDIZ(bridge, dirPath)
-		users, totalBytes, total := zipDirRaceStats(bridge, dirPath, bridge.ListDir(dirPath), expected)
+		entries := bridge.ListDir(dirPath)
+		users, totalBytes, total := zipDirRaceStats(bridge, dirPath, entries, expected)
 		if total > 0 {
 			data["relname"] = path.Base(dirPath)
 			if expected > 0 {

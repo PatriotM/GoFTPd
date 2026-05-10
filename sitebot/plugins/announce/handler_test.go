@@ -42,6 +42,21 @@ func TestNormalizeReleaseDisplayNameUsesUploadParentDir(t *testing.T) {
 	}
 }
 
+func TestReleaseNameUsesDirectoryBaseForNukeEvents(t *testing.T) {
+	evt := &event.Event{
+		Type:     event.EventNuke,
+		Section:  "TV-PL",
+		Filename: "Santa.Clarita.Diet.S02E03.POLISH.HDR.2160p.WEB.H265-FLAME",
+		Path:     "/FOREIGN/TV-PL/Santa.Clarita.Diet.S02E03.POLISH.HDR.2160p.WEB.H265-FLAME",
+	}
+
+	got := releaseName(evt)
+	want := "Santa.Clarita.Diet.S02E03.POLISH.HDR.2160p.WEB.H265-FLAME"
+	if got != want {
+		t.Fatalf("releaseName(nuke) = %q, want %q", got, want)
+	}
+}
+
 func TestVarsProvidesDrFTPDStyleAliases(t *testing.T) {
 	p := New()
 	evt := &event.Event{

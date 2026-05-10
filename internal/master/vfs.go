@@ -37,6 +37,7 @@ type VFSDirMeta struct {
 	SFVEntries map[string]uint32 // filename -> CRC32 from parsed SFV
 	SFVName    string            // name of the .sfv file
 	MediaInfo  map[string]string // cached release media fields, e.g. genre/year
+	Announced  map[string]bool   // one-shot release-scoped announce guards
 }
 
 type VFSRaceCache struct {
@@ -1219,6 +1220,31 @@ func (vfs *VirtualFileSystem) GetMediaInfo(dirPath string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+func (vfs *VirtualFileSystem) ClaimAnnouncement(dirPath, key string) bool {
+	vfs.mu.Lock()
+	defer vfs.mu.Unlock()
+
+	dirPath = filepath.Clean(dirPath)
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return false
+	}
+
+	meta := vfs.dirMeta[dirPath]
+	if meta == nil {
+		meta = &VFSDirMeta{}
+		vfs.dirMeta[dirPath] = meta
+	}
+	if meta.Announced == nil {
+		meta.Announced = make(map[string]bool)
+	}
+	if meta.Announced[key] {
+		return false
+	}
+	meta.Announced[key] = true
+	return true
 }
 
 // GetSFVData returns cached SFV entries for a directory, or nil if not cached.

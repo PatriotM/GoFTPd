@@ -24,7 +24,7 @@ type RemoteSlave struct {
 	onOffline func(name string)
 
 	// Async index pool ( / _indexWithCommands)
-	indexPool      chan string
+	nextCmdIndex   atomic.Uint64
 	pendingCmds    sync.Map // index (string) -> chan interface{}
 	earlyResponses sync.Map // index (string) -> interface{}
 	commandNotify  chan struct{}
@@ -69,18 +69,11 @@ func NewRemoteSlave(name string, conn net.Conn, stream *protocol.ObjectStream, h
 		conn:             conn,
 		stream:           stream,
 		onOffline:        onOffline,
-		indexPool:        make(chan string, 256),
 		commandNotify:    make(chan struct{}, 256),
 		remergeQueue:     make(chan *protocol.AsyncResponseRemerge, 512),
 		remergeDrained:   make(chan struct{}, 1),
 		properties:       make(map[string]string),
 		heartbeatTimeout: heartbeatTimeout,
-	}
-
-	// Fill index pool ( 00-ff)
-	for i := 0; i < 256; i++ {
-		key := fmt.Sprintf("%02x", i)
-		rs.indexPool <- key
 	}
 
 	rs.lastResponseReceived.Store(time.Now().UnixMilli())
@@ -163,12 +156,7 @@ func (rs *RemoteSlave) FetchIndex() (string, error) {
 	if !rs.IsOnline() {
 		return "", fmt.Errorf("slave offline")
 	}
-	select {
-	case idx := <-rs.indexPool:
-		return idx, nil
-	case <-time.After(10 * time.Second):
-		return "", fmt.Errorf("index pool exhausted")
-	}
+	return fmt.Sprintf("%016x", rs.nextCmdIndex.Add(1)), nil
 }
 
 // SendCommand sends an async command to the slave. ().
@@ -204,11 +192,6 @@ func (rs *RemoteSlave) FetchResponse(index string, timeout time.Duration) (inter
 	}
 	defer func() {
 		rs.pendingCmds.Delete(index)
-		// Return index to pool
-		select {
-		case rs.indexPool <- index:
-		default:
-		}
 	}()
 
 	select {
@@ -252,10 +235,7 @@ func (rs *RemoteSlave) Run(masterSlaveManager *SlaveManager) {
 				if now-lastResp > halfTimeout {
 					if pingIndex != "" {
 						// Previous ping lost
-						select {
-						case rs.indexPool <- pingIndex:
-						default:
-						}
+						rs.pendingCmds.Delete(pingIndex)
 					}
 					var perr error
 					pingIndex, perr = IssuePing(rs)

@@ -187,6 +187,9 @@ func releaseName(evt *event.Event) string {
 		evt.Type == event.EventPreBWUser || evt.Type == event.EventPreBWInterval {
 		return base
 	}
+	if evt.Type == event.EventNuke || evt.Type == event.EventUnnuke {
+		return base
+	}
 	name := strings.ToLower(evt.Filename)
 	if strings.Contains(name, ".") {
 		return path.Base(path.Dir(clean))

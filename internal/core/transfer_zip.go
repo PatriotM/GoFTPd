@@ -28,7 +28,7 @@ func localCheckUploadedZipIntegrity(cfg *Config, dirPath, localPath, fileName st
 }
 
 func localRefreshZipDIZFromArchive(dirPath, archivePath, fileName string) error {
-	if !isZipMainArchiveName(fileName) {
+	if !isZipRecoverableArchiveName(fileName) {
 		return nil
 	}
 	dizPath := filepath.Join(dirPath, "file_id.diz")

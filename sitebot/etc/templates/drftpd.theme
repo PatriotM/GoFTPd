@@ -366,7 +366,7 @@ announce.STATS_GROUP = "%b%c01{STATS:}%b %c%sec_c4{[%{g_rank}]} %c%sec_c4{%{g_na
 
 announce.STATS_END = "%b%c01{STATS:}%b -----------====>>>>           %c%sec_c4{END}          <<<<====-----------"
 
-announce.BNC = "%c01{BNC:} %c01{Checking GoFTPd status, please wait ...}"
+announce.BNC = "%c01{BNC:} %c01{Checking %{sitename} status, please wait ...}"
 
 announce.BNC_UP = "%c03{%index}.- %c06{%name} %c01{at} %c05{%host}%c01{:}%c05{%port} %c01{is} %c03{UP} %c01{(login:} %c05{%latency}ms%c01{)}"
 

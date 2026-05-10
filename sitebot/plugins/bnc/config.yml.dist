@@ -3,6 +3,8 @@
 # and reports UP/DOWN plus login time in ms. Add one target per line.
 user: "goftpd"
 password: "goftpd"
+# Optional display name used in the IRC wait line.
+sitename: "GoFTPd"
 tls: true
 insecure_skip_verify: true
 timeout_seconds: 10

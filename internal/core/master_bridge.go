@@ -117,6 +117,11 @@ type MasterBridge interface {
 	// CacheMediaInfo stores release-level mediainfo fields for a directory.
 	CacheMediaInfo(dirPath string, fields map[string]string)
 
+	// ClaimReleaseMetadataAnnouncement atomically marks one release-scoped
+	// metadata announcement as emitted. It returns true only for the first
+	// successful claimant for a given dirPath+key pair.
+	ClaimReleaseMetadataAnnouncement(dirPath, key string) bool
+
 	// SearchDirs searches the master's VFS for directories matching query.
 	SearchDirs(query string, limit int) []VFSSearchResult
 
