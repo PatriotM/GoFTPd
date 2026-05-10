@@ -19,6 +19,23 @@ func (s *Session) canDeletePath(vpath string) bool {
 	return s.pathOwnedByUser(vpath)
 }
 
+func (s *Session) canRemoveDirPath(vpath string) bool {
+	if s == nil || s.ACLEngine == nil {
+		return false
+	}
+	aclPath := path.Join(s.Config.ACLBasePath, vpath)
+	if s.ACLEngine.CanPerform(s.User, "RMD", aclPath) && s.ACLEngine.CanPerform(s.User, "DELETE", aclPath) {
+		return true
+	}
+	if !s.ACLEngine.CanPerform(s.User, "RMD", aclPath) {
+		return false
+	}
+	if !s.ACLEngine.CanPerform(s.User, "DELETEOWN", aclPath) {
+		return false
+	}
+	return s.pathOwnedByUser(vpath)
+}
+
 func (s *Session) canRenamePath(fromPath, toPath string) bool {
 	if s == nil || s.ACLEngine == nil {
 		return false

@@ -687,14 +687,13 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			fmt.Fprintf(s.Conn, "501 Syntax error\r\n")
 			return false
 		}
-		aclPath := path.Join(s.Config.ACLBasePath, s.CurrentDir, args[0])
-		if !s.ACLEngine.CanPerform(s.User, "RMD", aclPath) {
+		dirPath := path.Join(s.CurrentDir, args[0])
+		if !s.canRemoveDirPath(dirPath) {
 			fmt.Fprintf(s.Conn, "550 Access Denied: Insufficient flags.\r\n")
 			return false
 		}
 		if s.Config.Mode == "master" && s.MasterManager != nil {
 			if bridge, ok := s.MasterManager.(MasterBridge); ok {
-				dirPath := path.Join(s.CurrentDir, args[0])
 				if err := cleanupAudioSortLinksForRelease(bridge, s.Config.Zipscript, dirPath); err != nil && s.Config.Debug {
 					log.Printf("[MASTER-ZS] audio sort cleanup skipped for %s: %v", dirPath, err)
 				}
