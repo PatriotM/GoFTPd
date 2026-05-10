@@ -1699,26 +1699,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					}
 				}
 
-				if strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
-					if sfvEntries, err := bridge.GetSFVInfo(filePath); err == nil {
-						log.Printf("[MASTER-ZS] Parsed SFV %s: %d entries", fileName, len(sfvEntries))
-						bridge.CacheSFV(uploadDir, fileName, sfvEntries)
-						syncMasterSFVMissingMarkers(s.Config, bridge, uploadDir)
-					}
-				}
 				mediaInfoDir := storReleaseMediaDir(uploadDir, filePath)
-				hadAudioInfo := zipscript.AudioInfoLooksUsable(bridge.GetDirMediaInfo(uploadDir))
-				hadMediaInfo := releaseMediaInfoLooksUsable(bridge.GetDirMediaInfo(mediaInfoDir))
-				if err := refreshZipDIZFromArchive(bridge, uploadDir, filePath, fileName); err != nil && s.Config.Debug {
-					log.Printf("[MASTER-ZS] zip diz refresh skipped for %s: %v", filePath, err)
-				}
-				audioFields, err := applyAudioZipscriptChecksForDir(s, bridge, uploadDir, filePath, fileName)
-				if err != nil {
-					fmt.Fprintf(s.Conn, "226- zipscript audio check failed: %s\r\n", err)
-					fmt.Fprintf(s.Conn, "226 Uploaded file removed by zipscript\r\n")
-					return false
-				}
-				emitSTORAudioInfo(s, uploadDir, audioFields)
 
 				isSpeedtest := isSpeedtestPath(filePath)
 				transferredBytes := fileSize
@@ -1733,7 +1714,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					speedMB = (float64(transferredBytes) / 1024.0 / 1024.0) / (float64(xferMs) / 1000.0)
 				}
 				fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
-				queueMasterUploadPostHooks(s, bridge, uploadDir, mediaInfoDir, filePath, fileName, transferredBytes, fileSize, speedMB, xferMs, hadAudioInfo, hadMediaInfo, audioFields, existingNames)
+				queueMasterUploadPostHooks(s, bridge, uploadDir, mediaInfoDir, filePath, fileName, transferredBytes, fileSize, speedMB, xferMs, existingNames)
 				return false
 			}
 		}
@@ -1844,26 +1825,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					}
 				}
 
-				if strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
-					if sfvEntries, err := bridge.GetSFVInfo(filePath); err == nil {
-						log.Printf("[MASTER-ZS] Parsed SFV %s: %d entries", fileName, len(sfvEntries))
-						bridge.CacheSFV(uploadDir, fileName, sfvEntries)
-						syncMasterSFVMissingMarkers(s.Config, bridge, uploadDir)
-					}
-				}
 				mediaInfoDir := storReleaseMediaDir(uploadDir, filePath)
-				hadAudioInfo := zipscript.AudioInfoLooksUsable(bridge.GetDirMediaInfo(uploadDir))
-				hadMediaInfo := releaseMediaInfoLooksUsable(bridge.GetDirMediaInfo(mediaInfoDir))
-				if err := refreshZipDIZFromArchive(bridge, uploadDir, filePath, fileName); err != nil && s.Config.Debug {
-					log.Printf("[MASTER-ZS] zip diz refresh skipped for %s: %v", filePath, err)
-				}
-				audioFields, err := applyAudioZipscriptChecksForDir(s, bridge, uploadDir, filePath, fileName)
-				if err != nil {
-					fmt.Fprintf(s.Conn, "226- zipscript audio check failed: %s\r\n", err)
-					fmt.Fprintf(s.Conn, "226 Uploaded file removed by zipscript\r\n")
-					return false
-				}
-				emitSTORAudioInfo(s, uploadDir, audioFields)
 
 				isSpeedtest := isSpeedtestPath(filePath)
 				transferredBytes := fileSize
@@ -1878,7 +1840,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					speedMB = (float64(transferredBytes) / 1024.0 / 1024.0) / (float64(xferMs) / 1000.0)
 				}
 				fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
-				queueMasterUploadPostHooks(s, bridge, uploadDir, mediaInfoDir, filePath, fileName, transferredBytes, fileSize, speedMB, xferMs, hadAudioInfo, hadMediaInfo, audioFields, existingNames)
+				queueMasterUploadPostHooks(s, bridge, uploadDir, mediaInfoDir, filePath, fileName, transferredBytes, fileSize, speedMB, xferMs, existingNames)
 			} else {
 				fmt.Fprintf(s.Conn, "550 Master not initialized\r\n")
 				if raw != nil {
@@ -3112,13 +3074,31 @@ func emitZipRaceEndAfter(s *Session, dirPath string, xferMs int64, delay time.Du
 	emitRaceEnd(s, dirPath, users, totalBytes, total, xferMs)
 }
 
-func queueMasterUploadPostHooks(s *Session, bridge MasterBridge, uploadDir, mediaInfoDir, filePath, fileName string, transferredBytes, fileSize int64, speedMB float64, xferMs int64, hadAudioInfo, hadMediaInfo bool, audioFields map[string]string, existingNames []string) {
+func queueMasterUploadPostHooks(s *Session, bridge MasterBridge, uploadDir, mediaInfoDir, filePath, fileName string, transferredBytes, fileSize int64, speedMB float64, xferMs int64, existingNames []string) {
 	if s == nil || s.Config == nil || bridge == nil {
 		return
 	}
 	existingNamesCopy := append([]string(nil), existingNames...)
-	audioFieldsCopy := cloneStringMap(audioFields)
 	go func() {
+		if strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
+			if sfvEntries, err := bridge.GetSFVInfo(filePath); err == nil {
+				log.Printf("[MASTER-ZS] Parsed SFV %s: %d entries", fileName, len(sfvEntries))
+				bridge.CacheSFV(uploadDir, fileName, sfvEntries)
+				syncMasterSFVMissingMarkers(s.Config, bridge, uploadDir)
+			}
+		}
+		if err := refreshZipDIZFromArchive(bridge, uploadDir, filePath, fileName); err != nil && s.Config.Debug {
+			log.Printf("[MASTER-ZS] zip diz refresh skipped for %s: %v", filePath, err)
+		}
+
+		hadAudioInfo := zipscript.AudioInfoLooksUsable(bridge.GetDirMediaInfo(uploadDir))
+		hadMediaInfo := releaseMediaInfoLooksUsable(bridge.GetDirMediaInfo(mediaInfoDir))
+		audioFields, err := applyAudioZipscriptChecksForDir(s, bridge, uploadDir, filePath, fileName)
+		if err != nil {
+			log.Printf("[MASTER-ZS] post-upload audio check failed for %s: %v", filePath, err)
+			return
+		}
+		audioFieldsCopy := cloneStringMap(audioFields)
 		emitSTORSitebotAudioInfo(s, bridge, uploadDir, filePath, fileName, transferredBytes, speedMB, audioFieldsCopy, hadAudioInfo)
 		mediaFields := probeSTORSitebotMediaInfo(s, bridge, mediaInfoDir, filePath, fileName, hadMediaInfo)
 		emitSTORSitebotMediaInfo(s, mediaInfoDir, filePath, fileName, transferredBytes, speedMB, mediaFields, hadMediaInfo)
