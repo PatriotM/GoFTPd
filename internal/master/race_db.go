@@ -26,6 +26,11 @@ func NewRaceDB(dbPath string) (*RaceDB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open race db: %w", err)
 	}
+	// SQLite only allows one writer at a time anyway. Keeping database/sql on a
+	// single shared connection avoids self-inflicted write contention under heavy
+	// passthrough/race churn where many goroutines record uploads/deletes at once.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 
 	pragmas := []string{
 		"PRAGMA foreign_keys = ON;",

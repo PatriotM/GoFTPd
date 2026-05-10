@@ -575,9 +575,6 @@ func MediaInfoGraceDelayForDir(cfg Config, dirPath, fileName string) time.Durati
 	if dirPath == "" && (!cfg.Enabled || !cfg.Race.Enabled) {
 		return 0
 	}
-	if IsMediaInfoFile(fileName) {
-		return 2500 * time.Millisecond
-	}
 	return 0
 }
 

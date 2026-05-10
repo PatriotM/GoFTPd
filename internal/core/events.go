@@ -380,7 +380,7 @@ func (s *Session) emitEvent(evtType EventType, eventPath, fileName string, size 
 // completed the race) and is ignored for aggregate speed calculation — we
 // use max(user.DurationMs) as the wall-clock span instead, which is the
 // effective critical-path time across all racers.
-func emitRaceEnd(s *Session, dirPath string, users []VFSRaceUser, totalBytes int64, total int, xferMs int64) {
+func emitRaceEnd(s *Session, dirPath string, users []VFSRaceUser, groups []VFSRaceGroup, totalBytes int64, total int, raceDurationMs int64, xferMs int64) {
 	if s == nil {
 		return
 	}
@@ -401,36 +401,28 @@ func emitRaceEnd(s *Session, dirPath string, users []VFSRaceUser, totalBytes int
 	// heavily when uploads run in parallel — a 52s race with 8 parallel
 	// threads can easily sum to 400s+ of "transfer time". pzs-ng uses
 	// wall-clock for STATS_SPEED totals too.
-	var raceDurationMs int64
 	var hookRunner zipscript.CompleteHookRunner
-	var groups []VFSRaceGroup
 	if s.Config.Mode == "master" && s.MasterManager != nil {
 		if bridge, ok := s.MasterManager.(MasterBridge); ok {
 			hookRunner = bridge
-			if ms := bridge.GetRaceWallClockMilliseconds(dirPath); ms > 0 {
-				raceDurationMs = ms
+			if raceDurationMs <= 0 {
+				if ms := bridge.GetRaceWallClockMilliseconds(dirPath); ms > 0 {
+					raceDurationMs = ms
+				}
 			}
-			if _, raceGroups, _, _, _ := bridge.GetVFSRaceStats(dirPath); len(raceGroups) > 0 {
-				groups = trimRaceGroups(s.Config, raceGroups)
+			if len(groups) == 0 {
+				if _, raceGroups, _, _, _ := bridge.GetVFSRaceStats(dirPath); len(raceGroups) > 0 {
+					groups = trimRaceGroups(s.Config, raceGroups)
+				}
+			} else {
+				groups = trimRaceGroups(s.Config, groups)
 			}
 		}
 	}
 
 	// Fallback: longest per-user active transfer time. Good for sequential
 	// uploaders, overcounts for parallel — but better than last-file xferMs.
-	if raceDurationMs == 0 {
-		for _, u := range users {
-			if u.DurationMs > raceDurationMs {
-				raceDurationMs = u.DurationMs
-			}
-		}
-	}
-	if raceDurationMs == 0 {
-		raceDurationMs = xferMs // last-ditch fallback
-	}
-	if raceDurationMs < 1 {
-		raceDurationMs = 1
-	}
+	raceDurationMs = chooseRaceDurationMs(raceDurationMs, users, xferMs)
 
 	durSec := float64(raceDurationMs) / 1000.0
 	avgMB := 0.0
@@ -577,6 +569,34 @@ func formatRaceDuration(ms int64) string {
 		return fmt.Sprintf("%dm", minutes)
 	}
 	return fmt.Sprintf("%dm%ds", minutes, seconds)
+}
+
+func chooseRaceDurationMs(raceDurationMs int64, users []VFSRaceUser, xferMs int64) int64 {
+	maxUserDurationMs := int64(0)
+	for _, u := range users {
+		if u.DurationMs > maxUserDurationMs {
+			maxUserDurationMs = u.DurationMs
+		}
+	}
+
+	// When reused/incomplete releases leak older DB timestamps into COMPLETE,
+	// the persisted wall-clock can become wildly larger than the active upload
+	// span we just observed from the current racers. Clamp those pathological
+	// cases back to the live uploader span so COMPLETE tracks the current race
+	// more like drftpd/pzs-ng instead of historical leftovers.
+	if raceDurationMs > 0 && maxUserDurationMs > 0 && raceDurationMs > maxUserDurationMs*2 {
+		raceDurationMs = maxUserDurationMs
+	}
+	if raceDurationMs == 0 {
+		raceDurationMs = maxUserDurationMs
+	}
+	if raceDurationMs == 0 {
+		raceDurationMs = xferMs
+	}
+	if raceDurationMs < 1 {
+		raceDurationMs = 1
+	}
+	return raceDurationMs
 }
 
 func userDisplaySpeed(u VFSRaceUser) float64 {
