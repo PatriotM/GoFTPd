@@ -9,7 +9,6 @@ import (
 
 func TestFetchResponseReturnsBufferedEarlyResponse(t *testing.T) {
 	rs := &RemoteSlave{
-		indexPool:        make(chan string, 1),
 		commandNotify:    make(chan struct{}, 1),
 		remergeQueue:     make(chan *protocol.AsyncResponseRemerge, 1),
 		remergeDrained:   make(chan struct{}, 1),

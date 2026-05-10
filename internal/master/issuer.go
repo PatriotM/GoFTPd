@@ -246,14 +246,7 @@ func IssueRemergePause(rs *RemoteSlave) error {
 	if err != nil {
 		return err
 	}
-	sendErr := rs.SendCommand(&protocol.AsyncCommand{Index: index, Name: "remergePause"})
-	if sendErr != nil {
-		select {
-		case rs.indexPool <- index:
-		default:
-		}
-	}
-	return sendErr
+	return rs.SendCommand(&protocol.AsyncCommand{Index: index, Name: "remergePause"})
 }
 
 func IssueRemergeResume(rs *RemoteSlave) error {
@@ -261,14 +254,7 @@ func IssueRemergeResume(rs *RemoteSlave) error {
 	if err != nil {
 		return err
 	}
-	sendErr := rs.SendCommand(&protocol.AsyncCommand{Index: index, Name: "remergeResume"})
-	if sendErr != nil {
-		select {
-		case rs.indexPool <- index:
-		default:
-		}
-	}
-	return sendErr
+	return rs.SendCommand(&protocol.AsyncCommand{Index: index, Name: "remergeResume"})
 }
 
 // IssueCheckSSL checks if slave supports SSL.
