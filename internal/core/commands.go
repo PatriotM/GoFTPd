@@ -3033,11 +3033,11 @@ func raceStatusEligibleDir(dirPath string) bool {
 	return true
 }
 
-func emitRaceEndAfter(s *Session, dirPath string, users []VFSRaceUser, totalBytes int64, total int, xferMs int64, delay time.Duration) {
+func emitRaceEndAfter(s *Session, dirPath string, users []VFSRaceUser, groups []VFSRaceGroup, totalBytes int64, total int, raceDurationMs int64, xferMs int64, delay time.Duration) {
 	if delay > 0 {
 		time.Sleep(delay)
 	}
-	emitRaceEnd(s, dirPath, users, totalBytes, total, xferMs)
+	emitRaceEnd(s, dirPath, users, groups, totalBytes, total, raceDurationMs, xferMs)
 }
 
 func emitZipRaceEndAfter(s *Session, dirPath string, xferMs int64, delay time.Duration) {
@@ -3071,7 +3071,7 @@ func emitZipRaceEndAfter(s *Session, dirPath string, xferMs int64, delay time.Du
 	if total <= 0 {
 		return
 	}
-	emitRaceEnd(s, dirPath, users, totalBytes, total, xferMs)
+	emitRaceEnd(s, dirPath, users, nil, totalBytes, total, 0, xferMs)
 }
 
 func queueMasterUploadPostHooks(s *Session, bridge MasterBridge, uploadDir, mediaInfoDir, filePath, fileName string, transferredBytes, fileSize int64, speedMB float64, xferMs int64, existingNames []string) {
@@ -3117,13 +3117,24 @@ func queueMasterUploadPostHooks(s *Session, bridge MasterBridge, uploadDir, medi
 				data["t_file_label"] = zipscript.ExpectedFileLabel(s.Config.Zipscript, uploadDir)
 			}
 		}
-		if strings.HasSuffix(strings.ToLower(fileName), ".sfv") && zipscript.RaceStatsOnSTORForDir(s.Config.Zipscript, uploadDir) {
-			raceUsers, raceTotalBytes, raceTotalFiles, raceComplete := populateUploadRaceData(bridge, s.Config, uploadDir, firstTrackedRaceFileName(bridge, uploadDir), fileSize, data)
+		sfVUpload := strings.HasSuffix(strings.ToLower(fileName), ".sfv")
+		raceUsers := []VFSRaceUser(nil)
+		raceGroups := []VFSRaceGroup(nil)
+		raceTotalBytes := int64(0)
+		raceTotalFiles := 0
+		raceDurationMs := int64(0)
+		raceComplete := false
+		raceComputed := false
+		if sfVUpload && zipscript.RaceStatsOnSTORForDir(s.Config.Zipscript, uploadDir) {
+			raceUsers, raceGroups, raceTotalBytes, raceTotalFiles, raceDurationMs, raceComplete = populateUploadRaceData(bridge, s.Config, uploadDir, firstTrackedRaceFileName(bridge, uploadDir), fileSize, data)
+			raceComputed = true
 			if raceComplete && raceTotalFiles > 0 {
-				go emitRaceEndAfter(s, uploadDir, raceUsers, raceTotalBytes, raceTotalFiles, xferMs, zipscript.MediaInfoGraceDelayForDir(s.Config.Zipscript, uploadDir, fileName))
+				go emitRaceEndAfter(s, uploadDir, raceUsers, raceGroups, raceTotalBytes, raceTotalFiles, raceDurationMs, xferMs, zipscript.MediaInfoGraceDelayForDir(s.Config.Zipscript, uploadDir, fileName))
 			}
 		}
-		raceUsers, raceTotalBytes, raceTotalFiles, raceComplete := populateUploadRaceData(bridge, s.Config, uploadDir, fileName, fileSize, data)
+		if !raceComputed {
+			raceUsers, raceGroups, raceTotalBytes, raceTotalFiles, raceDurationMs, raceComplete = populateUploadRaceData(bridge, s.Config, uploadDir, fileName, fileSize, data)
+		}
 		userName := ""
 		if s.User != nil {
 			userName = s.User.Name
@@ -3131,16 +3142,18 @@ func queueMasterUploadPostHooks(s *Session, bridge MasterBridge, uploadDir, medi
 		enrichUploadRaceUserData(data, raceUsers, userName)
 		s.emitEvent(EventUpload, filePath, fileName, transferredBytes, speedMB, data)
 		if shouldAnnounceNoRace(s.Config, uploadDir, existingNamesCopy, fileName) && zipscript.RaceStatsOnSTORForDir(s.Config.Zipscript, uploadDir) {
-			go emitRaceEndAfter(s, uploadDir, nil, fileSize, 1, xferMs, 0)
+			go emitRaceEndAfter(s, uploadDir, nil, nil, fileSize, 1, 0, xferMs, 0)
 		}
 		if zipscript.UsesZip(s.Config.Zipscript, uploadDir) {
 			expectedZipParts := zipExpectedPartsFromDIZ(bridge, uploadDir)
 			if zipscript.RaceStatsOnSTORForDir(s.Config.Zipscript, uploadDir) && shouldEmitZipRaceEnd(s.Config, uploadDir, fileName) && zipDirCompleteAfterUpload(bridge, uploadDir, fileName, bridge.ListDir(uploadDir), expectedZipParts) && raceTotalFiles > 0 {
 				go emitZipRaceEndAfter(s, uploadDir, xferMs, zipscript.MediaInfoGraceDelayForDir(s.Config.Zipscript, uploadDir, fileName))
 			}
-		} else if sfvEntries := bridge.GetSFVData(uploadDir); sfvEntries != nil {
+		} else if !sfVUpload {
+			if sfvEntries := bridge.GetSFVData(uploadDir); sfvEntries != nil {
 			if zipscript.RaceStatsOnSTORForDir(s.Config.Zipscript, uploadDir) && raceComplete && zipscript.CanTriggerRaceEndForDir(s.Config.Zipscript, uploadDir, sfvEntries, fileName) {
-				go emitRaceEndAfter(s, uploadDir, raceUsers, raceTotalBytes, raceTotalFiles, xferMs, zipscript.MediaInfoGraceDelayForDir(s.Config.Zipscript, uploadDir, fileName))
+				go emitRaceEndAfter(s, uploadDir, raceUsers, raceGroups, raceTotalBytes, raceTotalFiles, raceDurationMs, xferMs, zipscript.MediaInfoGraceDelayForDir(s.Config.Zipscript, uploadDir, fileName))
+			}
 			}
 		}
 	}()
@@ -4399,7 +4412,7 @@ func zipDirCompleteAfterUpload(bridge MasterBridge, dirPath, fileName string, en
 	return false
 }
 
-func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName string, fileSize int64, data map[string]string) ([]VFSRaceUser, int64, int, bool) {
+func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName string, fileSize int64, data map[string]string) ([]VFSRaceUser, []VFSRaceGroup, int64, int, int64, bool) {
 	type freshRaceStatsBridge interface {
 		GetVFSRaceStatsFresh(dirPath string) (users []VFSRaceUser, groups []VFSRaceGroup, totalBytes int64, present int, total int)
 	}
@@ -4413,7 +4426,7 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 		}
 	}
 	if !isTrackedPayload {
-		return nil, 0, 0, false
+		return nil, nil, 0, 0, 0, false
 	}
 	data["file_mbytes"] = mbString(fileSize)
 	if zipscript.UsesZip(cfg.Zipscript, dirPath) {
@@ -4450,15 +4463,22 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 				data["leader_pct"] = fmt.Sprintf("%d", leader.Percent)
 				data["leader_speed"] = fmt.Sprintf("%.2fMB/s", leader.Speed/1024.0/1024.0)
 			}
-			return users, totalBytes, total, expected == 0 || total >= expected
+			return users, nil, totalBytes, total, 0, expected == 0 || total >= expected
 		}
-		return nil, 0, 0, false
+		return nil, nil, 0, 0, 0, false
 	}
 	if sfvEntries != nil {
-		users, _, totalBytes, present, total := bridge.GetVFSRaceStats(dirPath)
+		var users []VFSRaceUser
+		var groups []VFSRaceGroup
+		var totalBytes int64
+		var present, total int
+		raceDurationMs := int64(0)
 		if freshBridge, ok := bridge.(freshRaceStatsBridge); ok {
-			users, _, totalBytes, present, total = freshBridge.GetVFSRaceStatsFresh(dirPath)
+			users, groups, totalBytes, present, total = freshBridge.GetVFSRaceStatsFresh(dirPath)
+		} else {
+			users, groups, totalBytes, present, total = bridge.GetVFSRaceStats(dirPath)
 		}
+		raceDurationMs = bridge.GetRaceWallClockMilliseconds(dirPath)
 		if total > 0 {
 			data["relname"] = path.Base(dirPath)
 			data["t_files"] = fmt.Sprintf("%d", total)
@@ -4478,10 +4498,10 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 				data["leader_pct"] = fmt.Sprintf("%d", leader.Percent)
 				data["leader_speed"] = fmt.Sprintf("%.2fMB/s", leader.Speed/1024.0/1024.0)
 			}
-			return users, totalBytes, total, present >= total
+			return users, groups, totalBytes, total, raceDurationMs, present >= total
 		}
 	}
-	return nil, 0, 0, false
+	return nil, nil, 0, 0, 0, false
 }
 
 func firstTrackedRaceFileName(bridge MasterBridge, dirPath string) string {

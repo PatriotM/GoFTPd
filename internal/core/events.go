@@ -380,7 +380,7 @@ func (s *Session) emitEvent(evtType EventType, eventPath, fileName string, size 
 // completed the race) and is ignored for aggregate speed calculation — we
 // use max(user.DurationMs) as the wall-clock span instead, which is the
 // effective critical-path time across all racers.
-func emitRaceEnd(s *Session, dirPath string, users []VFSRaceUser, totalBytes int64, total int, xferMs int64) {
+func emitRaceEnd(s *Session, dirPath string, users []VFSRaceUser, groups []VFSRaceGroup, totalBytes int64, total int, raceDurationMs int64, xferMs int64) {
 	if s == nil {
 		return
 	}
@@ -401,17 +401,21 @@ func emitRaceEnd(s *Session, dirPath string, users []VFSRaceUser, totalBytes int
 	// heavily when uploads run in parallel — a 52s race with 8 parallel
 	// threads can easily sum to 400s+ of "transfer time". pzs-ng uses
 	// wall-clock for STATS_SPEED totals too.
-	var raceDurationMs int64
 	var hookRunner zipscript.CompleteHookRunner
-	var groups []VFSRaceGroup
 	if s.Config.Mode == "master" && s.MasterManager != nil {
 		if bridge, ok := s.MasterManager.(MasterBridge); ok {
 			hookRunner = bridge
-			if ms := bridge.GetRaceWallClockMilliseconds(dirPath); ms > 0 {
-				raceDurationMs = ms
+			if raceDurationMs <= 0 {
+				if ms := bridge.GetRaceWallClockMilliseconds(dirPath); ms > 0 {
+					raceDurationMs = ms
+				}
 			}
-			if _, raceGroups, _, _, _ := bridge.GetVFSRaceStats(dirPath); len(raceGroups) > 0 {
-				groups = trimRaceGroups(s.Config, raceGroups)
+			if len(groups) == 0 {
+				if _, raceGroups, _, _, _ := bridge.GetVFSRaceStats(dirPath); len(raceGroups) > 0 {
+					groups = trimRaceGroups(s.Config, raceGroups)
+				}
+			} else {
+				groups = trimRaceGroups(s.Config, groups)
 			}
 		}
 	}
