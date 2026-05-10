@@ -3078,7 +3078,7 @@ func queueMasterUploadPostHooks(s *Session, bridge MasterBridge, uploadDir, medi
 		return
 	}
 	existingNamesCopy := append([]string(nil), existingNames...)
-	go func() {
+	enqueueReleasePostHook(uploadDir, func() {
 		if strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
 			if sfvEntries, err := bridge.GetSFVInfo(filePath); err == nil {
 				log.Printf("[MASTER-ZS] Parsed SFV %s: %d entries", fileName, len(sfvEntries))
@@ -3128,7 +3128,8 @@ func queueMasterUploadPostHooks(s *Session, bridge MasterBridge, uploadDir, medi
 			raceUsers, raceGroups, raceTotalBytes, raceTotalFiles, raceDurationMs, raceComplete = populateUploadRaceData(bridge, s.Config, uploadDir, firstTrackedRaceFileName(bridge, uploadDir), fileSize, data)
 			raceComputed = true
 			if raceComplete && raceTotalFiles > 0 {
-				go emitRaceEndAfter(s, uploadDir, raceUsers, raceGroups, raceTotalBytes, raceTotalFiles, raceDurationMs, xferMs, zipscript.MediaInfoGraceDelayForDir(s.Config.Zipscript, uploadDir, fileName))
+				emitOrPrimeReleaseAudioInfo(s, bridge, uploadDir)
+				emitRaceEndAfter(s, uploadDir, raceUsers, raceGroups, raceTotalBytes, raceTotalFiles, raceDurationMs, xferMs, zipscript.MediaInfoGraceDelayForDir(s.Config.Zipscript, uploadDir, fileName))
 			}
 		}
 		if !raceComputed {
@@ -3141,21 +3142,22 @@ func queueMasterUploadPostHooks(s *Session, bridge MasterBridge, uploadDir, medi
 		enrichUploadRaceUserData(data, raceUsers, userName)
 		s.emitEvent(EventUpload, filePath, fileName, transferredBytes, speedMB, data)
 		if shouldAnnounceNoRace(s.Config, uploadDir, existingNamesCopy, fileName) && zipscript.RaceStatsOnSTORForDir(s.Config.Zipscript, uploadDir) {
-			go emitRaceEndAfter(s, uploadDir, nil, nil, fileSize, 1, 0, xferMs, 0)
+			emitRaceEndAfter(s, uploadDir, nil, nil, fileSize, 1, 0, xferMs, 0)
 		}
 		if zipscript.UsesZip(s.Config.Zipscript, uploadDir) {
 			expectedZipParts := zipExpectedPartsFromDIZ(bridge, uploadDir)
 			if zipscript.RaceStatsOnSTORForDir(s.Config.Zipscript, uploadDir) && shouldEmitZipRaceEnd(s.Config, uploadDir, fileName) && zipDirCompleteAfterUpload(bridge, uploadDir, fileName, bridge.ListDir(uploadDir), expectedZipParts) && raceTotalFiles > 0 {
-				go emitZipRaceEndAfter(s, uploadDir, xferMs, zipscript.MediaInfoGraceDelayForDir(s.Config.Zipscript, uploadDir, fileName))
+				emitZipRaceEndAfter(s, uploadDir, xferMs, zipscript.MediaInfoGraceDelayForDir(s.Config.Zipscript, uploadDir, fileName))
 			}
 		} else if !sfVUpload {
 			if sfvEntries := bridge.GetSFVData(uploadDir); sfvEntries != nil {
 			if zipscript.RaceStatsOnSTORForDir(s.Config.Zipscript, uploadDir) && raceComplete && zipscript.CanTriggerRaceEndForDir(s.Config.Zipscript, uploadDir, sfvEntries, fileName) {
-				go emitRaceEndAfter(s, uploadDir, raceUsers, raceGroups, raceTotalBytes, raceTotalFiles, raceDurationMs, xferMs, zipscript.MediaInfoGraceDelayForDir(s.Config.Zipscript, uploadDir, fileName))
+				emitOrPrimeReleaseAudioInfo(s, bridge, uploadDir)
+				emitRaceEndAfter(s, uploadDir, raceUsers, raceGroups, raceTotalBytes, raceTotalFiles, raceDurationMs, xferMs, zipscript.MediaInfoGraceDelayForDir(s.Config.Zipscript, uploadDir, fileName))
 			}
 			}
 		}
-	}()
+	})
 }
 
 func zipscriptExistingNames(bridge MasterBridge, dirPath string) []string {
@@ -3735,6 +3737,41 @@ func emitSTORSitebotAudioInfo(s *Session, bridge MasterBridge, dirPath, filePath
 		return
 	}
 	emitReleaseMetadataEvent(s, EventAudioInfo, dirPath, filePath, fileName, size, speedMB, fields)
+}
+
+func emitOrPrimeReleaseAudioInfo(s *Session, bridge MasterBridge, dirPath string) {
+	if s == nil || bridge == nil {
+		return
+	}
+	fields := bridge.GetDirMediaInfo(dirPath)
+	if zipscript.AudioInfoLooksUsable(fields) && zipscript.ShowAudioInfoOnSTORForDir(s.Config.Zipscript, dirPath, fields) {
+		emitSTORSitebotAudioInfo(s, bridge, dirPath, dirPath, path.Base(dirPath), 0, 0, fields, false)
+		return
+	}
+
+	entries := bridge.ListDir(dirPath)
+	sort.Slice(entries, func(i, j int) bool {
+		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
+	})
+	for _, entry := range entries {
+		if entry.IsDir || entry.IsSymlink {
+			continue
+		}
+		ext := strings.ToLower(strings.TrimPrefix(path.Ext(entry.Name), "."))
+		if ext != "mp3" && ext != "flac" && ext != "m4a" && ext != "wav" {
+			continue
+		}
+		filePath := path.Join(dirPath, entry.Name)
+		fields, err := applyAudioZipscriptChecksForDir(s, bridge, dirPath, filePath, entry.Name)
+		if err != nil {
+			if s.Config != nil && s.Config.Debug {
+				log.Printf("[MASTER-ZS] release audio prime failed for %s: %v", filePath, err)
+			}
+			return
+		}
+		emitSTORSitebotAudioInfo(s, bridge, dirPath, filePath, entry.Name, entry.Size, 0, fields, false)
+		return
+	}
 }
 
 func probeSTORSitebotMediaInfo(s *Session, bridge MasterBridge, dirPath, filePath, fileName string, hadMediaInfo bool) map[string]string {
