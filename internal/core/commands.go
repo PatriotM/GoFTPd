@@ -1124,7 +1124,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					}
 				}
 
-				for _, marker := range incompleteMarkerEntriesWithOptions(bridge, s.Config, activeIncompleteIndicator(s.Config), targetPath, entries, false) {
+				for _, marker := range incompleteMarkerEntries(bridge, s.Config, activeIncompleteIndicator(s.Config), targetPath, entries) {
 					ts := timeutil.FTPMachineUnix(marker.ModTime)
 					output.WriteString(fmt.Sprintf("Modify=%s;Perm=el;Type=%s; %s\r\n",
 						ts, mlsdSymlinkType(marker), marker.Name))
@@ -1392,7 +1392,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					}
 				}
 
-				for _, marker := range incompleteMarkerEntriesWithOptions(bridge, s.Config, activeIncompleteIndicator(s.Config), targetPath, entries, false) {
+				for _, marker := range incompleteMarkerEntries(bridge, s.Config, activeIncompleteIndicator(s.Config), targetPath, entries) {
 					ts := timeutil.Unix(marker.ModTime).Format("Jan _2 15:04")
 					name := fmt.Sprintf("%s -> %s", marker.Name, marker.LinkTarget)
 					output.WriteString(fmt.Sprintf("%s   1 %-8s %-8s %10s %s %s\r\n",
@@ -2618,10 +2618,6 @@ func isIncompleteMarkerName(pattern, name string) bool {
 }
 
 func incompleteMarkerEntries(bridge MasterBridge, cfg *Config, pattern, dirPath string, entries []MasterFileEntry) []MasterFileEntry {
-	return incompleteMarkerEntriesWithOptions(bridge, cfg, pattern, dirPath, entries, true)
-}
-
-func incompleteMarkerEntriesWithOptions(bridge MasterBridge, cfg *Config, pattern, dirPath string, entries []MasterFileEntry, allowExpensiveFallback bool) []MasterFileEntry {
 	pattern = strings.TrimSpace(pattern)
 	if pattern == "" || cfg == nil {
 		return nil
@@ -2657,14 +2653,11 @@ func incompleteMarkerEntriesWithOptions(bridge MasterBridge, cfg *Config, patter
 		progress, hasProgress := bulkProgress[releasePath]
 		facts, hasFacts := childFacts[releasePath]
 		var releaseEntries []MasterFileEntry
-		needReleaseEntries := allowExpensiveFallback && (usesZip || (!hasFacts && (nfoPattern != "" || (noSFVPattern != "" && !hasProgress) || (markEmptyDirs && !hasProgress))))
+		needReleaseEntries := usesZip || (!hasFacts && (nfoPattern != "" || (noSFVPattern != "" && !hasProgress) || (markEmptyDirs && !hasProgress)))
 		if needReleaseEntries {
 			releaseEntries = bridge.ListDir(releasePath)
 		}
 		if usesZip {
-			if !allowExpensiveFallback {
-				continue
-			}
 			expected := zipExpectedPartsFromDIZ(bridge, releasePath)
 			_, _, present = zipDirRaceStats(bridge, releasePath, releaseEntries, expected)
 			if expected > 0 {
@@ -2673,9 +2666,6 @@ func incompleteMarkerEntriesWithOptions(bridge MasterBridge, cfg *Config, patter
 		} else if hasProgress {
 			present, total = progress.Present, progress.Total
 		} else {
-			if !allowExpensiveFallback {
-				continue
-			}
 			_, _, _, present, total = bridge.GetVFSRaceStats(releasePath)
 		}
 
@@ -2706,7 +2696,7 @@ func incompleteMarkerEntriesWithOptions(bridge MasterBridge, cfg *Config, patter
 		hasNFO := false
 		if hasFacts {
 			hasNFO = facts.HasNFO
-		} else if nfoPattern != "" && allowExpensiveFallback {
+		} else if nfoPattern != "" {
 			hasNFO = hasNFOEntry(releaseEntries)
 		}
 		if nfoPattern != "" && !hasNFO {
@@ -2729,7 +2719,7 @@ func incompleteMarkerEntriesWithOptions(bridge MasterBridge, cfg *Config, patter
 			if markEmptyDirs {
 				if hasFacts {
 					emptyDir = facts.VisibleCount == 0
-				} else if allowExpensiveFallback {
+				} else {
 					if len(releaseEntries) == 0 {
 						releaseEntries = bridge.ListDir(releasePath)
 					}
@@ -2740,8 +2730,6 @@ func incompleteMarkerEntriesWithOptions(bridge MasterBridge, cfg *Config, patter
 						}
 					}
 					emptyDir = visible == 0
-				} else {
-					continue
 				}
 			}
 			if !emptyDir {
@@ -2765,9 +2753,6 @@ func incompleteMarkerEntriesWithOptions(bridge MasterBridge, cfg *Config, patter
 		if cdPattern != "" && isDiscDirName(e.Name) {
 			childPresent, childTotal := present, total
 			if usesZip || !hasProgress {
-				if !allowExpensiveFallback {
-					continue
-				}
 				_, _, _, childPresent, childTotal = bridge.GetVFSRaceStats(releasePath)
 			}
 			if childTotal > 0 && childPresent < childTotal {
@@ -2993,19 +2978,6 @@ func dirVisibleBytes(entries []MasterFileEntry) int64 {
 	return totalBytes
 }
 
-func hasVisibleRegularEntries(entries []MasterFileEntry) bool {
-	for _, e := range entries {
-		if e.IsDir || e.IsSymlink || strings.HasPrefix(e.Name, ".") {
-			continue
-		}
-		if strings.HasSuffix(strings.ToUpper(strings.TrimSpace(e.Name)), "-MISSING") {
-			continue
-		}
-		return true
-	}
-	return false
-}
-
 func dirRaceProgressForListing(bridge MasterBridge, cfg *Config, dirPath string, entries []MasterFileEntry) (totalBytes int64, present int, total int, usedImmediate bool) {
 	if bridge == nil || cfg == nil {
 		return 0, 0, 0, false
@@ -3029,9 +3001,6 @@ func dirRaceProgressForListing(bridge MasterBridge, cfg *Config, dirPath string,
 func buildReleaseListSnapshot(bridge MasterBridge, cfg *Config, dirPath, siteName string, entries []MasterFileEntry) releaseListSnapshot {
 	snap := releaseListSnapshot{}
 	if bridge == nil || cfg == nil {
-		return snap
-	}
-	if !hasVisibleRegularEntries(entries) {
 		return snap
 	}
 	snap.TotalBytes, snap.Present, snap.Total, _ = dirRaceProgressForListing(bridge, cfg, dirPath, entries)
