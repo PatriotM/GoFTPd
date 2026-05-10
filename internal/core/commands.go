@@ -530,6 +530,10 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				return false
 			}
 		}
+		if !s.canListPath(targetPath) {
+			fmt.Fprintf(s.Conn, "550 %s: no such file or directory\r\n", targetPath)
+			return false
+		}
 		s.CurrentDir = targetPath
 
 		if s.Config.Mode == "master" && s.MasterManager != nil {
@@ -988,6 +992,10 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				target = path.Clean(path.Join(s.CurrentDir, t))
 			}
 		}
+		if !s.canListPath(target) {
+			fmt.Fprintf(s.Conn, "550 %s: no such file or directory\r\n", target)
+			return false
+		}
 
 		facts := ""
 		found := false
@@ -1171,6 +1179,9 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				if !s.Config.ShowSymlinks && f.Type()&fs.ModeSymlink != 0 {
 					continue
 				}
+				if !s.canListPath(path.Join(targetPath, f.Name())) {
+					continue
+				}
 				fileName := f.Name()
 				fullPath := filepath.Join(mlsdPath, fileName)
 				isSymlink := f.Type()&fs.ModeSymlink != 0
@@ -1276,7 +1287,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			listPath := filepath.Join(s.Config.StoragePath, targetPath)
 			if info, statErr := os.Lstat(listPath); statErr == nil && !info.IsDir() {
 				name := filepath.Base(listPath)
-				if !strings.HasPrefix(name, ".") {
+				if !strings.HasPrefix(name, ".") && s.canListPath(targetPath) {
 					output.WriteString(name + "\r\n")
 				}
 			} else if files, readErr := os.ReadDir(listPath); readErr == nil {
@@ -1285,6 +1296,9 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						continue
 					}
 					if !s.Config.ShowSymlinks && f.Type()&fs.ModeSymlink != 0 {
+						continue
+					}
+					if !s.canListPath(path.Join(targetPath, f.Name())) {
 						continue
 					}
 					output.WriteString(f.Name() + "\r\n")
@@ -1458,6 +1472,9 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						continue
 					}
 					if !s.Config.ShowSymlinks && f.Type()&fs.ModeSymlink != 0 {
+						continue
+					}
+					if !s.canListPath(path.Join(targetPath, f.Name())) {
 						continue
 					}
 					info, err := f.Info()
@@ -2441,6 +2458,9 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						continue
 					}
 					if !s.Config.ShowSymlinks && f.Type()&fs.ModeSymlink != 0 {
+						continue
+					}
+					if !s.canListPath(path.Join(target, f.Name())) {
 						continue
 					}
 					info, err := f.Info()
