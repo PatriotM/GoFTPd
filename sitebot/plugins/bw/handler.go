@@ -63,7 +63,11 @@ func (p *Plugin) Initialize(config map[string]interface{}) error {
 	if s, ok := stringConfig(cfg, config, "user", "bandwidth_user"); ok && strings.TrimSpace(s) != "" {
 		p.user = strings.TrimSpace(s)
 	}
-	if s, ok := stringConfig(cfg, config, "sitename", "sitename"); ok && strings.TrimSpace(s) != "" {
+	if s, ok := firstStringConfig(cfg, config,
+		[2]string{"sitename", "sitename"},
+		[2]string{"sitename_short", "sitename_short"},
+		[2]string{"sitename_long", "sitename_long"},
+	); ok && strings.TrimSpace(s) != "" {
 		p.siteName = strings.TrimSpace(s)
 	}
 	if s, ok := stringConfig(cfg, config, "password", "bandwidth_password"); ok {
@@ -367,6 +371,17 @@ func stringConfig(section, flat map[string]interface{}, sectionKey, flatKey stri
 	}
 	s, ok := raw.(string)
 	return s, ok
+}
+
+func firstStringConfig(section, flat map[string]interface{}, keys ...[2]string) (string, bool) {
+	for _, key := range keys {
+		if s, ok := stringConfig(section, flat, key[0], key[1]); ok {
+			if strings.TrimSpace(s) != "" {
+				return s, true
+			}
+		}
+	}
+	return "", false
 }
 
 func intConfig(raw interface{}, fallback int) int {

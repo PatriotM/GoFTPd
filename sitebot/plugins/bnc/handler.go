@@ -23,6 +23,7 @@ type Target struct {
 type Plugin struct {
 	user        string
 	password    string
+	siteName    string
 	useTLS      bool
 	insecure    bool
 	timeout     time.Duration
@@ -35,6 +36,7 @@ type Plugin struct {
 func New() *Plugin {
 	return &Plugin{
 		user:        "goftpd",
+		siteName:    "GoFTPd",
 		useTLS:      true,
 		insecure:    true,
 		timeout:     10 * time.Second,
@@ -57,6 +59,13 @@ func (p *Plugin) Initialize(config map[string]interface{}) error {
 	cfg := plugin.ConfigSection(config, "bnc")
 	if s, ok := stringConfig(cfg, config, "user", "bnc_user"); ok && strings.TrimSpace(s) != "" {
 		p.user = strings.TrimSpace(s)
+	}
+	if s, ok := firstStringConfig(cfg, config,
+		[2]string{"sitename", "sitename"},
+		[2]string{"sitename_short", "sitename_short"},
+		[2]string{"sitename_long", "sitename_long"},
+	); ok && strings.TrimSpace(s) != "" {
+		p.siteName = strings.TrimSpace(s)
 	}
 	if s, ok := stringConfig(cfg, config, "password", "bnc_password"); ok {
 		p.password = s
@@ -119,8 +128,9 @@ func (p *Plugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 	lines := []string{p.render("BNC", map[string]string{
 		"user":     evt.User,
 		"channel":  evt.Data["channel"],
-		"response": "Checking GoFTPd status, please wait ...",
-	}, "BNC: Checking GoFTPd status, please wait ...")}
+		"sitename": p.siteName,
+		"response": fmt.Sprintf("Checking %s status, please wait ...", p.siteName),
+	}, "BNC: " + fmt.Sprintf("Checking %s status, please wait ...", p.siteName))}
 
 	for i, target := range targets {
 		ok, latency, message := p.checkTarget(target)
@@ -376,6 +386,17 @@ func stringConfig(section, flat map[string]interface{}, sectionKey, flatKey stri
 	}
 	s, ok := raw.(string)
 	return s, ok
+}
+
+func firstStringConfig(section, flat map[string]interface{}, keys ...[2]string) (string, bool) {
+	for _, key := range keys {
+		if s, ok := stringConfig(section, flat, key[0], key[1]); ok {
+			if strings.TrimSpace(s) != "" {
+				return s, true
+			}
+		}
+	}
+	return "", false
 }
 
 func intConfig(raw interface{}, fallback int) int {
