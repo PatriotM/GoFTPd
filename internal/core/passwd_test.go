@@ -95,3 +95,22 @@ func TestAddUserToPasswdUsesStableDefaultsForNewUsers(t *testing.T) {
 		t.Fatalf("passwd line = %q, want %q", got, want)
 	}
 }
+
+func TestHashAndVerifyPasswordWithExclamationMark(t *testing.T) {
+	t.Helper()
+	plaintext := "test!pass!123"
+
+	hash, err := HashPassword(plaintext)
+	if err != nil {
+		t.Fatalf("HashPassword() error = %v", err)
+	}
+	if !strings.HasPrefix(hash, "$2") {
+		t.Fatalf("hash = %q, want bcrypt hash", hash)
+	}
+	if !VerifyPassword(plaintext, hash) {
+		t.Fatalf("VerifyPassword() = false, want true for password containing !")
+	}
+	if VerifyPassword("testpass123", hash) {
+		t.Fatalf("VerifyPassword() = true, want false for password without !")
+	}
+}

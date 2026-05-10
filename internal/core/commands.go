@@ -3807,6 +3807,9 @@ func applyAudioZipscriptChecksForDir(s *Session, bridge MasterBridge, dirPath, f
 	if !zipscript.AudioCheckEnabled(s.Config.Zipscript, dirPath, fileName) {
 		return nil, nil
 	}
+	if cached := bridge.GetDirMediaInfo(dirPath); zipscript.AudioInfoLooksUsable(cached) {
+		return cached, nil
+	}
 	binary, timeoutSeconds := zipscriptMediaInfoSettings(s.Config)
 	fields, err := bridge.ProbeMediaInfo(filePath, binary, timeoutSeconds)
 	if err != nil {
@@ -4098,7 +4101,7 @@ func isZipPayloadName(name string) bool {
 	return regexp.MustCompile(`(?i)\.(zip|z\d\d)$`).MatchString(name)
 }
 
-func isZipMainArchiveName(name string) bool {
+func isZipRecoverableArchiveName(name string) bool {
 	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(name)), ".zip")
 }
 
@@ -4169,12 +4172,8 @@ func zipDirRaceStats(bridge MasterBridge, dirPath string, entries []MasterFileEn
 	return users, totalBytes, total
 }
 
-func zipDirCurrentPartState(bridge MasterBridge, dirPath string, entries []MasterFileEntry) (total int, highestDigit int, highestLetter int, mode string, ok bool) {
-	total = 0
-	highestDigit = 0
-	highestLetter = 0
-	mode = ""
-	sawMainZip := false
+func zipDirPayloadCount(bridge MasterBridge, dirPath string, entries []MasterFileEntry) int {
+	total := 0
 	for _, e := range entries {
 		if e.IsDir || e.IsSymlink || strings.HasPrefix(strings.TrimSpace(e.Name), ".") || !isZipPayloadName(e.Name) {
 			continue
@@ -4183,55 +4182,8 @@ func zipDirCurrentPartState(bridge MasterBridge, dirPath string, entries []Maste
 			continue
 		}
 		total++
-		if isZipMainArchiveName(e.Name) {
-			sawMainZip = true
-			continue
-		}
-		base := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(e.Name)), ".zip")
-		if m := regexp.MustCompile(`(\d+)$`).FindStringSubmatch(base); len(m) == 2 {
-			n, err := strconv.Atoi(m[1])
-			if err != nil || n <= 0 {
-				return 0, 0, 0, "", false
-			}
-			if mode == "" {
-				mode = "digit"
-			}
-			if mode != "digit" {
-				return 0, 0, 0, "", false
-			}
-			if n > highestDigit {
-				highestDigit = n
-			}
-			continue
-		}
-		if m := regexp.MustCompile(`([a-z])$`).FindStringSubmatch(base); len(m) == 2 {
-			n := int(m[1][0]-'a') + 1
-			if n <= 0 {
-				return 0, 0, 0, "", false
-			}
-			if mode == "" {
-				mode = "letter"
-			}
-			if mode != "letter" {
-				return 0, 0, 0, "", false
-			}
-			if n > highestLetter {
-				highestLetter = n
-			}
-			continue
-		}
-		return 0, 0, 0, "", false
 	}
-	if total == 0 {
-		return 0, 0, 0, "", false
-	}
-	if mode == "" {
-		if sawMainZip && total == 1 {
-			return total, 0, 0, "single", true
-		}
-		return 0, 0, 0, "", false
-	}
-	return total, highestDigit, highestLetter, mode, true
+	return total
 }
 
 func zipExpectedPartsFromDIZ(bridge MasterBridge, dirPath string) int {
@@ -4386,7 +4338,7 @@ func recoverZipDIZFromDirectory(bridge MasterBridge, dirPath string) ([]byte, er
 		if entry.Size <= 0 || entry.XferTime <= 0 {
 			continue
 		}
-		if isZipMainArchiveName(entry.Name) {
+		if isZipRecoverableArchiveName(entry.Name) {
 			archivePath := path.Join(dirPath, entry.Name)
 			if activeUploadForPathWithBridge(bridge, archivePath) {
 				continue
@@ -4435,7 +4387,7 @@ func checkUploadedZipIntegrity(bridge MasterBridge, cfg *Config, dirPath, filePa
 }
 
 func refreshZipDIZFromArchive(bridge MasterBridge, dirPath, archivePath, fileName string) error {
-	if bridge == nil || !isZipMainArchiveName(fileName) {
+	if bridge == nil || !isZipRecoverableArchiveName(fileName) {
 		return nil
 	}
 	dizPath := path.Join(dirPath, "file_id.diz")
@@ -4453,10 +4405,7 @@ func zipDirComplete(bridge MasterBridge, dirPath string, entries []MasterFileEnt
 	if expected <= 0 {
 		return false
 	}
-	total, _, _, _, ok := zipDirCurrentPartState(bridge, dirPath, entries)
-	if !ok {
-		return false
-	}
+	total := zipDirPayloadCount(bridge, dirPath, entries)
 	return total == expected
 }
 
@@ -4479,7 +4428,8 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 	data["file_mbytes"] = mbString(fileSize)
 	if zipscript.UsesZip(cfg.Zipscript, dirPath) {
 		expected := zipExpectedPartsFromDIZ(bridge, dirPath)
-		users, totalBytes, total := zipDirRaceStats(bridge, dirPath, bridge.ListDir(dirPath), expected)
+		entries := bridge.ListDir(dirPath)
+		users, totalBytes, total := zipDirRaceStats(bridge, dirPath, entries, expected)
 		if total > 0 {
 			data["relname"] = path.Base(dirPath)
 			if expected > 0 {
