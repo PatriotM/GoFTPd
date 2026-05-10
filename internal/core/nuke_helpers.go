@@ -41,6 +41,36 @@ func VFSUploaderBytes(entries []MasterFileEntry) map[string]int64 {
 	return uploaderBytes
 }
 
+func vfsUploaderBytesRecursive(bridge MasterBridge, dirPath string, maxDepth int) map[string]int64 {
+	uploaderBytes := make(map[string]int64)
+	if bridge == nil || maxDepth < 0 {
+		return uploaderBytes
+	}
+	for _, entry := range bridge.ListDir(dirPath) {
+		if strings.HasPrefix(entry.Name, ".") {
+			continue
+		}
+		if entry.IsDir {
+			if maxDepth == 0 {
+				continue
+			}
+			childPath := path.Join(dirPath, entry.Name)
+			for user, bytes := range vfsUploaderBytesRecursive(bridge, childPath, maxDepth-1) {
+				uploaderBytes[user] += bytes
+			}
+			continue
+		}
+		owner := strings.TrimSpace(entry.Owner)
+		if owner == "" {
+			owner = "unknown"
+		}
+		if entry.Size > 0 {
+			uploaderBytes[owner] += entry.Size
+		}
+	}
+	return uploaderBytes
+}
+
 func DirUploaderBytes(bridge MasterBridge, dirPath string) map[string]int64 {
 	if bridge != nil {
 		if users, _, _, _, _ := bridge.GetVFSRaceStats(dirPath); len(users) > 0 {
@@ -55,7 +85,10 @@ func DirUploaderBytes(bridge MasterBridge, dirPath string) map[string]int64 {
 				return uploaderBytes
 			}
 		}
-		return VFSUploaderBytes(bridge.ListDir(dirPath))
+		if uploaderBytes := VFSUploaderBytes(bridge.ListDir(dirPath)); len(uploaderBytes) > 0 {
+			return uploaderBytes
+		}
+		return vfsUploaderBytesRecursive(bridge, dirPath, 4)
 	}
 	return nil
 }
