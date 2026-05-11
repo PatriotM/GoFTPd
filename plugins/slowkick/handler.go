@@ -140,6 +140,30 @@ func (h *Handler) ValidateLogin(u *user.User, remoteIP string) error {
 	return nil
 }
 
+func (h *Handler) TransferSpeedPolicy(username, primaryGroup, transferPath, direction string) (int64, int64, bool) {
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return 0, 0, false
+	}
+	if !h.shouldApplyTransferPolicy(username, primaryGroup, transferPath, direction) {
+		return 0, 0, false
+	}
+	switch strings.ToLower(strings.TrimSpace(direction)) {
+	case "upload":
+		if h.minUploadSpeedBytes <= 0 {
+			return 0, 0, false
+		}
+		return int64(h.minUploadSpeedBytes), 0, true
+	case "download":
+		if h.minDownloadSpeedBytes <= 0 {
+			return 0, 0, false
+		}
+		return int64(h.minDownloadSpeedBytes), 0, true
+	default:
+		return 0, 0, false
+	}
+}
+
 func (h *Handler) Stop() error {
 	select {
 	case <-h.stopCh:
@@ -264,22 +288,49 @@ func (h *Handler) shouldCheckSession(snap plugin.ActiveSession) bool {
 	if !snap.LoggedIn {
 		return false
 	}
-	if strings.TrimSpace(snap.User) == "" || strings.TrimSpace(snap.TransferPath) == "" {
+	return h.shouldApplyTransferPolicy(snap.User, snap.PrimaryGroup, snap.TransferPath, snap.TransferDirection)
+}
+
+func (h *Handler) shouldApplyTransferPolicy(username, primaryGroup, transferPath, direction string) bool {
+	if strings.TrimSpace(username) == "" || strings.TrimSpace(transferPath) == "" {
 		return false
 	}
-	if _, excluded := h.excludeUsers[strings.ToLower(strings.TrimSpace(snap.User))]; excluded {
+	switch strings.ToLower(strings.TrimSpace(direction)) {
+	case "upload":
+		if !h.monitorUploads {
+			return false
+		}
+	case "download":
+		if !h.monitorDownloads {
+			return false
+		}
+	default:
 		return false
 	}
-	if _, excluded := h.excludeGroups[strings.ToLower(strings.TrimSpace(snap.PrimaryGroup))]; excluded {
+	if _, excluded := h.excludeUsers[strings.ToLower(strings.TrimSpace(username))]; excluded {
 		return false
 	}
-	cleanPath := strings.ToLower(path.Clean("/" + strings.TrimSpace(snap.TransferPath)))
+	if _, excluded := h.excludeGroups[strings.ToLower(strings.TrimSpace(primaryGroup))]; excluded {
+		return false
+	}
+	if h.minUsersOnline > 0 && h.svc != nil && h.svc.ListActiveSessions != nil {
+		loggedIn := 0
+		for _, snap := range h.svc.ListActiveSessions() {
+			if snap.LoggedIn && strings.TrimSpace(snap.User) != "" {
+				loggedIn++
+			}
+		}
+		if loggedIn < h.minUsersOnline {
+			return false
+		}
+	}
+	cleanPath := strings.ToLower(path.Clean("/" + strings.TrimSpace(transferPath)))
 	for _, prefix := range h.excludePaths {
 		if cleanPath == prefix || strings.HasPrefix(cleanPath, prefix+"/") {
 			return false
 		}
 	}
-	ext := strings.TrimPrefix(strings.ToLower(path.Ext(strings.TrimSpace(snap.TransferPath))), ".")
+	ext := strings.TrimPrefix(strings.ToLower(path.Ext(strings.TrimSpace(transferPath))), ".")
 	if ext != "" {
 		if _, excluded := h.excludeExtensions[ext]; excluded {
 			return false

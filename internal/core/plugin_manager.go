@@ -188,6 +188,30 @@ func (pm *PluginManager) ValidateLogin(u *user.User, remoteIP string) error {
 	return nil
 }
 
+func (pm *PluginManager) TransferSpeedLimits(username, primaryGroup, transferPath, direction string) (int64, int64) {
+	if pm == nil {
+		return 0, 0
+	}
+
+	pm.mu.RLock()
+	plugins := make([]plugin.Plugin, len(pm.plugins))
+	copy(plugins, pm.plugins)
+	pm.mu.RUnlock()
+
+	for _, p := range plugins {
+		provider, ok := p.(plugin.TransferSpeedPolicyProvider)
+		if !ok {
+			continue
+		}
+		minSpeed, maxSpeed, ok := provider.TransferSpeedPolicy(username, primaryGroup, transferPath, direction)
+		if !ok {
+			continue
+		}
+		return minSpeed, maxSpeed
+	}
+	return 0, 0
+}
+
 // StopAll calls Stop() on every registered plugin. Called at shutdown.
 func (pm *PluginManager) StopAll() error {
 	pm.mu.RLock()
