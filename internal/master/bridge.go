@@ -554,6 +554,7 @@ func (b *Bridge) DeleteFile(filePath string) error {
 		}
 	}
 	b.invalidateReadFileCache(filePath)
+	b.sm.InvalidateReleaseStateForPath(filePath, vfsFile != nil && vfsFile.IsDir)
 	return nil
 }
 
@@ -598,6 +599,7 @@ func (b *Bridge) RenameFile(from, toDir, toName string) error {
 			log.Printf("[Bridge] Race DB rename sync failed from %s to %s: %v", from, toPath, err)
 		}
 	}
+	b.sm.RenameReleaseState(from, toPath, vfsFile != nil && vfsFile.IsDir)
 	return nil
 }
 
@@ -644,6 +646,7 @@ func (b *Bridge) RelocatePathToSlave(from, toDir, toName, targetSlave string) er
 				log.Printf("[Bridge] Race DB rename sync failed %s -> %s: %v", from, toPath, err)
 			}
 		}
+		b.sm.RenameReleaseState(from, toPath, file.IsDir)
 		return nil
 	}
 	index, err := IssueRelocate(rs, from, toDir, toName)
@@ -664,6 +667,7 @@ func (b *Bridge) RelocatePathToSlave(from, toDir, toName, targetSlave string) er
 			log.Printf("[Bridge] Race DB rename sync failed %s -> %s: %v", from, toPath, err)
 		}
 	}
+	b.sm.RenameReleaseState(from, toPath, file.IsDir)
 	return nil
 }
 
@@ -1592,16 +1596,17 @@ func (b *Bridge) CacheSFV(dirPath string, sfvName string, entries []core.SFVEntr
 }
 
 func (b *Bridge) CacheMediaInfo(dirPath string, fields map[string]string) {
-	b.sm.GetVFS().SetMediaInfo(dirPath, fields)
+	cleanDirPath := filepath.Clean(dirPath)
+	b.sm.SetReleaseMediaInfo(cleanDirPath, fields)
 	if b.raceDB != nil {
-		if err := b.raceDB.SaveMediaInfo(filepath.Clean(dirPath), fields); err != nil {
-			log.Printf("[Bridge] Race DB mediainfo sync failed for %s: %v", dirPath, err)
+		if err := b.raceDB.SaveMediaInfo(cleanDirPath, fields); err != nil {
+			log.Printf("[Bridge] Race DB mediainfo sync failed for %s: %v", cleanDirPath, err)
 		}
 	}
 }
 
 func (b *Bridge) ClaimReleaseMetadataAnnouncement(dirPath, key string) bool {
-	return b.sm.GetVFS().ClaimAnnouncement(dirPath, key)
+	return b.sm.ClaimReleaseAnnouncement(dirPath, key)
 }
 
 // GetVFSRaceStats returns race statistics for a directory,
@@ -1683,6 +1688,24 @@ func (b *Bridge) GetImmediateReleaseProgress(dirPath string) map[string]core.Rel
 		return nil
 	}
 	cleanDirPath := filepath.Clean(dirPath)
+	if out := b.sm.GetImmediateReleaseProgress(cleanDirPath); len(out) > 0 {
+		uploadsByDir := b.liveUploadingRaceKeysByDir(cleanDirPath, false)
+		for childPath, excludeKeys := range uploadsByDir {
+			stat, ok := out[childPath]
+			if !ok {
+				continue
+			}
+			meta := b.sm.GetVFS().GetSFVData(childPath)
+			if meta == nil || len(meta.SFVEntries) == 0 {
+				continue
+			}
+			stat.Present = len(b.sm.GetVFS().GetVerifiedSFVPresentFilesFiltered(childPath, excludeKeys))
+			stat.Total = len(meta.SFVEntries)
+			stat.HasSFV = true
+			out[childPath] = stat
+		}
+		return out
+	}
 	if out := b.sm.GetVFS().GetImmediateChildDirProgress(cleanDirPath); len(out) > 0 {
 		uploadsByDir := b.liveUploadingRaceKeysByDir(cleanDirPath, false)
 		for childPath, excludeKeys := range uploadsByDir {
@@ -1711,7 +1734,11 @@ func (b *Bridge) GetImmediateReleaseChildFacts(dirPath string) map[string]core.R
 	if b == nil || b.sm == nil {
 		return nil
 	}
-	return b.sm.GetVFS().GetImmediateChildDirFacts(filepath.Clean(dirPath))
+	cleanDirPath := filepath.Clean(dirPath)
+	if out := b.sm.GetImmediateReleaseChildFacts(cleanDirPath); len(out) > 0 {
+		return out
+	}
+	return b.sm.GetVFS().GetImmediateChildDirFacts(cleanDirPath)
 }
 
 func (b *Bridge) PluginGetVFSRaceStats(dirPath string) ([]plugin.RaceUser, []plugin.RaceGroup, int64, int, int) {
@@ -1807,7 +1834,19 @@ func (b *Bridge) liveUploadingRaceKeysByDir(rootDir string, useCache bool) map[s
 }
 
 func (b *Bridge) GetDirMediaInfo(dirPath string) map[string]string {
-	return b.sm.GetVFS().GetMediaInfo(dirPath)
+	cleanDirPath := filepath.Clean(dirPath)
+	if cached := b.sm.GetReleaseMediaInfo(cleanDirPath); len(cached) > 0 {
+		return cached
+	}
+	if b.raceDB == nil {
+		return nil
+	}
+	fields := b.raceDB.GetMediaInfo(cleanDirPath)
+	if len(fields) == 0 {
+		return nil
+	}
+	b.sm.SetReleaseMediaInfo(cleanDirPath, fields)
+	return fields
 }
 
 func (b *Bridge) SearchDirs(query string, limit int) []core.VFSSearchResult {

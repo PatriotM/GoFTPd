@@ -351,37 +351,47 @@ func (r *RaceDB) Reconcile(vfs *VirtualFileSystem) error {
 		}
 	}
 
-	mediaRows, err := r.db.Query(`
-        SELECT rel.path, rm.field_key, rm.field_value
+	return nil
+}
+
+func (r *RaceDB) GetMediaInfo(dirPath string) map[string]string {
+	if r == nil || r.db == nil {
+		return nil
+	}
+	rows, err := r.db.Query(`
+        SELECT rm.field_key, rm.field_value
         FROM releases rel
         JOIN release_media rm ON rm.release_id = rel.id
-        ORDER BY rel.path, rm.field_key
-    `)
+        WHERE rel.path = ?
+        ORDER BY rm.field_key
+    `, dirPath)
 	if err != nil {
-		return err
+		log.Printf("[RaceDB] mediainfo query failed for %s: %v", dirPath, err)
+		return nil
 	}
-	defer mediaRows.Close()
+	defer rows.Close()
 
-	mediaByPath := make(map[string]map[string]string)
-	for mediaRows.Next() {
-		var dirPath, key, value string
-		if err := mediaRows.Scan(&dirPath, &key, &value); err != nil {
-			return err
+	out := map[string]string{}
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			log.Printf("[RaceDB] mediainfo row scan failed for %s: %v", dirPath, err)
+			return nil
 		}
-		if mediaByPath[dirPath] == nil {
-			mediaByPath[dirPath] = make(map[string]string)
-		}
-		mediaByPath[dirPath][key] = value
-	}
-	if err := mediaRows.Err(); err != nil {
-		return err
-	}
-	for dirPath, fields := range mediaByPath {
-		if len(fields) > 0 {
-			vfs.SetMediaInfo(dirPath, fields)
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key != "" && value != "" {
+			out[key] = value
 		}
 	}
-	return nil
+	if err := rows.Err(); err != nil {
+		log.Printf("[RaceDB] mediainfo row iteration failed for %s: %v", dirPath, err)
+		return nil
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRaceGroup, int64, int, int) {
