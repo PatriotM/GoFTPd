@@ -537,6 +537,72 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		}
 		s.CurrentDir = targetPath
 
+		if s.Config.Mode == "master" && s.MasterManager != nil {
+			if bridge, ok := s.MasterManager.(MasterBridge); ok {
+				emitCWDZipDIZInfo(s, bridge, s.CurrentDir)
+				emitCWDAudioInfo(s, bridge, s.CurrentDir)
+				if s.Config.ShowDiz != nil {
+					for fileName, permission := range s.Config.ShowDiz {
+						if fileName == ".message" {
+							continue
+						}
+						if zipscript.ShowZipDIZOnCWDForDir(s.Config.Zipscript, s.CurrentDir) && strings.EqualFold(strings.TrimSpace(fileName), "file_id.diz") {
+							continue
+						}
+						if permission == "*" || s.User.HasFlag(permission) {
+							filePath := path.Join(s.CurrentDir, fileName)
+							if content, err := bridge.ReadFile(filePath); err == nil && len(content) > 0 {
+								text := strings.ReplaceAll(string(content), "\r\n", "\n")
+								for _, line := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
+									fmt.Fprintf(s.Conn, "250-%s\r\n", line)
+								}
+							}
+						}
+					}
+				}
+
+				if raceStatusEligibleDir(s.CurrentDir) && zipscript.RaceStatsOnCWDForDir(s.Config.Zipscript, s.CurrentDir) {
+					users, groups, totalBytes, present, total := bridge.GetVFSRaceStats(s.CurrentDir)
+					users = trimRaceUsers(s.Config, users)
+					groups = trimRaceGroups(s.Config, groups)
+
+					if s.Config.Debug {
+						log.Printf("[RACESTATS] dir=%s users=%d groups=%d totalBytes=%d present=%d total=%d",
+							s.CurrentDir, len(users), len(groups), totalBytes, present, total)
+					}
+
+					if HasRaceStats(users, groups, totalBytes, present, total) {
+						var builder strings.Builder
+						RenderRaceStats(
+							&builder,
+							users,
+							groups,
+							totalBytes,
+							present,
+							total,
+							s.Config.Version,
+						)
+
+						for _, line := range strings.Split(strings.TrimRight(builder.String(), "\r\n"), "\n") {
+							fmt.Fprintf(s.Conn, "250-%s\r\n", line)
+						}
+					} else if s.Config.ShowCWDBanner {
+						var builder strings.Builder
+						RenderRaceHeader(&builder, s.Config.Version)
+						for _, line := range strings.Split(strings.TrimRight(builder.String(), "\r\n"), "\n") {
+							fmt.Fprintf(s.Conn, "250-%s\r\n", line)
+						}
+					}
+				} else if s.Config.ShowCWDBanner {
+					var builder strings.Builder
+					RenderRaceHeader(&builder, s.Config.Version)
+					for _, line := range strings.Split(strings.TrimRight(builder.String(), "\r\n"), "\n") {
+						fmt.Fprintf(s.Conn, "250-%s\r\n", line)
+					}
+				}
+			}
+		}
+
 		s.showGlobalStats("250", false)
 		fmt.Fprintf(s.Conn, "250 Directory changed to %s\r\n", s.CurrentDir)
 
