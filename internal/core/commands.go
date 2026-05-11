@@ -2648,44 +2648,20 @@ func incompleteMarkerEntriesWithOptions(bridge MasterBridge, cfg *Config, patter
 		if zipscript.IsIgnoredReleaseSubdir(cfg.Zipscript, releasePath) {
 			continue
 		}
-		usesZip := zipscript.UsesZip(cfg.Zipscript, releasePath)
 		present, total := 0, 0
 		progress, hasProgress := bulkProgress[releasePath]
 		facts, hasFacts := childFacts[releasePath]
-		var releaseEntries []MasterFileEntry
-		needReleaseEntries := allowExpensiveFallback && (usesZip || (!hasFacts && (nfoPattern != "" || (noSFVPattern != "" && !hasProgress) || (markEmptyDirs && !hasProgress))))
-		if needReleaseEntries {
-			releaseEntries = bridge.ListDir(releasePath)
-		}
-		if usesZip {
-			if !allowExpensiveFallback {
-				continue
-			}
-			expected := zipExpectedPartsFromDIZ(bridge, releasePath)
-			_, _, present = zipDirRaceStats(bridge, releasePath, releaseEntries, expected)
-			if expected > 0 {
-				total = expected
-			}
-		} else if hasProgress {
+		if hasProgress {
 			present, total = progress.Present, progress.Total
 		} else {
-			if !allowExpensiveFallback {
-				continue
-			}
-			_, _, _, present, total = bridge.GetVFSRaceStats(releasePath)
+			continue
 		}
 
 		hasSFV := hasProgress && progress.HasSFV
-		if noSFVPattern != "" && !usesZip {
-			if !hasProgress {
-				if hasFacts {
-					hasSFV = facts.HasSFV
-				} else {
-					hasSFV = hasSFVEntry(releaseEntries)
-				}
-			}
+		if !hasSFV && hasFacts {
+			hasSFV = facts.HasSFV
 		}
-		if noSFVPattern != "" && !usesZip && !hasSFV {
+		if noSFVPattern != "" && !hasSFV {
 			marker := incompleteMarkerName(noSFVPattern, e.Name)
 			if marker != "" && !existing[marker] {
 				out = append(out, MasterFileEntry{
@@ -2702,8 +2678,6 @@ func incompleteMarkerEntriesWithOptions(bridge MasterBridge, cfg *Config, patter
 		hasNFO := false
 		if hasFacts {
 			hasNFO = facts.HasNFO
-		} else if nfoPattern != "" && allowExpensiveFallback {
-			hasNFO = hasNFOEntry(releaseEntries)
 		}
 		if nfoPattern != "" && !hasNFO {
 			marker := incompleteMarkerName(nfoPattern, e.Name)
@@ -2725,17 +2699,6 @@ func incompleteMarkerEntriesWithOptions(bridge MasterBridge, cfg *Config, patter
 			if markEmptyDirs {
 				if hasFacts {
 					emptyDir = facts.VisibleCount == 0
-				} else if allowExpensiveFallback {
-					if len(releaseEntries) == 0 {
-						releaseEntries = bridge.ListDir(releasePath)
-					}
-					visible := 0
-					for _, child := range releaseEntries {
-						if !strings.HasPrefix(child.Name, ".") {
-							visible++
-						}
-					}
-					emptyDir = visible == 0
 				} else {
 					continue
 				}
@@ -2759,14 +2722,7 @@ func incompleteMarkerEntriesWithOptions(bridge MasterBridge, cfg *Config, patter
 			}
 		}
 		if cdPattern != "" && isDiscDirName(e.Name) {
-			childPresent, childTotal := present, total
-			if usesZip || !hasProgress {
-				if !allowExpensiveFallback {
-					continue
-				}
-				_, _, _, childPresent, childTotal = bridge.GetVFSRaceStats(releasePath)
-			}
-			if childTotal > 0 && childPresent < childTotal {
+			if total > 0 && present < total {
 				marker := incompleteMarkerName2(cdPattern, path.Base(dirPath), e.Name)
 				if marker != "" && !existing[marker] {
 					out = append(out, MasterFileEntry{
@@ -2912,6 +2868,39 @@ func currentRaceSpeedMB(dirPath string, totalBytes int64, bridge MasterBridge) f
 		return 0
 	}
 	return (float64(totalBytes) / 1024.0 / 1024.0) / (float64(ms) / 1000.0)
+}
+
+func maxUserRaceDurationMs(users []VFSRaceUser) int64 {
+	var maxMs int64
+	for _, u := range users {
+		if u.DurationMs > maxMs {
+			maxMs = u.DurationMs
+		}
+	}
+	return maxMs
+}
+
+func raceSpeedMBForDuration(totalBytes int64, durationMs int64) float64 {
+	if totalBytes <= 0 || durationMs <= 0 {
+		return 0
+	}
+	return (float64(totalBytes) / 1024.0 / 1024.0) / (float64(durationMs) / 1000.0)
+}
+
+func estimateRaceTimeLeftWithSpeed(totalBytes int64, present, total int, speedMB float64) string {
+	if totalBytes <= 0 || present <= 0 || total <= present {
+		return "0s"
+	}
+	if speedMB <= 0 {
+		return "N/A"
+	}
+	avgBytesPerFile := float64(totalBytes) / float64(present)
+	bytesLeft := avgBytesPerFile * float64(total-present)
+	seconds := int((bytesLeft / 1024.0 / 1024.0) / speedMB)
+	if seconds < 1 {
+		seconds = 1
+	}
+	return fmt.Sprintf("%ds", seconds)
 }
 
 func estimateRaceTimeLeft(dirPath string, totalBytes int64, present, total int, bridge MasterBridge) string {
@@ -4678,13 +4667,21 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 		}
 		raceDurationMs = bridge.GetRaceWallClockMilliseconds(dirPath)
 		if total > 0 {
+			displayDurationMs := raceDurationMs
+			if userDurationMs := maxUserRaceDurationMs(users); userDurationMs > displayDurationMs {
+				displayDurationMs = userDurationMs
+			}
+			avgSpeedMB := raceSpeedMBForDuration(totalBytes, displayDurationMs)
+			if avgSpeedMB <= 0 {
+				avgSpeedMB = currentRaceSpeedMB(dirPath, totalBytes, bridge)
+			}
 			data["relname"] = path.Base(dirPath)
 			data["t_files"] = fmt.Sprintf("%d", total)
 			data["t_present"] = fmt.Sprintf("%d", present)
 			data["t_filesleft"] = fmt.Sprintf("%d", maxInt(0, total-present))
 			data["t_totalmb"] = fmt.Sprintf("%.1f", float64(totalBytes)/1024.0/1024.0)
-			data["t_avgspeed"] = fmt.Sprintf("%.2fMB/s", currentRaceSpeedMB(dirPath, totalBytes, bridge))
-			data["t_timeleft"] = estimateRaceTimeLeft(dirPath, totalBytes, present, total, bridge)
+			data["t_avgspeed"] = fmt.Sprintf("%.2fMB/s", avgSpeedMB)
+			data["t_timeleft"] = estimateRaceTimeLeftWithSpeed(totalBytes, present, total, avgSpeedMB)
 			estBytes := fileSize * int64(total)
 			data["t_mbytes"] = fmt.Sprintf("%.0fMB", float64(estBytes)/1024.0/1024.0)
 			if len(users) > 0 {

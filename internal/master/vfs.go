@@ -1433,7 +1433,6 @@ func (vfs *VirtualFileSystem) computeRaceStateFilteredLocked(dirPath string, exc
 		}
 		gs.Files++
 		gs.Bytes += f.Size
-		gs.Speed += float64(f.Size) / (float64(f.XferTime) / 1000.0)
 	}
 
 	cache.Users = make([]RaceUserStat, 0, len(userMap))
@@ -1461,15 +1460,9 @@ func (vfs *VirtualFileSystem) computeRaceStateFilteredLocked(dirPath string, exc
 		if cache.Total > 0 {
 			gs.Percent = (gs.Files * 100) / cache.Total
 		}
-		if gs.Bytes > 0 {
-			var durationMs int64
-			for _, us := range cache.Users {
-				if us.Group == gs.Name {
-					durationMs += us.DurationMs
-				}
-			}
-			if durationMs > 0 {
-				gs.Speed = float64(gs.Bytes) / (float64(durationMs) / 1000.0)
+		for _, us := range cache.Users {
+			if us.Group == gs.Name {
+				gs.Speed += us.Speed
 			}
 		}
 		cache.Groups = append(cache.Groups, *gs)

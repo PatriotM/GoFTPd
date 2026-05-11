@@ -1616,15 +1616,6 @@ func (b *Bridge) GetVFSRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFS
 	cleanDirPath := filepath.Clean(dirPath)
 	excludeKeys := b.liveUploadingRaceKeysForDir(cleanDirPath)
 	users, groups, totalBytes, present, total := b.sm.GetVFS().GetRaceStatsFiltered(dirPath, excludeKeys)
-	if b.shouldPreferLiveRaceStats(cleanDirPath, present, total) || b.raceDB == nil {
-		return convertRaceStats(users, groups, totalBytes, present, total)
-	}
-	if b.raceDB != nil {
-		dbUsers, dbGroups, dbTotalBytes, dbPresent, dbTotal := b.raceDB.GetRaceStats(cleanDirPath)
-		if dbTotal > 0 || dbPresent > 0 || dbTotalBytes > 0 || len(dbUsers) > 0 || len(dbGroups) > 0 || b.raceDB.HasRelease(cleanDirPath) {
-			return dbUsers, dbGroups, dbTotalBytes, dbPresent, dbTotal
-		}
-	}
 	return convertRaceStats(users, groups, totalBytes, present, total)
 }
 
@@ -1655,16 +1646,6 @@ func convertRaceStats(users []RaceUserStat, groups []RaceGroupStat, totalBytes i
 	}
 
 	return coreUsers, coreGroups, totalBytes, present, total
-}
-
-func (b *Bridge) shouldPreferLiveRaceStats(dirPath string, present int, total int) bool {
-	if b == nil || b.sm == nil {
-		return false
-	}
-	if b.sm.GetReleaseRaceWindowMilliseconds(filepath.Clean(dirPath)) > 0 {
-		return true
-	}
-	return total > 0 && present < total
 }
 
 func (b *Bridge) GetVFSRaceStatsFresh(dirPath string) ([]core.VFSRaceUser, []core.VFSRaceGroup, int64, int, int) {
@@ -1741,10 +1722,7 @@ func (b *Bridge) GetImmediateReleaseProgress(dirPath string) map[string]core.Rel
 		}
 		return out
 	}
-	if b.raceDB == nil {
-		return nil
-	}
-	return b.raceDB.GetImmediateReleaseProgress(cleanDirPath)
+	return nil
 }
 
 func (b *Bridge) GetImmediateReleaseChildFacts(dirPath string) map[string]core.ReleaseChildFacts {
@@ -1788,13 +1766,7 @@ func (b *Bridge) PluginGetVFSRaceStats(dirPath string) ([]plugin.RaceUser, []plu
 // start to last file end) in milliseconds. 0 if race db unavailable or dir
 // unknown.
 func (b *Bridge) GetRaceWallClockMilliseconds(dirPath string) int64 {
-	if ms := b.sm.GetReleaseRaceWindowMilliseconds(filepath.Clean(dirPath)); ms > 0 {
-		return ms
-	}
-	if b.raceDB == nil {
-		return 0
-	}
-	return b.raceDB.GetRaceWallClockMilliseconds(filepath.Clean(dirPath))
+	return b.sm.GetReleaseRaceWindowMilliseconds(filepath.Clean(dirPath))
 }
 
 func (b *Bridge) NoteRacePayloadTransfer(dirPath, fileName string, durationMs int64) {

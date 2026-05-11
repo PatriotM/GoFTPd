@@ -640,8 +640,11 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 			log.Printf("[RaceDB] group row scan failed for %s: %v", dirPath, err)
 			return nil, nil, 0, 0, 0
 		}
-		if durationMs > 0 {
-			g.Speed = float64(g.Bytes) / (float64(durationMs) / 1000.0)
+		_ = durationMs
+		for _, u := range users {
+			if u.Group == g.Name {
+				g.Speed += u.Speed
+			}
 		}
 		if total > 0 {
 			g.Percent = (g.Files * 100) / total
