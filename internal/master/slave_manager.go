@@ -867,13 +867,15 @@ func (sm *SlaveManager) ResetReleaseRaceWindow(dirPath string) {
 	delete(sm.releaseRaceWindows, cleanDirPath)
 }
 
-func (sm *SlaveManager) NoteRacePayloadTransfer(dirPath, fileName string, durationMs int64) {
+func (sm *SlaveManager) NoteRacePayloadTransferAt(dirPath string, durationMs int64, endMs int64) {
 	if sm == nil || durationMs <= 0 {
 		return
 	}
 	cleanDirPath := filepath.Clean(dirPath)
-	nowMs := time.Now().UnixMilli()
-	startMs := nowMs - durationMs
+	if endMs <= 0 {
+		endMs = time.Now().UnixMilli()
+	}
+	startMs := endMs - durationMs
 	if startMs < 1 {
 		startMs = 1
 	}
@@ -883,18 +885,22 @@ func (sm *SlaveManager) NoteRacePayloadTransfer(dirPath, fileName string, durati
 	if window == nil {
 		sm.releaseRaceWindows[cleanDirPath] = &releaseRaceWindow{
 			StartMs:     startMs,
-			EndMs:       nowMs,
-			UpdatedAtMs: nowMs,
+			EndMs:       endMs,
+			UpdatedAtMs: endMs,
 		}
 		return
 	}
 	if window.StartMs <= 0 || startMs < window.StartMs {
 		window.StartMs = startMs
 	}
-	if nowMs > window.EndMs {
-		window.EndMs = nowMs
+	if endMs > window.EndMs {
+		window.EndMs = endMs
 	}
-	window.UpdatedAtMs = nowMs
+	window.UpdatedAtMs = endMs
+}
+
+func (sm *SlaveManager) NoteRacePayloadTransfer(dirPath, fileName string, durationMs int64) {
+	sm.NoteRacePayloadTransferAt(dirPath, durationMs, 0)
 }
 
 func (sm *SlaveManager) GetReleaseRaceWindowMilliseconds(dirPath string) int64 {
