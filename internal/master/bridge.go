@@ -1686,43 +1686,7 @@ func (b *Bridge) GetImmediateReleaseProgress(dirPath string) map[string]core.Rel
 		return nil
 	}
 	cleanDirPath := filepath.Clean(dirPath)
-	if out := b.sm.GetImmediateReleaseProgress(cleanDirPath); len(out) > 0 {
-		uploadsByDir := b.liveUploadingRaceKeysByDir(cleanDirPath, false)
-		for childPath, excludeKeys := range uploadsByDir {
-			stat, ok := out[childPath]
-			if !ok {
-				continue
-			}
-			meta := b.sm.GetVFS().GetSFVData(childPath)
-			if meta == nil || len(meta.SFVEntries) == 0 {
-				continue
-			}
-			stat.Present = len(b.sm.GetVFS().GetVerifiedSFVPresentFilesFiltered(childPath, excludeKeys))
-			stat.Total = len(meta.SFVEntries)
-			stat.HasSFV = true
-			out[childPath] = stat
-		}
-		return out
-	}
-	if out := b.sm.GetVFS().GetImmediateChildDirProgress(cleanDirPath); len(out) > 0 {
-		uploadsByDir := b.liveUploadingRaceKeysByDir(cleanDirPath, false)
-		for childPath, excludeKeys := range uploadsByDir {
-			stat, ok := out[childPath]
-			if !ok {
-				continue
-			}
-			meta := b.sm.GetVFS().GetSFVData(childPath)
-			if meta == nil || len(meta.SFVEntries) == 0 {
-				continue
-			}
-			stat.Present = len(b.sm.GetVFS().GetVerifiedSFVPresentFilesFiltered(childPath, excludeKeys))
-			stat.Total = len(meta.SFVEntries)
-			stat.HasSFV = stat.Total > 0
-			out[childPath] = stat
-		}
-		return out
-	}
-	return nil
+	return b.sm.GetVFS().GetImmediateChildDirProgress(cleanDirPath)
 }
 
 func (b *Bridge) GetImmediateReleaseChildFacts(dirPath string) map[string]core.ReleaseChildFacts {
