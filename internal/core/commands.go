@@ -3255,6 +3255,10 @@ func computeReleaseRaceSnapshot(s *Session, bridge MasterBridge, in releaseUploa
 		return nil, nil, 0, 0, 0, false
 	}
 
+	if isTrackedRacePayload(bridge, s.Config, in.UploadDir, in.FileName) {
+		bridge.NoteRacePayloadTransfer(in.UploadDir, in.FileName, in.XferMs)
+	}
+
 	trackedFile := in.FileName
 	if strings.HasSuffix(strings.ToLower(in.FileName), ".sfv") {
 		trackedFile = firstTrackedRaceFileName(bridge, in.UploadDir)
@@ -4615,13 +4619,7 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 	}
 
 	sfvEntries := bridge.GetSFVData(dirPath)
-	isTrackedPayload := zipscript.IsRacePayloadFileForDir(cfg.Zipscript, dirPath, fileName)
-	if sfvEntries != nil {
-		_, isTrackedPayload = sfvEntries[strings.ToLower(strings.TrimSpace(path.Base(strings.ReplaceAll(fileName, "\\", "/"))))]
-		if !isTrackedPayload {
-			isTrackedPayload = zipscript.IsRacePayloadFileForDir(cfg.Zipscript, dirPath, fileName)
-		}
-	}
+	isTrackedPayload := isTrackedRacePayload(bridge, cfg, dirPath, fileName)
 	if !isTrackedPayload {
 		return nil, nil, 0, 0, 0, false
 	}
@@ -4699,6 +4697,21 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 		}
 	}
 	return nil, nil, 0, 0, 0, false
+}
+
+func isTrackedRacePayload(bridge MasterBridge, cfg *Config, dirPath, fileName string) bool {
+	if bridge == nil || cfg == nil {
+		return false
+	}
+	sfvEntries := bridge.GetSFVData(dirPath)
+	isTrackedPayload := zipscript.IsRacePayloadFileForDir(cfg.Zipscript, dirPath, fileName)
+	if sfvEntries != nil {
+		_, isTrackedPayload = sfvEntries[strings.ToLower(strings.TrimSpace(path.Base(strings.ReplaceAll(fileName, "\\", "/"))))]
+		if !isTrackedPayload {
+			isTrackedPayload = zipscript.IsRacePayloadFileForDir(cfg.Zipscript, dirPath, fileName)
+		}
+	}
+	return isTrackedPayload
 }
 
 func firstTrackedRaceFileName(bridge MasterBridge, dirPath string) string {

@@ -66,10 +66,6 @@ type vfsReleaseSnapshot struct {
 	Total        int
 }
 
-type vfsReleaseSnapshotFile struct {
-	Releases map[string]*vfsReleaseSnapshot
-}
-
 // VirtualFileSystem maintains the master's view of files across all slaves.
 //
 //	/ VirtualFileSystemDirectory.
@@ -183,8 +179,6 @@ func (vfs *VirtualFileSystem) AddFile(path string, file VFSFile) {
 		vfs.ensureChildrenBucketLocked(path)
 	}
 	vfs.touchAncestorsLocked(path, file.LastModified)
-	vfs.invalidateRaceDirLocked(filepath.Dir(path))
-	vfs.invalidateReleaseFactsForPathLocked(path, file.IsDir)
 	vfs.markPersistDirtyLocked()
 }
 
@@ -200,8 +194,6 @@ func (vfs *VirtualFileSystem) UpdateFileVerification(path string, checksum uint3
 		return false
 	}
 	file.Checksum = checksum
-	vfs.invalidateRaceDirLocked(filepath.Dir(path))
-	vfs.invalidateReleaseFactsDirLocked(filepath.Dir(path))
 	vfs.markPersistDirtyLocked()
 	return true
 }
@@ -259,8 +251,6 @@ func (vfs *VirtualFileSystem) AddSymlink(linkPath, targetPath string) {
 	vfs.linkChildLocked(cleanVFSPath(filepath.Dir(linkPath)), linkPath)
 	vfs.ensureChildrenBucketLocked(linkPath)
 	vfs.touchAncestorsLocked(linkPath, time.Now().Unix())
-	vfs.invalidateRaceDirLocked(filepath.Dir(linkPath))
-	vfs.invalidateReleaseFactsForPathLocked(linkPath, true)
 	vfs.markPersistDirtyLocked()
 }
 
@@ -272,7 +262,6 @@ func (vfs *VirtualFileSystem) Chmod(path string, mode uint32) {
 	if f := vfs.files[path]; f != nil {
 		f.Mode = mode
 		f.LastModified = time.Now().Unix()
-		vfs.invalidateReleaseFactsForPathLocked(path, f.IsDir)
 		vfs.markPersistDirtyLocked()
 	}
 }
@@ -309,8 +298,6 @@ func (vfs *VirtualFileSystem) PurgeUnseen(slaveName string) {
 		}
 	}
 	if changed {
-		vfs.invalidateAllRaceStatesLocked()
-		vfs.invalidateAllReleaseFactsLocked()
 		vfs.markPersistDirtyLocked()
 	}
 }
@@ -339,8 +326,6 @@ func (vfs *VirtualFileSystem) PurgeUnseenChildren(slaveName, dirPath string) {
 		changed = vfs.deletePathLocked(childPath) || changed
 	}
 	if changed {
-		vfs.invalidateRaceDirLocked(dirPath)
-		vfs.invalidateReleaseFactsDirLocked(dirPath)
 		vfs.markPersistDirtyLocked()
 	}
 }
@@ -382,8 +367,6 @@ func (vfs *VirtualFileSystem) SetProtectedDirs(paths []string) {
 		delete(vfs.files, p)
 	}
 	vfs.rebuildChildrenLocked()
-	vfs.rebuildAllRaceStatesLocked()
-	vfs.invalidateAllReleaseFactsLocked()
 	vfs.markPersistDirtyLocked()
 }
 
@@ -438,8 +421,6 @@ func (vfs *VirtualFileSystem) DeleteFile(path string) {
 	}
 	parent := cleanVFSPath(filepath.Dir(path))
 	vfs.touchAncestorsLocked(parent, time.Now().Unix())
-	vfs.invalidateRacePathLocked(path)
-	vfs.invalidateReleaseFactsForPathLocked(path, false)
 	vfs.markPersistDirtyLocked()
 }
 
@@ -671,7 +652,7 @@ func (vfs *VirtualFileSystem) computeReleaseSnapshotLocked(dirPath string) *vfsR
 			snapshot.HasNFO = true
 		}
 	}
-	cache := vfs.computeRaceStateLocked(dirPath)
+	cache := vfs.computeRaceStateFilteredLocked(dirPath, nil)
 	if cache != nil {
 		snapshot.Present = cache.Present
 		snapshot.Total = cache.Total
@@ -790,8 +771,6 @@ func (vfs *VirtualFileSystem) RenameFile(from, to string) {
 	now := time.Now().Unix()
 	vfs.touchAncestorsLocked(fromParent, now)
 	vfs.touchAncestorsLocked(toParent, now)
-	vfs.invalidateAllRaceStatesLocked()
-	vfs.invalidateAllReleaseFactsLocked()
 	vfs.markPersistDirtyLocked()
 }
 
@@ -847,8 +826,6 @@ func (vfs *VirtualFileSystem) RelocateFile(from, to, newSlaveName string) {
 	now := time.Now().Unix()
 	vfs.touchAncestorsLocked(fromParent, now)
 	vfs.touchAncestorsLocked(toParent, now)
-	vfs.invalidateAllRaceStatesLocked()
-	vfs.invalidateAllReleaseFactsLocked()
 	vfs.markPersistDirtyLocked()
 }
 
@@ -871,7 +848,6 @@ func (vfs *VirtualFileSystem) ClearSlave(slaveName string) {
 			}
 		}
 		vfs.rebuildChildrenLocked()
-		vfs.invalidateAllRaceStatesLocked()
 		vfs.markPersistDirtyLocked()
 	}
 }
@@ -1091,8 +1067,6 @@ func (vfs *VirtualFileSystem) LoadFromDisk(filePath string) error {
 	vfs.pruneExcludedPathsLocked()
 	vfs.pruneHiddenPathsLocked()
 	vfs.rebuildChildrenLocked()
-	vfs.invalidateAllRaceStatesLocked()
-	vfs.invalidateAllReleaseFactsLocked()
 	vfs.persistVersion = 0
 	vfs.savedVersion = 0
 
@@ -1143,8 +1117,6 @@ func (vfs *VirtualFileSystem) pruneExcludedPathsLocked() {
 	}
 	if changed {
 		vfs.rebuildChildrenLocked()
-		vfs.invalidateAllRaceStatesLocked()
-		vfs.invalidateAllReleaseFactsLocked()
 		vfs.markPersistDirtyLocked()
 	}
 }
@@ -1160,7 +1132,6 @@ func (vfs *VirtualFileSystem) pruneHiddenPathsLocked() {
 	}
 	if changed {
 		vfs.rebuildChildrenLocked()
-		vfs.invalidateAllRaceStatesLocked()
 		vfs.markPersistDirtyLocked()
 	}
 }
@@ -1195,8 +1166,6 @@ func (vfs *VirtualFileSystem) SetSFVData(dirPath string, sfvName string, entries
 	}
 	meta.SFVEntries = normalized
 	meta.SFVName = sfvName
-	vfs.invalidateRaceDirLocked(dirPath)
-	vfs.invalidateReleaseFactsDirLocked(dirPath)
 	vfs.markPersistDirtyLocked()
 }
 
@@ -1391,25 +1360,6 @@ func (vfs *VirtualFileSystem) rebuildChildrenLocked() {
 	vfs.children = children
 }
 
-func (vfs *VirtualFileSystem) rebuildAllRaceStatesLocked() {
-	// Race stats are computed directly from VFS state now; no runtime cache
-	// lives in the VFS layer anymore.
-}
-
-func (vfs *VirtualFileSystem) refreshRaceStateForPathLocked(path string) {
-	// Race stats are computed directly from VFS state now; no runtime cache
-	// lives in the VFS layer anymore.
-}
-
-func (vfs *VirtualFileSystem) refreshRaceStateLocked(dirPath string) {
-	// Race stats are computed directly from VFS state now; no runtime cache
-	// lives in the VFS layer anymore.
-}
-
-func (vfs *VirtualFileSystem) computeRaceStateLocked(dirPath string) *VFSRaceCache {
-	return vfs.computeRaceStateFilteredLocked(dirPath, nil)
-}
-
 func (vfs *VirtualFileSystem) computeRaceStateFilteredLocked(dirPath string, excludeKeys map[string]bool) *VFSRaceCache {
 	dirPath = cleanVFSPath(dirPath)
 	meta := vfs.dirMeta[dirPath]
@@ -1535,39 +1485,6 @@ func (vfs *VirtualFileSystem) computeRaceStateFilteredLocked(dirPath string, exc
 	})
 
 	return cache
-}
-
-func (vfs *VirtualFileSystem) invalidateRacePathLocked(path string) {
-	// Race stats are computed directly from VFS state now; no runtime cache
-	// lives in the VFS layer anymore.
-}
-
-func (vfs *VirtualFileSystem) invalidateRaceDirLocked(dirPath string) {
-	// Race stats are computed directly from VFS state now; no runtime cache
-	// lives in the VFS layer anymore.
-}
-
-func (vfs *VirtualFileSystem) invalidateAllRaceStatesLocked() {
-	// Race stats are computed directly from VFS state now; no runtime cache
-	// lives in the VFS layer anymore.
-}
-
-func (vfs *VirtualFileSystem) invalidateReleaseFactsForPathLocked(path string, isDir bool) {
-	path = cleanVFSPath(path)
-	vfs.invalidateReleaseFactsDirLocked(filepath.Dir(path))
-	if isDir {
-		vfs.invalidateReleaseFactsDirLocked(path)
-	}
-}
-
-func (vfs *VirtualFileSystem) invalidateReleaseFactsDirLocked(dirPath string) {
-	// Release listing facts are computed directly from VFS state now; persisted
-	// snapshots are owned by SlaveManager instead of the VFS.
-}
-
-func (vfs *VirtualFileSystem) invalidateAllReleaseFactsLocked() {
-	// Release listing facts are computed directly from VFS state now; persisted
-	// snapshots are owned by SlaveManager instead of the VFS.
 }
 
 func (vfs *VirtualFileSystem) markPersistDirtyLocked() {

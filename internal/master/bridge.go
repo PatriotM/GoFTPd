@@ -1586,6 +1586,7 @@ func (b *Bridge) CacheSFV(dirPath string, sfvName string, entries []core.SFVEntr
 	for _, e := range entries {
 		sfvMap[e.FileName] = e.CRC32
 	}
+	b.sm.ResetReleaseRaceWindow(filepath.Clean(dirPath))
 	b.sm.GetVFS().SetSFVData(dirPath, sfvName, sfvMap)
 	if b.raceDB != nil {
 		if err := b.raceDB.SaveSFV(filepath.Clean(dirPath), sfvName, sfvMap); err != nil {
@@ -1771,10 +1772,17 @@ func (b *Bridge) PluginGetVFSRaceStats(dirPath string) ([]plugin.RaceUser, []plu
 // start to last file end) in milliseconds. 0 if race db unavailable or dir
 // unknown.
 func (b *Bridge) GetRaceWallClockMilliseconds(dirPath string) int64 {
+	if ms := b.sm.GetReleaseRaceWindowMilliseconds(filepath.Clean(dirPath)); ms > 0 {
+		return ms
+	}
 	if b.raceDB == nil {
 		return 0
 	}
 	return b.raceDB.GetRaceWallClockMilliseconds(filepath.Clean(dirPath))
+}
+
+func (b *Bridge) NoteRacePayloadTransfer(dirPath, fileName string, durationMs int64) {
+	b.sm.NoteRacePayloadTransfer(filepath.Clean(dirPath), fileName, durationMs)
 }
 
 // GetSFVData returns cached SFV entries for a directory.

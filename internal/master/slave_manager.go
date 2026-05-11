@@ -31,6 +31,12 @@ type releaseSnapshotFile struct {
 	Releases map[string]*vfsReleaseSnapshot
 }
 
+type releaseRaceWindow struct {
+	StartMs     int64
+	EndMs       int64
+	UpdatedAtMs int64
+}
+
 type SlaveManager struct {
 	listenHost       string
 	listenPort       int
@@ -68,6 +74,7 @@ type SlaveManager struct {
 	releaseAnnouncements map[string]map[string]bool
 	releaseFacts         map[string]*vfsReleaseSnapshot
 	releaseFactsByParent map[string]map[string]*vfsReleaseSnapshot
+	releaseRaceWindows   map[string]*releaseRaceWindow
 
 	remergeMode atomic.Value
 
@@ -131,6 +138,7 @@ func NewSlaveManager(host string, port int, tlsEnabled bool, tlsCert, tlsKey str
 		releaseAnnouncements: make(map[string]map[string]bool),
 		releaseFacts:         make(map[string]*vfsReleaseSnapshot),
 		releaseFactsByParent: make(map[string]map[string]*vfsReleaseSnapshot),
+		releaseRaceWindows:   make(map[string]*releaseRaceWindow),
 		authState:            make(map[string]*slaveAuthState),
 		remergeCRCSem:        make(chan struct{}, 16),
 	}
@@ -849,6 +857,63 @@ func (sm *SlaveManager) SetReleaseMediaInfo(dirPath string, fields map[string]st
 	sm.releaseMedia[cleanDirPath] = cloneSlaveStringMap(fields)
 }
 
+func (sm *SlaveManager) ResetReleaseRaceWindow(dirPath string) {
+	if sm == nil {
+		return
+	}
+	cleanDirPath := filepath.Clean(dirPath)
+	sm.releaseStateMu.Lock()
+	defer sm.releaseStateMu.Unlock()
+	delete(sm.releaseRaceWindows, cleanDirPath)
+}
+
+func (sm *SlaveManager) NoteRacePayloadTransfer(dirPath, fileName string, durationMs int64) {
+	if sm == nil || durationMs <= 0 {
+		return
+	}
+	cleanDirPath := filepath.Clean(dirPath)
+	nowMs := time.Now().UnixMilli()
+	startMs := nowMs - durationMs
+	if startMs < 1 {
+		startMs = 1
+	}
+	sm.releaseStateMu.Lock()
+	defer sm.releaseStateMu.Unlock()
+	window := sm.releaseRaceWindows[cleanDirPath]
+	if window == nil {
+		sm.releaseRaceWindows[cleanDirPath] = &releaseRaceWindow{
+			StartMs:     startMs,
+			EndMs:       nowMs,
+			UpdatedAtMs: nowMs,
+		}
+		return
+	}
+	if window.StartMs <= 0 || startMs < window.StartMs {
+		window.StartMs = startMs
+	}
+	if nowMs > window.EndMs {
+		window.EndMs = nowMs
+	}
+	window.UpdatedAtMs = nowMs
+}
+
+func (sm *SlaveManager) GetReleaseRaceWindowMilliseconds(dirPath string) int64 {
+	if sm == nil {
+		return 0
+	}
+	cleanDirPath := filepath.Clean(dirPath)
+	sm.releaseStateMu.RLock()
+	window := sm.releaseRaceWindows[cleanDirPath]
+	sm.releaseStateMu.RUnlock()
+	if window == nil {
+		return 0
+	}
+	if window.EndMs <= window.StartMs || window.StartMs <= 0 {
+		return 0
+	}
+	return window.EndMs - window.StartMs
+}
+
 func (sm *SlaveManager) GetReleaseMediaInfo(dirPath string) map[string]string {
 	if sm == nil {
 		return nil
@@ -892,6 +957,8 @@ func (sm *SlaveManager) InvalidateReleaseStateForPath(filePath string, isDir boo
 	delete(sm.releaseMedia, parent)
 	delete(sm.releaseAnnouncements, cleanPath)
 	delete(sm.releaseAnnouncements, parent)
+	delete(sm.releaseRaceWindows, cleanPath)
+	delete(sm.releaseRaceWindows, parent)
 	sm.setReleaseFactLocked(cleanPath, nil)
 	sm.setReleaseFactLocked(parent, nil)
 	if isDir {
@@ -909,6 +976,11 @@ func (sm *SlaveManager) InvalidateReleaseStateForPath(filePath string, isDir boo
 		for key := range sm.releaseFacts {
 			if key == cleanPath || strings.HasPrefix(filepath.ToSlash(key), prefix) {
 				sm.setReleaseFactLocked(key, nil)
+			}
+		}
+		for key := range sm.releaseRaceWindows {
+			if key == cleanPath || strings.HasPrefix(filepath.ToSlash(key), prefix) {
+				delete(sm.releaseRaceWindows, key)
 			}
 		}
 	}
@@ -938,6 +1010,11 @@ func (sm *SlaveManager) RenameReleaseState(from, to string, isDir bool) {
 		sm.setReleaseFactLocked(to, snapshot)
 		sm.setReleaseFactLocked(from, nil)
 	}
+	if window, ok := sm.releaseRaceWindows[from]; ok {
+		copyWindow := *window
+		sm.releaseRaceWindows[to] = &copyWindow
+		delete(sm.releaseRaceWindows, from)
+	}
 	if !isDir {
 		return
 	}
@@ -965,6 +1042,14 @@ func (sm *SlaveManager) RenameReleaseState(from, to string, isDir bool) {
 			newKey := to + key[len(from):]
 			sm.setReleaseFactLocked(newKey, snapshot)
 			sm.setReleaseFactLocked(key, nil)
+		}
+	}
+	for key, window := range sm.releaseRaceWindows {
+		if strings.HasPrefix(filepath.ToSlash(key), fromPrefix) {
+			newKey := to + key[len(from):]
+			copyWindow := *window
+			sm.releaseRaceWindows[newKey] = &copyWindow
+			delete(sm.releaseRaceWindows, key)
 		}
 	}
 }

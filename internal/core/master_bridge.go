@@ -100,6 +100,11 @@ type MasterBridge interface {
 	// in parallel.
 	GetRaceWallClockMilliseconds(dirPath string) int64
 
+	// NoteRacePayloadTransfer records one tracked payload transfer into the
+	// current live race window for the release. This lets COMPLETE timing prefer
+	// the active run over historical DB timestamps.
+	NoteRacePayloadTransfer(dirPath, fileName string, durationMs int64)
+
 	// GetSFVData returns cached SFV entries for a directory (filename->CRC32 map).
 	// Returns nil if no SFV is cached for this directory.
 	GetSFVData(dirPath string) map[string]uint32
