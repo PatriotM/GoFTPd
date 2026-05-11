@@ -351,7 +351,7 @@ announce.MOVIEINFO = "%b%c01{MOVIE-INFO:}%b %c14{[}%section_colored%c14{]} %c%se
 
 announce.COMPLETE = "%b%c01{COMPLETE:}%b %c14{[}%section_colored%c14{]} %c%sec_c5{%subdir_prefix}%c%sec_c3{%relname} %c01{by} %b%c14{%u_count}%b %c01{racers -} %b%c14{%t_mbytes}%b%c01{/}%b%c14{%t_files}%b%c01{/}%b%c14{%t_avgspeed}%b%c01{/}%b%c14{%t_duration}%b"
 
-announce.STATS_HOF = "%c01{STATS:} ▂▃▅▇█▓▒░۩۞۩  %c%sec_c4{Users Hall Of Fame}  ۩۞۩░▒▓█▇▅▃▂"
+announce.STATS_HOF = "%b%c01{STATS:}%b ▂▃▅▇█▓▒░۩۞۩  %c%sec_c4{Users Hall Of Fame}  ۩۞۩░▒▓█▇▅▃▂"
 
 announce.STATS_SPEEDS = "%b%c01{STATS:}%b %c14{Slowest:} %c%sec_c4{%u_slowest_name} %c14{at} %b%c14{%u_slowest_speed}%b %c14{-} %c14{Fastest:} %c%sec_c4{%u_fastest_name} %c14{at} %b%c14{%u_fastest_speed}%b%c14{.}"
 
