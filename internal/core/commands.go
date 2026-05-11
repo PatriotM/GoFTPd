@@ -3214,7 +3214,11 @@ func computeReleaseRaceSnapshot(s *Session, bridge MasterBridge, in releaseUploa
 		return nil, nil, 0, 0, 0, false
 	}
 
-	if isTrackedRacePayload(bridge, s.Config, in.UploadDir, in.FileName) {
+	// pzs-ng/DrFTPD-style race wall-clock should start from the first real
+	// uploaded file in the release, not only from tracked payload parts after
+	// the SFV is known. Payload filtering still decides race completeness and
+	// per-user file totals below.
+	if strings.TrimSpace(in.FileName) != "" {
 		bridge.NoteRacePayloadTransferAt(in.UploadDir, in.FileName, in.XferMs, in.CompletedAtMs)
 	}
 
