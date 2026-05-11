@@ -20,7 +20,10 @@ import (
 // SlaveManager listens for slave connections and manages all RemoteSlave objects.
 //
 
-const vfsFilePath = "userdata/vfs.dat"
+const (
+	vfsFilePath             = "userdata/vfs.dat"
+	releaseSnapshotFilePath = "userdata/release_snapshot.dat"
+)
 
 type SlaveManager struct {
 	listenHost       string
@@ -336,6 +339,9 @@ func (sm *SlaveManager) getPolicy(name string) (SlaveRoutePolicy, bool) {
 func (sm *SlaveManager) Start() error {
 	// Load saved VFS from disk (if exists)
 	sm.vfs.LoadFromDisk(vfsFilePath)
+	if err := sm.vfs.LoadReleaseSnapshotFromDisk(releaseSnapshotFilePath); err != nil {
+		log.Printf("[VFS] release snapshot load failed: %v", err)
+	}
 	for _, slaveName := range sm.vfs.SlaveNames() {
 		sm.startupCachedSlaves.Store(slaveName, struct{}{})
 	}
@@ -830,6 +836,9 @@ func (sm *SlaveManager) initializeSlaveAfterConnect(rs *RemoteSlave) {
 			// Persist the VFS after remerge and purge complete.
 			if err := sm.vfs.SaveToDisk(vfsFilePath); err != nil {
 				log.Printf("[SlaveManager] Error saving VFS after remerge: %v", err)
+			}
+			if err := sm.vfs.SaveReleaseSnapshotToDisk(releaseSnapshotFilePath); err != nil {
+				log.Printf("[SlaveManager] Error saving release snapshot after remerge: %v", err)
 			}
 		}
 	}
@@ -1359,6 +1368,9 @@ func (sm *SlaveManager) Stop() {
 	if err := sm.vfs.SaveToDisk(vfsFilePath); err != nil {
 		log.Printf("[SlaveManager] Error saving VFS: %v", err)
 	}
+	if err := sm.vfs.SaveReleaseSnapshotToDisk(releaseSnapshotFilePath); err != nil {
+		log.Printf("[SlaveManager] Error saving release snapshot: %v", err)
+	}
 
 	if sm.listener != nil {
 		sm.listener.Close()
@@ -1385,6 +1397,9 @@ func (sm *SlaveManager) vfsPersistLoop() {
 		if sm.vfs.Count() > 0 {
 			if err := sm.vfs.SaveToDisk(vfsFilePath); err != nil {
 				log.Printf("[SlaveManager] Error saving VFS: %v", err)
+			}
+			if err := sm.vfs.SaveReleaseSnapshotToDisk(releaseSnapshotFilePath); err != nil {
+				log.Printf("[SlaveManager] Error saving release snapshot: %v", err)
 			}
 		}
 	}
