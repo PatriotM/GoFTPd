@@ -607,7 +607,12 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		fmt.Fprintf(s.Conn, "250 Directory changed to %s\r\n", s.CurrentDir)
 
 	case "CDUP":
-		s.CurrentDir = path.Clean(path.Join(s.CurrentDir, ".."))
+		targetPath := path.Clean(path.Join(s.CurrentDir, ".."))
+		if !s.canListPath(targetPath) {
+			fmt.Fprintf(s.Conn, "550 %s: no such file or directory\r\n", targetPath)
+			return false
+		}
+		s.CurrentDir = targetPath
 		fmt.Fprintf(s.Conn, "250 Directory changed to %s\r\n", s.CurrentDir)
 
 	case "MKD":
@@ -1010,6 +1015,10 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					name := path.Base(target)
 					for _, e := range bridge.ListDir(parent) {
 						if e.Name == name {
+							aclPath := path.Join(s.Config.ACLBasePath, parent, e.Name)
+							if !s.ACLEngine.CanPerform(s.User, "LIST", aclPath) {
+								break
+							}
 							ts := timeutil.FTPMachineUnix(e.ModTime)
 							var parts []string
 							if e.IsSymlink {
