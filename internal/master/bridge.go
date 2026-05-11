@@ -1609,10 +1609,7 @@ func (b *Bridge) ClaimReleaseMetadataAnnouncement(dirPath, key string) bool {
 func (b *Bridge) GetVFSRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRaceGroup, int64, int, int) {
 	cleanDirPath := filepath.Clean(dirPath)
 	excludeKeys := b.liveUploadingRaceKeysForDir(cleanDirPath)
-	if meta := b.sm.GetVFS().GetSFVData(cleanDirPath); meta != nil && len(meta.SFVEntries) > 0 {
-		// Prefer live VFS state for SFV-backed releases so remerge reflects what
-		// is actually on disk right now, not just what an older DB snapshot said.
-	} else if b.raceDB != nil {
+	if b.raceDB != nil {
 		users, groups, totalBytes, present, total := b.raceDB.GetRaceStats(cleanDirPath)
 		if total > 0 || present > 0 || totalBytes > 0 || len(users) > 0 || len(groups) > 0 || b.raceDB.HasRelease(cleanDirPath) {
 			return users, groups, totalBytes, present, total
