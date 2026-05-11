@@ -17,6 +17,15 @@ type RaceDB struct {
 	db *sql.DB
 }
 
+type ReleaseFileRecord struct {
+	FileName   string
+	Owner      string
+	Group      string
+	SizeBytes  int64
+	DurationMs int64
+	Checksum   uint32
+}
+
 func NewRaceDB(dbPath string) (*RaceDB, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
 		return nil, fmt.Errorf("create race db dir: %w", err)
@@ -233,6 +242,82 @@ func (r *RaceDB) RecordUpload(filePath, owner, group string, size int64, duratio
         WHERE release_files.is_present = 0
     `, releaseID, fileName, owner, group, size, durationMs, int64(checksum))
 	return err
+}
+
+func (r *RaceDB) ReplaceReleaseFiles(dirPath, sfvName string, entries map[string]uint32, files map[string]ReleaseFileRecord) error {
+	if r == nil || r.db == nil {
+		return nil
+	}
+	dirPath = filepath.Clean(dirPath)
+	if len(entries) == 0 {
+		return nil
+	}
+
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`
+        INSERT INTO releases(path, created_at, updated_at)
+        VALUES (?, strftime('%s','now'), strftime('%s','now'))
+        ON CONFLICT(path) DO UPDATE SET updated_at = strftime('%s','now')
+    `, dirPath); err != nil {
+		return err
+	}
+
+	var releaseID int64
+	if err := tx.QueryRow(`SELECT id FROM releases WHERE path = ?`, dirPath).Scan(&releaseID); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(`
+        UPDATE releases
+        SET sfv_name = ?, total_expected = ?, updated_at = strftime('%s','now')
+        WHERE id = ?
+    `, sfvName, len(entries), releaseID); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(`DELETE FROM release_files WHERE release_id = ?`, releaseID); err != nil {
+		return err
+	}
+
+	fileNames := make([]string, 0, len(entries))
+	for fileName := range entries {
+		fileNames = append(fileNames, fileName)
+	}
+	sort.Strings(fileNames)
+
+	for _, rawName := range fileNames {
+		fileName := raceDBFileKey(rawName)
+		if fileName == "" {
+			continue
+		}
+		expectedCRC := int64(entries[rawName])
+		record, ok := files[fileName]
+		if !ok {
+			if _, err := tx.Exec(`
+                INSERT INTO release_files(
+                    release_id, filename, expected_crc32, is_expected, is_present, updated_at
+                ) VALUES (?, ?, ?, 1, 0, strftime('%s','now'))
+            `, releaseID, fileName, expectedCRC); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := tx.Exec(`
+            INSERT INTO release_files(
+                release_id, filename, uploader, grp, size_bytes, duration_ms,
+                checksum, expected_crc32, is_expected, is_present, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1, strftime('%s','now'))
+        `, releaseID, fileName, record.Owner, record.Group, record.SizeBytes, record.DurationMs, int64(record.Checksum), expectedCRC); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
 }
 
 func (r *RaceDB) DeletePath(path string, isDir bool) error {

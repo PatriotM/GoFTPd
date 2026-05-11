@@ -445,12 +445,6 @@ func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group s
 		Checksum:     checksum,
 	})
 
-	if b.raceDB != nil {
-		if err := b.raceDB.RecordUpload(filePath, owner, group, finalSize, xferTime, checksum); err != nil {
-			log.Printf("[Bridge] Race DB upload sync failed for %s: %v", filePath, err)
-		}
-	}
-
 	return finalSize, checksum, nil
 }
 
@@ -1466,7 +1460,13 @@ func (b *Bridge) SyncPresentFile(filePath string, checksum uint32) error {
 	}
 	b.sm.GetVFS().UpdateFileVerification(filePath, checksum)
 	if b.raceDB != nil {
-		return b.raceDB.RecordUpload(filePath, f.Owner, f.Group, f.Size, f.XferTime, checksum)
+		dirPath := filepath.Dir(filePath)
+		meta := b.sm.GetVFS().GetSFVData(dirPath)
+		if meta != nil && len(meta.SFVEntries) > 0 {
+			if verified := b.sm.GetVFS().GetVerifiedSFVPresentFilesFiltered(dirPath, b.liveUploadingRaceKeysForDir(filepath.Clean(dirPath))); len(verified) == len(meta.SFVEntries) {
+				return b.SyncReleaseRaceStats(dirPath)
+			}
+		}
 	}
 	return nil
 }
@@ -1615,14 +1615,20 @@ func (b *Bridge) ClaimReleaseMetadataAnnouncement(dirPath, key string) bool {
 func (b *Bridge) GetVFSRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRaceGroup, int64, int, int) {
 	cleanDirPath := filepath.Clean(dirPath)
 	excludeKeys := b.liveUploadingRaceKeysForDir(cleanDirPath)
+	users, groups, totalBytes, present, total := b.sm.GetVFS().GetRaceStatsFiltered(dirPath, excludeKeys)
+	if b.shouldPreferLiveRaceStats(cleanDirPath, present, total) || b.raceDB == nil {
+		return convertRaceStats(users, groups, totalBytes, present, total)
+	}
 	if b.raceDB != nil {
-		users, groups, totalBytes, present, total := b.raceDB.GetRaceStats(cleanDirPath)
-		if total > 0 || present > 0 || totalBytes > 0 || len(users) > 0 || len(groups) > 0 || b.raceDB.HasRelease(cleanDirPath) {
-			return users, groups, totalBytes, present, total
+		dbUsers, dbGroups, dbTotalBytes, dbPresent, dbTotal := b.raceDB.GetRaceStats(cleanDirPath)
+		if dbTotal > 0 || dbPresent > 0 || dbTotalBytes > 0 || len(dbUsers) > 0 || len(dbGroups) > 0 || b.raceDB.HasRelease(cleanDirPath) {
+			return dbUsers, dbGroups, dbTotalBytes, dbPresent, dbTotal
 		}
 	}
-	users, groups, totalBytes, present, total := b.sm.GetVFS().GetRaceStatsFiltered(dirPath, excludeKeys)
+	return convertRaceStats(users, groups, totalBytes, present, total)
+}
 
+func convertRaceStats(users []RaceUserStat, groups []RaceGroupStat, totalBytes int64, present int, total int) ([]core.VFSRaceUser, []core.VFSRaceGroup, int64, int, int) {
 	coreUsers := make([]core.VFSRaceUser, len(users))
 	for i, u := range users {
 		coreUsers[i] = core.VFSRaceUser{
@@ -1649,6 +1655,16 @@ func (b *Bridge) GetVFSRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFS
 	}
 
 	return coreUsers, coreGroups, totalBytes, present, total
+}
+
+func (b *Bridge) shouldPreferLiveRaceStats(dirPath string, present int, total int) bool {
+	if b == nil || b.sm == nil {
+		return false
+	}
+	if b.sm.GetReleaseRaceWindowMilliseconds(filepath.Clean(dirPath)) > 0 {
+		return true
+	}
+	return total > 0 && present < total
 }
 
 func (b *Bridge) GetVFSRaceStatsFresh(dirPath string) ([]core.VFSRaceUser, []core.VFSRaceGroup, int64, int, int) {
@@ -1783,6 +1799,46 @@ func (b *Bridge) GetRaceWallClockMilliseconds(dirPath string) int64 {
 
 func (b *Bridge) NoteRacePayloadTransfer(dirPath, fileName string, durationMs int64) {
 	b.sm.NoteRacePayloadTransfer(filepath.Clean(dirPath), fileName, durationMs)
+}
+
+func (b *Bridge) SyncReleaseRaceStats(dirPath string) error {
+	if b == nil || b.raceDB == nil || b.sm == nil {
+		return nil
+	}
+	cleanDirPath := filepath.Clean(dirPath)
+	meta := b.sm.GetVFS().GetSFVData(cleanDirPath)
+	if meta == nil || len(meta.SFVEntries) == 0 {
+		return nil
+	}
+
+	verified := b.sm.GetVFS().GetVerifiedSFVPresentFilesFiltered(cleanDirPath, b.liveUploadingRaceKeysForDir(cleanDirPath))
+	if len(verified) == 0 {
+		return nil
+	}
+
+	files := make(map[string]ReleaseFileRecord, len(verified))
+	for _, entry := range b.ListDir(cleanDirPath) {
+		if entry.IsDir {
+			continue
+		}
+		key := raceDBFileKey(entry.Name)
+		if !verified[key] {
+			continue
+		}
+		f := b.sm.GetVFS().GetFile(path.Join(cleanDirPath, entry.Name))
+		if f == nil || f.IsDir {
+			continue
+		}
+		files[key] = ReleaseFileRecord{
+			FileName:   key,
+			Owner:      f.Owner,
+			Group:      f.Group,
+			SizeBytes:  f.Size,
+			DurationMs: f.XferTime,
+			Checksum:   f.Checksum,
+		}
+	}
+	return b.raceDB.ReplaceReleaseFiles(cleanDirPath, meta.SFVName, meta.SFVEntries, files)
 }
 
 // GetSFVData returns cached SFV entries for a directory.
@@ -1987,12 +2043,6 @@ func (b *Bridge) SlaveReceivePassthrough(filePath string, transferIdx int32, sla
 	log.Printf("[Passthrough] Upload %s on %s (%d bytes, %dms, CRC=%08X)",
 		filePath, slaveName, finalSize, status.Elapsed, finalChecksum)
 
-	if b.raceDB != nil {
-		if err := b.raceDB.RecordUpload(filePath, owner, group, finalSize, status.Elapsed, finalChecksum); err != nil {
-			log.Printf("[Passthrough] RaceDB record failed: %v", err)
-		}
-	}
-
 	return finalSize, finalChecksum, status.Elapsed, nil
 }
 
@@ -2117,12 +2167,6 @@ func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group strin
 
 	log.Printf("[Passthrough-PORT] Upload %s on %s (%d bytes, %dms, CRC=%08X)",
 		filePath, slave.Name(), finalSize, status.Elapsed, finalChecksum)
-
-	if b.raceDB != nil {
-		if err := b.raceDB.RecordUpload(filePath, owner, group, finalSize, status.Elapsed, finalChecksum); err != nil {
-			log.Printf("[Passthrough-PORT] RaceDB record failed: %v", err)
-		}
-	}
 
 	return finalSize, finalChecksum, status.Elapsed, nil
 }

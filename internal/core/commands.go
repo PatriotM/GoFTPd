@@ -3300,6 +3300,9 @@ func emitReleaseUploadEventAndRace(s *Session, bridge MasterBridge, in releaseUp
 		return
 	}
 	if state.SFVUpload || zipscript.CanTriggerRaceEndForDir(s.Config.Zipscript, in.UploadDir, state.SFVEntries, in.FileName) {
+		if err := bridge.SyncReleaseRaceStats(in.UploadDir); err != nil && s.Config.Debug {
+			log.Printf("[MASTER-ZS] release race sync failed for %s: %v", in.UploadDir, err)
+		}
 		emitOrPrimeReleaseAudioInfo(s, bridge, in.UploadDir)
 		emitRaceEndAfter(s, in.UploadDir, state.RaceUsers, state.RaceGroups, state.RaceTotalBytes, state.RaceTotalFiles, state.RaceDurationMs, in.XferMs, zipscript.MediaInfoGraceDelayForDir(s.Config.Zipscript, in.UploadDir, in.FileName))
 	}

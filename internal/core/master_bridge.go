@@ -79,6 +79,11 @@ type MasterBridge interface {
 	// SyncPresentFile refreshes RaceDB presence for an existing VFS file.
 	SyncPresentFile(filePath string, checksum uint32) error
 
+	// SyncReleaseRaceStats persists one completed SFV-tracked release into the
+	// cold race/search store in one batch. Live/incomplete races should stay on
+	// the in-memory/VFS hot path instead of writing per-file to the DB.
+	SyncReleaseRaceStats(dirPath string) error
+
 	// CacheSFV caches parsed SFV entries on a VFS directory for race tracking.
 	CacheSFV(dirPath string, sfvName string, entries []SFVEntryInfo)
 
