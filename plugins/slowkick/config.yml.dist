@@ -32,6 +32,11 @@ exclude_paths:
   - "/REQUESTS"
   - "/SPEEDTEST"
 
+# File extensions that should never trigger slowkick.
+# Use bare extensions without the leading dot.
+exclude_extensions:
+  - sfv
+
 # Announce the actual slow abort/kick event.
 announce_kick: true
 

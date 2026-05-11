@@ -148,6 +148,10 @@ type SlowTransferHandler interface {
 	HandleSlowTransfer(username, primaryGroup, transferPath, direction, slaveName string, transferIndex int32, actualSpeedBytes, minSpeedBytes int64)
 }
 
+type ConfigReloader interface {
+	ReloadConfig(config map[string]interface{}) error
+}
+
 type RaceUser struct {
 	Name    string
 	Group   string

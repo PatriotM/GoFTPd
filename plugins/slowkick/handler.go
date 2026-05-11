@@ -50,6 +50,14 @@ func (h *Handler) Name() string { return "slowkick" }
 
 func (h *Handler) Init(svc *plugin.Services, cfg map[string]interface{}) error {
 	h.svc = svc
+	return h.applyConfig(cfg, true)
+}
+
+func (h *Handler) ReloadConfig(cfg map[string]interface{}) error {
+	return h.applyConfig(cfg, false)
+}
+
+func (h *Handler) applyConfig(cfg map[string]interface{}, initial bool) error {
 	h.monitorUploads = boolConfig(cfg, "monitor_uploads", true)
 	h.monitorDownloads = boolConfig(cfg, "monitor_downloads", true)
 	h.minUploadSpeedBytes = float64(intConfig(cfg["min_upload_speed_kbps"], 25) * 1024)
@@ -66,9 +74,14 @@ func (h *Handler) Init(svc *plugin.Services, cfg map[string]interface{}) error {
 	h.announceKick = boolConfig(cfg, "announce_kick", true)
 	h.tempbanAfterKick = boolConfig(cfg, "tempban_after_kick", true)
 	h.tempbanDuration = durationSecondsConfig(cfg, "tempban_seconds", 15)
-	h.debug = boolConfig(cfg, "debug", svc != nil && svc.Debug)
+	h.debug = boolConfig(cfg, "debug", h.svc != nil && h.svc.Debug)
+	action := "reloaded"
+	if initial {
+		action = "initialized"
+	}
 	h.logf(
-		"initialized uploads=%v downloads=%v up_min=%.1fKB/s down_min=%.1fKB/s min_users=%d tempban=%v tempban_seconds=%d",
+		"%s uploads=%v downloads=%v up_min=%.1fKB/s down_min=%.1fKB/s min_users=%d tempban=%v tempban_seconds=%d",
+		action,
 		h.monitorUploads,
 		h.monitorDownloads,
 		h.minUploadSpeedBytes/1024.0,

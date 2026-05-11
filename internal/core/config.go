@@ -503,6 +503,12 @@ func (c *Config) Rehash() (string, error) {
 	// (tvmaze/imdb) snapshot their config at Init and don't re-read, but
 	// custom plugins can implement live reload by reading c.Plugins.
 	c.Plugins = fresh.Plugins
+	if c.PluginManager != nil {
+		c.PluginManager.SetConfig(c)
+		if err := c.PluginManager.ReloadConfigs(c.Plugins); err != nil {
+			return path, fmt.Errorf("plugin config reload failed: %w", err)
+		}
+	}
 
 	// Slaves policy
 	c.Slaves = fresh.Slaves

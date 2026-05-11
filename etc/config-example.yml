@@ -562,6 +562,10 @@ plugins:
     # Live transfer speed floors with optional tempban/announce. Enforcement
     # happens in the slave transfer loop, not via a coarse polling observer.
     config_file: "plugins/slowkick/config.yml"
+    # In plugins/slowkick/config.yml you can also exclude tiny metadata files:
+    #   exclude_extensions:
+    #     - sfv
+    #     - nfo
   spacekeeper:
     enabled: false
     # Free-space and archive policy plugin using virtual FTP paths.

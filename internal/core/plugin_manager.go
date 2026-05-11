@@ -231,6 +231,34 @@ func (pm *PluginManager) HandleSlowTransfer(username, primaryGroup, transferPath
 	}
 }
 
+func (pm *PluginManager) ReloadConfigs(pluginConfigs map[string]map[string]interface{}) error {
+	if pm == nil {
+		return nil
+	}
+
+	pm.mu.RLock()
+	plugins := make([]plugin.Plugin, len(pm.plugins))
+	copy(plugins, pm.plugins)
+	pm.mu.RUnlock()
+
+	for _, p := range plugins {
+		reloader, ok := p.(plugin.ConfigReloader)
+		if !ok {
+			continue
+		}
+		cfg := map[string]interface{}{}
+		if pluginConfigs != nil {
+			if loaded := pluginConfigs[p.Name()]; loaded != nil {
+				cfg = loaded
+			}
+		}
+		if err := reloader.ReloadConfig(cfg); err != nil {
+			return fmt.Errorf("%s: %w", p.Name(), err)
+		}
+	}
+	return nil
+}
+
 // StopAll calls Stop() on every registered plugin. Called at shutdown.
 func (pm *PluginManager) StopAll() error {
 	pm.mu.RLock()
