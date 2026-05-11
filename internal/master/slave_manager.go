@@ -962,7 +962,6 @@ func (sm *SlaveManager) InvalidateReleaseStateForPath(filePath string, isDir boo
 	delete(sm.releaseMedia, cleanPath)
 	delete(sm.releaseAnnouncements, cleanPath)
 	delete(sm.releaseRaceWindows, cleanPath)
-	delete(sm.releaseRaceWindows, parent)
 	sm.setReleaseFactLocked(cleanPath, nil)
 	sm.setReleaseFactLocked(parent, nil)
 	if isDir {
