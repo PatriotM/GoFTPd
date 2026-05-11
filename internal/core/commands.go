@@ -2960,16 +2960,21 @@ func dirRaceStatusName(bridge MasterBridge, cfg *Config, dirPath, siteName strin
 	}
 	var statusEntries []string
 	totalBytes, present, total := dirRaceProgress(bridge, cfg, dirPath)
+	extra := listStatusAudioExtra(bridge, cfg, dirPath)
 	if total > 0 {
 		totalMB := float64(totalBytes) / (1024 * 1024)
 		if present >= total {
-			statusEntries = append(statusEntries, fmt.Sprintf("[%s] - ( %.0fM %dF - COMPLETE ) - [%s]", siteName, totalMB, total, siteName))
+			if extra != "" {
+				statusEntries = append(statusEntries, fmt.Sprintf("[%s] - ( %.0fM %dF - COMPLETE - %s ) - [%s]", siteName, totalMB, total, extra, siteName))
+				extra = ""
+			} else {
+				statusEntries = append(statusEntries, fmt.Sprintf("[%s] - ( %.0fM %dF - COMPLETE ) - [%s]", siteName, totalMB, total, siteName))
+			}
 		} else {
 			pct := (present * 100) / total
 			statusEntries = append(statusEntries, fmt.Sprintf("%s - %3d%% Complete - [%s]", progressBar(present, total, 20), pct, siteName))
 		}
 	}
-	extra := listStatusAudioExtra(bridge, cfg, dirPath)
 	if extra != "" {
 		statusEntries = append(statusEntries, extra)
 	}
