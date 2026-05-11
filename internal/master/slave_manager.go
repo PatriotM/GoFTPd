@@ -2,6 +2,7 @@ package master
 
 import (
 	"crypto/tls"
+	"encoding/gob"
 	"fmt"
 	"log"
 	"net"
@@ -14,13 +15,27 @@ import (
 	"sync/atomic"
 	"time"
 
+	"goftpd/internal/core"
 	"goftpd/internal/protocol"
 )
 
 // SlaveManager listens for slave connections and manages all RemoteSlave objects.
 //
 
-const vfsFilePath = "userdata/vfs.dat"
+const (
+	vfsFilePath             = "userdata/vfs.dat"
+	releaseSnapshotFilePath = "userdata/release_snapshot.dat"
+)
+
+type releaseSnapshotFile struct {
+	Releases map[string]*vfsReleaseSnapshot
+}
+
+type releaseRaceWindow struct {
+	StartMs     int64
+	EndMs       int64
+	UpdatedAtMs int64
+}
 
 type SlaveManager struct {
 	listenHost       string
@@ -53,6 +68,13 @@ type SlaveManager struct {
 
 	// Virtual File System: master-side file index
 	vfs *VirtualFileSystem
+
+	releaseStateMu       sync.RWMutex
+	releaseMedia         map[string]map[string]string
+	releaseAnnouncements map[string]map[string]bool
+	releaseFacts         map[string]*vfsReleaseSnapshot
+	releaseFactsByParent map[string]map[string]*vfsReleaseSnapshot
+	releaseRaceWindows   map[string]*releaseRaceWindow
 
 	remergeMode atomic.Value
 
@@ -103,17 +125,22 @@ func NewSlaveManager(host string, port int, tlsEnabled bool, tlsCert, tlsKey str
 		heartbeatTimeout = 60 * time.Second
 	}
 	sm := &SlaveManager{
-		listenHost:       host,
-		listenPort:       port,
-		tlsEnabled:       tlsEnabled,
-		tlsCert:          tlsCert,
-		tlsKey:           tlsKey,
-		heartbeatTimeout: heartbeatTimeout,
-		slaves:           make(map[string]*RemoteSlave),
-		policies:         make(map[string]SlaveRoutePolicy),
-		vfs:              NewVirtualFileSystem(),
-		authState:        make(map[string]*slaveAuthState),
-		remergeCRCSem:    make(chan struct{}, 16),
+		listenHost:           host,
+		listenPort:           port,
+		tlsEnabled:           tlsEnabled,
+		tlsCert:              tlsCert,
+		tlsKey:               tlsKey,
+		heartbeatTimeout:     heartbeatTimeout,
+		slaves:               make(map[string]*RemoteSlave),
+		policies:             make(map[string]SlaveRoutePolicy),
+		vfs:                  NewVirtualFileSystem(),
+		releaseMedia:         make(map[string]map[string]string),
+		releaseAnnouncements: make(map[string]map[string]bool),
+		releaseFacts:         make(map[string]*vfsReleaseSnapshot),
+		releaseFactsByParent: make(map[string]map[string]*vfsReleaseSnapshot),
+		releaseRaceWindows:   make(map[string]*releaseRaceWindow),
+		authState:            make(map[string]*slaveAuthState),
+		remergeCRCSem:        make(chan struct{}, 16),
 	}
 	sm.remergeMode.Store("off")
 	sm.remergePauseAt.Store(250)
@@ -336,6 +363,9 @@ func (sm *SlaveManager) getPolicy(name string) (SlaveRoutePolicy, bool) {
 func (sm *SlaveManager) Start() error {
 	// Load saved VFS from disk (if exists)
 	sm.vfs.LoadFromDisk(vfsFilePath)
+	if err := sm.loadReleaseSnapshotFromDisk(releaseSnapshotFilePath); err != nil {
+		log.Printf("[SlaveManager] release snapshot load failed: %v", err)
+	}
 	for _, slaveName := range sm.vfs.SlaveNames() {
 		sm.startupCachedSlaves.Store(slaveName, struct{}{})
 	}
@@ -765,6 +795,395 @@ func splitRemoteAddr(addr net.Addr) (ip string, raw string) {
 	return raw, raw
 }
 
+func cloneSlaveStringMap(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(src))
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
+}
+
+func cloneReleaseSnapshot(src *vfsReleaseSnapshot) *vfsReleaseSnapshot {
+	if src == nil {
+		return nil
+	}
+	copyState := *src
+	return &copyState
+}
+
+func (sm *SlaveManager) setReleaseFactLocked(dirPath string, snapshot *vfsReleaseSnapshot) {
+	dirPath = filepath.Clean(dirPath)
+	parent := filepath.Clean(filepath.Dir(dirPath))
+	if snapshot == nil {
+		delete(sm.releaseFacts, dirPath)
+		if byParent := sm.releaseFactsByParent[parent]; byParent != nil {
+			delete(byParent, dirPath)
+			if len(byParent) == 0 {
+				delete(sm.releaseFactsByParent, parent)
+			}
+		}
+		return
+	}
+	copyState := cloneReleaseSnapshot(snapshot)
+	sm.releaseFacts[dirPath] = copyState
+	if sm.releaseFactsByParent[parent] == nil {
+		sm.releaseFactsByParent[parent] = make(map[string]*vfsReleaseSnapshot)
+	}
+	sm.releaseFactsByParent[parent][dirPath] = copyState
+}
+
+func (sm *SlaveManager) rebuildReleaseFactsLocked(snapshots map[string]*vfsReleaseSnapshot) {
+	sm.releaseFacts = make(map[string]*vfsReleaseSnapshot)
+	sm.releaseFactsByParent = make(map[string]map[string]*vfsReleaseSnapshot)
+	for dirPath, snapshot := range snapshots {
+		sm.setReleaseFactLocked(dirPath, snapshot)
+	}
+}
+
+func (sm *SlaveManager) SetReleaseMediaInfo(dirPath string, fields map[string]string) {
+	if sm == nil {
+		return
+	}
+	cleanDirPath := filepath.Clean(dirPath)
+	sm.releaseStateMu.Lock()
+	defer sm.releaseStateMu.Unlock()
+	if len(fields) == 0 {
+		delete(sm.releaseMedia, cleanDirPath)
+		return
+	}
+	sm.releaseMedia[cleanDirPath] = cloneSlaveStringMap(fields)
+}
+
+func (sm *SlaveManager) ResetReleaseRaceWindow(dirPath string) {
+	if sm == nil {
+		return
+	}
+	cleanDirPath := filepath.Clean(dirPath)
+	sm.releaseStateMu.Lock()
+	defer sm.releaseStateMu.Unlock()
+	delete(sm.releaseRaceWindows, cleanDirPath)
+}
+
+func (sm *SlaveManager) NoteRacePayloadTransferAt(dirPath string, durationMs int64, endMs int64) {
+	if sm == nil || durationMs <= 0 {
+		return
+	}
+	cleanDirPath := filepath.Clean(dirPath)
+	if endMs <= 0 {
+		endMs = time.Now().UnixMilli()
+	}
+	startMs := endMs - durationMs
+	if startMs < 1 {
+		startMs = 1
+	}
+	sm.releaseStateMu.Lock()
+	defer sm.releaseStateMu.Unlock()
+	window := sm.releaseRaceWindows[cleanDirPath]
+	if window == nil {
+		sm.releaseRaceWindows[cleanDirPath] = &releaseRaceWindow{
+			StartMs:     startMs,
+			EndMs:       endMs,
+			UpdatedAtMs: endMs,
+		}
+		return
+	}
+	if window.StartMs <= 0 || startMs < window.StartMs {
+		window.StartMs = startMs
+	}
+	if endMs > window.EndMs {
+		window.EndMs = endMs
+	}
+	window.UpdatedAtMs = endMs
+}
+
+func (sm *SlaveManager) NoteRacePayloadTransfer(dirPath, fileName string, durationMs int64) {
+	sm.NoteRacePayloadTransferAt(dirPath, durationMs, 0)
+}
+
+func (sm *SlaveManager) GetReleaseRaceWindowMilliseconds(dirPath string) int64 {
+	if sm == nil {
+		return 0
+	}
+	cleanDirPath := filepath.Clean(dirPath)
+	sm.releaseStateMu.RLock()
+	window := sm.releaseRaceWindows[cleanDirPath]
+	sm.releaseStateMu.RUnlock()
+	if window == nil {
+		return 0
+	}
+	if window.EndMs <= window.StartMs || window.StartMs <= 0 {
+		return 0
+	}
+	return window.EndMs - window.StartMs
+}
+
+func (sm *SlaveManager) GetReleaseMediaInfo(dirPath string) map[string]string {
+	if sm == nil {
+		return nil
+	}
+	cleanDirPath := filepath.Clean(dirPath)
+	sm.releaseStateMu.RLock()
+	defer sm.releaseStateMu.RUnlock()
+	return cloneSlaveStringMap(sm.releaseMedia[cleanDirPath])
+}
+
+func (sm *SlaveManager) ClaimReleaseAnnouncement(dirPath, key string) bool {
+	if sm == nil {
+		return false
+	}
+	cleanDirPath := filepath.Clean(dirPath)
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return false
+	}
+	sm.releaseStateMu.Lock()
+	defer sm.releaseStateMu.Unlock()
+	if sm.releaseAnnouncements[cleanDirPath] == nil {
+		sm.releaseAnnouncements[cleanDirPath] = make(map[string]bool)
+	}
+	if sm.releaseAnnouncements[cleanDirPath][key] {
+		return false
+	}
+	sm.releaseAnnouncements[cleanDirPath][key] = true
+	return true
+}
+
+func (sm *SlaveManager) InvalidateReleaseStateForPath(filePath string, isDir bool) {
+	if sm == nil {
+		return
+	}
+	cleanPath := filepath.Clean(filePath)
+	parent := filepath.Clean(filepath.Dir(cleanPath))
+	sm.releaseStateMu.Lock()
+	defer sm.releaseStateMu.Unlock()
+	delete(sm.releaseMedia, cleanPath)
+	delete(sm.releaseAnnouncements, cleanPath)
+	delete(sm.releaseRaceWindows, cleanPath)
+	sm.setReleaseFactLocked(cleanPath, nil)
+	sm.setReleaseFactLocked(parent, nil)
+	if isDir {
+		prefix := strings.TrimRight(filepath.ToSlash(cleanPath), "/") + "/"
+		for key := range sm.releaseMedia {
+			if key == cleanPath || strings.HasPrefix(filepath.ToSlash(key), prefix) {
+				delete(sm.releaseMedia, key)
+			}
+		}
+		for key := range sm.releaseAnnouncements {
+			if key == cleanPath || strings.HasPrefix(filepath.ToSlash(key), prefix) {
+				delete(sm.releaseAnnouncements, key)
+			}
+		}
+		for key := range sm.releaseFacts {
+			if key == cleanPath || strings.HasPrefix(filepath.ToSlash(key), prefix) {
+				sm.setReleaseFactLocked(key, nil)
+			}
+		}
+		for key := range sm.releaseRaceWindows {
+			if key == cleanPath || strings.HasPrefix(filepath.ToSlash(key), prefix) {
+				delete(sm.releaseRaceWindows, key)
+			}
+		}
+	}
+}
+
+func (sm *SlaveManager) RenameReleaseState(from, to string, isDir bool) {
+	if sm == nil {
+		return
+	}
+	from = filepath.Clean(from)
+	to = filepath.Clean(to)
+	sm.releaseStateMu.Lock()
+	defer sm.releaseStateMu.Unlock()
+	if media, ok := sm.releaseMedia[from]; ok {
+		sm.releaseMedia[to] = cloneSlaveStringMap(media)
+		delete(sm.releaseMedia, from)
+	}
+	if announced, ok := sm.releaseAnnouncements[from]; ok {
+		copied := make(map[string]bool, len(announced))
+		for k, v := range announced {
+			copied[k] = v
+		}
+		sm.releaseAnnouncements[to] = copied
+		delete(sm.releaseAnnouncements, from)
+	}
+	if snapshot, ok := sm.releaseFacts[from]; ok {
+		sm.setReleaseFactLocked(to, snapshot)
+		sm.setReleaseFactLocked(from, nil)
+	}
+	if window, ok := sm.releaseRaceWindows[from]; ok {
+		copyWindow := *window
+		sm.releaseRaceWindows[to] = &copyWindow
+		delete(sm.releaseRaceWindows, from)
+	}
+	if !isDir {
+		return
+	}
+	fromPrefix := strings.TrimRight(filepath.ToSlash(from), "/") + "/"
+	for key, media := range sm.releaseMedia {
+		if strings.HasPrefix(filepath.ToSlash(key), fromPrefix) {
+			newKey := to + key[len(from):]
+			sm.releaseMedia[newKey] = cloneSlaveStringMap(media)
+			delete(sm.releaseMedia, key)
+		}
+	}
+	for key, announced := range sm.releaseAnnouncements {
+		if strings.HasPrefix(filepath.ToSlash(key), fromPrefix) {
+			newKey := to + key[len(from):]
+			copied := make(map[string]bool, len(announced))
+			for k, v := range announced {
+				copied[k] = v
+			}
+			sm.releaseAnnouncements[newKey] = copied
+			delete(sm.releaseAnnouncements, key)
+		}
+	}
+	for key, snapshot := range sm.releaseFacts {
+		if strings.HasPrefix(filepath.ToSlash(key), fromPrefix) {
+			newKey := to + key[len(from):]
+			sm.setReleaseFactLocked(newKey, snapshot)
+			sm.setReleaseFactLocked(key, nil)
+		}
+	}
+	for key, window := range sm.releaseRaceWindows {
+		if strings.HasPrefix(filepath.ToSlash(key), fromPrefix) {
+			newKey := to + key[len(from):]
+			copyWindow := *window
+			sm.releaseRaceWindows[newKey] = &copyWindow
+			delete(sm.releaseRaceWindows, key)
+		}
+	}
+}
+
+func (sm *SlaveManager) GetImmediateReleaseProgress(dirPath string) map[string]core.ReleaseProgressStat {
+	if sm == nil {
+		return nil
+	}
+	cleanDirPath := filepath.Clean(dirPath)
+	sm.releaseStateMu.RLock()
+	byParent := sm.releaseFactsByParent[cleanDirPath]
+	if len(byParent) == 0 {
+		sm.releaseStateMu.RUnlock()
+		return nil
+	}
+	out := make(map[string]core.ReleaseProgressStat, len(byParent))
+	for childPath, snapshot := range byParent {
+		if snapshot == nil || (snapshot.Total <= 0 && !snapshot.HasSFV) {
+			continue
+		}
+		out[childPath] = core.ReleaseProgressStat{
+			Path:    childPath,
+			Present: snapshot.Present,
+			Total:   snapshot.Total,
+			HasSFV:  snapshot.HasSFV,
+		}
+	}
+	sm.releaseStateMu.RUnlock()
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func (sm *SlaveManager) GetImmediateReleaseChildFacts(dirPath string) map[string]core.ReleaseChildFacts {
+	if sm == nil {
+		return nil
+	}
+	cleanDirPath := filepath.Clean(dirPath)
+	sm.releaseStateMu.RLock()
+	byParent := sm.releaseFactsByParent[cleanDirPath]
+	if len(byParent) == 0 {
+		sm.releaseStateMu.RUnlock()
+		return nil
+	}
+	out := make(map[string]core.ReleaseChildFacts, len(byParent))
+	for childPath, snapshot := range byParent {
+		if snapshot == nil {
+			continue
+		}
+		out[childPath] = core.ReleaseChildFacts{
+			Path:         childPath,
+			VisibleCount: snapshot.VisibleCount,
+			HasSFV:       snapshot.HasSFV,
+			HasNFO:       snapshot.HasNFO,
+		}
+	}
+	sm.releaseStateMu.RUnlock()
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func (sm *SlaveManager) saveReleaseSnapshotToDisk(filePath string) error {
+	if sm == nil {
+		return nil
+	}
+	snapshots := sm.vfs.SnapshotReleaseFacts()
+	sm.releaseStateMu.Lock()
+	sm.rebuildReleaseFactsLocked(snapshots)
+	sm.releaseStateMu.Unlock()
+
+	snapshotFile := releaseSnapshotFile{
+		Releases: make(map[string]*vfsReleaseSnapshot, len(snapshots)),
+	}
+	for dirPath, snapshot := range snapshots {
+		if snapshot == nil {
+			continue
+		}
+		snapshotFile.Releases[dirPath] = cloneReleaseSnapshot(snapshot)
+	}
+
+	dir := filepath.Dir(filePath)
+	if dir != "" && dir != "." {
+		os.MkdirAll(dir, 0755)
+	}
+
+	tmpPath := filePath + ".tmp"
+	f, err := os.Create(tmpPath)
+	if err != nil {
+		return fmt.Errorf("create release snapshot file: %w", err)
+	}
+	enc := gob.NewEncoder(f)
+	if err := enc.Encode(snapshotFile); err != nil {
+		f.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("encode release snapshot: %w", err)
+	}
+	f.Close()
+	if err := os.Rename(tmpPath, filePath); err != nil {
+		return fmt.Errorf("rename release snapshot file: %w", err)
+	}
+	return nil
+}
+
+func (sm *SlaveManager) loadReleaseSnapshotFromDisk(filePath string) error {
+	if sm == nil {
+		return nil
+	}
+	f, err := os.Open(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("open release snapshot file: %w", err)
+	}
+	defer f.Close()
+
+	var snapshotFile releaseSnapshotFile
+	dec := gob.NewDecoder(f)
+	if err := dec.Decode(&snapshotFile); err != nil {
+		return fmt.Errorf("decode release snapshot: %w", err)
+	}
+
+	sm.releaseStateMu.Lock()
+	defer sm.releaseStateMu.Unlock()
+	sm.rebuildReleaseFactsLocked(snapshotFile.Releases)
+	return nil
+}
+
 // initializeSlaveAfterConnect triggers remerge and marks slave available.
 // Uses "instant online" approach : slave is marked available
 // immediately and remerge runs in the background. Files appear in LIST
@@ -830,6 +1249,9 @@ func (sm *SlaveManager) initializeSlaveAfterConnect(rs *RemoteSlave) {
 			// Persist the VFS after remerge and purge complete.
 			if err := sm.vfs.SaveToDisk(vfsFilePath); err != nil {
 				log.Printf("[SlaveManager] Error saving VFS after remerge: %v", err)
+			}
+			if err := sm.saveReleaseSnapshotToDisk(releaseSnapshotFilePath); err != nil {
+				log.Printf("[SlaveManager] Error saving release snapshot after remerge: %v", err)
 			}
 		}
 	}
@@ -1359,6 +1781,9 @@ func (sm *SlaveManager) Stop() {
 	if err := sm.vfs.SaveToDisk(vfsFilePath); err != nil {
 		log.Printf("[SlaveManager] Error saving VFS: %v", err)
 	}
+	if err := sm.saveReleaseSnapshotToDisk(releaseSnapshotFilePath); err != nil {
+		log.Printf("[SlaveManager] Error saving release snapshot: %v", err)
+	}
 
 	if sm.listener != nil {
 		sm.listener.Close()
@@ -1385,6 +1810,9 @@ func (sm *SlaveManager) vfsPersistLoop() {
 		if sm.vfs.Count() > 0 {
 			if err := sm.vfs.SaveToDisk(vfsFilePath); err != nil {
 				log.Printf("[SlaveManager] Error saving VFS: %v", err)
+			}
+			if err := sm.saveReleaseSnapshotToDisk(releaseSnapshotFilePath); err != nil {
+				log.Printf("[SlaveManager] Error saving release snapshot: %v", err)
 			}
 		}
 	}

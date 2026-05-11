@@ -71,9 +71,24 @@ func (s *Session) masterBridgeOrNil() MasterBridge {
 	return bridge
 }
 
+func (s *Session) canListPath(vpath string) bool {
+	if s == nil || s.User == nil || s.ACLEngine == nil {
+		return true
+	}
+	aclBase := ""
+	if s.Config != nil {
+		aclBase = strings.TrimSpace(s.Config.ACLBasePath)
+	}
+	aclPath := path.Join(aclBase, path.Clean(vpath))
+	return s.ACLEngine.CanPerform(s.User, "LIST", aclPath)
+}
+
 func (s *Session) validateListTargetExists(targetPath string, bridge MasterBridge) error {
 	if targetPath == "/" {
 		return nil
+	}
+	if !s.canListPath(targetPath) {
+		return fmt.Errorf("550")
 	}
 	if bridge != nil {
 		if bridge.FileExists(targetPath) {
@@ -94,6 +109,9 @@ func (s *Session) validateListTargetExists(targetPath string, bridge MasterBridg
 func (s *Session) validateListDirectoryTarget(targetPath string, bridge MasterBridge) error {
 	if targetPath == "/" {
 		return nil
+	}
+	if !s.canListPath(targetPath) {
+		return fmt.Errorf("550")
 	}
 	if bridge != nil {
 		entry, found := bridge.GetPathEntry(targetPath)

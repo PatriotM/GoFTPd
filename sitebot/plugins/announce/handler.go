@@ -421,9 +421,6 @@ func syntheticNewRelPath(evt *event.Event, section string) string {
 	if evt.Type == event.EventMKDir {
 		return path.Clean("/" + strings.TrimSpace(evt.Path))
 	}
-	if evt.Type == event.EventUpload && shouldEmitSyntheticNew(evt, section) {
-		return path.Dir(path.Clean("/" + strings.TrimSpace(evt.Path)))
-	}
 	return ""
 }
 
@@ -576,15 +573,6 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 	case event.EventUpload:
 		if skipReleaseAnnounce {
 			return nil, nil
-		}
-		if !st.Created && shouldEmitSyntheticNew(evt, section) {
-			resetRaceOutputState(st)
-			st.Created = true
-			if p.shouldInlinePretime() && p.asyncEmit != nil {
-				p.queueInlinePretime(syntheticNewRelPath(evt, section), section, vars)
-			} else {
-				outs = append(outs, plugin.Output{Type: "NEW", Text: p.renderNewLine(section, rel, vars)})
-			}
 		}
 		switch fileType {
 		case "nfo", "sample":
@@ -1026,22 +1014,6 @@ func isReleaseDir(eventPath, section string) bool {
 		return false
 	}
 	return strings.EqualFold(path.Base(path.Dir(parent)), sectionName)
-}
-
-func shouldEmitSyntheticNew(evt *event.Event, section string) bool {
-	if evt == nil || evt.Type != event.EventUpload {
-		return false
-	}
-	if strings.TrimSpace(evt.Data["release_subdir"]) != "" {
-		return false
-	}
-	fileType := classifyFile(strings.ToLower(strings.TrimSpace(evt.Path)))
-	switch fileType {
-	case "sfv", "rar", "audio", "zip":
-	default:
-		return false
-	}
-	return isReleaseDir(path.Dir(path.Clean(evt.Path)), section)
 }
 
 func isDateDir(name string) bool {

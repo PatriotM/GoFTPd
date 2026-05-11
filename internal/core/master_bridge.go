@@ -79,6 +79,11 @@ type MasterBridge interface {
 	// SyncPresentFile refreshes RaceDB presence for an existing VFS file.
 	SyncPresentFile(filePath string, checksum uint32) error
 
+	// SyncReleaseRaceStats persists one completed SFV-tracked release into the
+	// cold race/search store in one batch. Live/incomplete races should stay on
+	// the in-memory/VFS hot path instead of writing per-file to the DB.
+	SyncReleaseRaceStats(dirPath string) error
+
 	// CacheSFV caches parsed SFV entries on a VFS directory for race tracking.
 	CacheSFV(dirPath string, sfvName string, entries []SFVEntryInfo)
 
@@ -99,6 +104,16 @@ type MasterBridge interface {
 	// speed in STATS — summing per-file durations overcounts when uploads run
 	// in parallel.
 	GetRaceWallClockMilliseconds(dirPath string) int64
+
+	// NoteRacePayloadTransfer records one tracked payload transfer into the
+	// current live race window for the release. This lets COMPLETE timing prefer
+	// the active run over historical DB timestamps.
+	NoteRacePayloadTransfer(dirPath, fileName string, durationMs int64)
+
+	// NoteRacePayloadTransferAt records one tracked payload transfer using the
+	// actual upload completion timestamp captured on the hot path, so live race
+	// windows are not distorted by queued post-hook timing.
+	NoteRacePayloadTransferAt(dirPath, fileName string, durationMs int64, endMs int64)
 
 	// GetSFVData returns cached SFV entries for a directory (filename->CRC32 map).
 	// Returns nil if no SFV is cached for this directory.
