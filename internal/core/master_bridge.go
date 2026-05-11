@@ -110,6 +110,11 @@ type MasterBridge interface {
 	// the active run over historical DB timestamps.
 	NoteRacePayloadTransfer(dirPath, fileName string, durationMs int64)
 
+	// NoteRacePayloadTransferAt records one tracked payload transfer using the
+	// actual upload completion timestamp captured on the hot path, so live race
+	// windows are not distorted by queued post-hook timing.
+	NoteRacePayloadTransferAt(dirPath, fileName string, durationMs int64, endMs int64)
+
 	// GetSFVData returns cached SFV entries for a directory (filename->CRC32 map).
 	// Returns nil if no SFV is cached for this directory.
 	GetSFVData(dirPath string) map[string]uint32

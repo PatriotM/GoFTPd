@@ -1770,9 +1770,12 @@ func (b *Bridge) GetRaceWallClockMilliseconds(dirPath string) int64 {
 }
 
 func (b *Bridge) NoteRacePayloadTransfer(dirPath, fileName string, durationMs int64) {
+	b.NoteRacePayloadTransferAt(dirPath, fileName, durationMs, 0)
+}
+
+func (b *Bridge) NoteRacePayloadTransferAt(dirPath, fileName string, durationMs int64, endMs int64) {
 	cleanDirPath := filepath.Clean(dirPath)
-	endMs := int64(0)
-	if b != nil && b.sm != nil {
+	if endMs <= 0 && b != nil && b.sm != nil {
 		if f := b.sm.GetVFS().GetFile(path.Join(cleanDirPath, fileName)); f != nil && f.LastModified > 0 {
 			endMs = f.LastModified * 1000
 		}

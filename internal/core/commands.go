@@ -3162,6 +3162,7 @@ type releaseUploadPipelineInput struct {
 	FileSize         int64
 	SpeedMB          float64
 	XferMs           int64
+	CompletedAtMs    int64
 	ExistingNames    []string
 }
 
@@ -3245,7 +3246,7 @@ func computeReleaseRaceSnapshot(s *Session, bridge MasterBridge, in releaseUploa
 	}
 
 	if isTrackedRacePayload(bridge, s.Config, in.UploadDir, in.FileName) {
-		bridge.NoteRacePayloadTransfer(in.UploadDir, in.FileName, in.XferMs)
+		bridge.NoteRacePayloadTransferAt(in.UploadDir, in.FileName, in.XferMs, in.CompletedAtMs)
 	}
 
 	trackedFile := in.FileName
@@ -3310,6 +3311,7 @@ func queueMasterUploadPostHooks(s *Session, bridge MasterBridge, uploadDir, medi
 		FileSize:         fileSize,
 		SpeedMB:          speedMB,
 		XferMs:           xferMs,
+		CompletedAtMs:    time.Now().UnixMilli(),
 		ExistingNames:    append([]string(nil), existingNames...),
 	}
 	enqueueReleasePostHook(uploadDir, func() {
