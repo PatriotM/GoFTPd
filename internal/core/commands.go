@@ -3277,10 +3277,7 @@ func emitReleaseUploadEventAndRace(s *Session, bridge MasterBridge, in releaseUp
 	}
 
 	if zipscript.UsesZip(s.Config.Zipscript, in.UploadDir) {
-		expectedZipParts := zipExpectedPartsFromDIZ(bridge, in.UploadDir)
-		if shouldEmitZipRaceEnd(s.Config, in.UploadDir, in.FileName) &&
-			zipDirCompleteAfterUpload(bridge, in.UploadDir, in.FileName, bridge.ListDir(in.UploadDir), expectedZipParts) &&
-			state.RaceTotalFiles > 0 {
+		if state.RaceComplete && state.RaceTotalFiles > 0 {
 			emitZipRaceEndAfter(s, in.UploadDir, in.XferMs, zipscript.MediaInfoGraceDelayForDir(s.Config.Zipscript, in.UploadDir, in.FileName))
 		}
 		return
