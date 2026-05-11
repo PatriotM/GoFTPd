@@ -4618,12 +4618,15 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 	}
 
 	sfvEntries := bridge.GetSFVData(dirPath)
+	usesZip := zipscript.UsesZip(cfg.Zipscript, dirPath)
 	isTrackedPayload := isTrackedRacePayload(bridge, cfg, dirPath, fileName)
-	if !isTrackedPayload {
+	if !isTrackedPayload && !usesZip {
 		return nil, nil, 0, 0, 0, false
 	}
-	data["file_mbytes"] = mbString(fileSize)
-	if zipscript.UsesZip(cfg.Zipscript, dirPath) {
+	if isTrackedPayload {
+		data["file_mbytes"] = mbString(fileSize)
+	}
+	if usesZip {
 		expected := zipExpectedPartsFromDIZ(bridge, dirPath)
 		entries := bridge.ListDir(dirPath)
 		users, totalBytes, total := zipDirRaceStats(bridge, dirPath, entries, expected)
