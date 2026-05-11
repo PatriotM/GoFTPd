@@ -559,8 +559,8 @@ plugins:
     config_file: "plugins/speedtest/config.yml"
   slowkick:
     enabled: true
-    # Kicks slow uploads/downloads and can tempban the FTP user briefly so
-    # they cannot immediately reconnect and reclaim the slot.
+    # Live transfer speed floors with optional tempban/announce. Enforcement
+    # happens in the slave transfer loop, not via a coarse polling observer.
     config_file: "plugins/slowkick/config.yml"
   spacekeeper:
     enabled: false

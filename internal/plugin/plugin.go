@@ -144,6 +144,10 @@ type TransferSpeedPolicyProvider interface {
 	TransferSpeedPolicy(username, primaryGroup, transferPath, direction string) (minSpeedBytes int64, maxSpeedBytes int64, ok bool)
 }
 
+type SlowTransferHandler interface {
+	HandleSlowTransfer(username, primaryGroup, transferPath, direction, slaveName string, transferIndex int32, actualSpeedBytes, minSpeedBytes int64)
+}
+
 type RaceUser struct {
 	Name    string
 	Group   string

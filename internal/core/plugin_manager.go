@@ -212,6 +212,25 @@ func (pm *PluginManager) TransferSpeedLimits(username, primaryGroup, transferPat
 	return 0, 0
 }
 
+func (pm *PluginManager) HandleSlowTransfer(username, primaryGroup, transferPath, direction, slaveName string, transferIndex int32, actualSpeedBytes, minSpeedBytes int64) {
+	if pm == nil {
+		return
+	}
+
+	pm.mu.RLock()
+	plugins := make([]plugin.Plugin, len(pm.plugins))
+	copy(plugins, pm.plugins)
+	pm.mu.RUnlock()
+
+	for _, p := range plugins {
+		handler, ok := p.(plugin.SlowTransferHandler)
+		if !ok {
+			continue
+		}
+		handler.HandleSlowTransfer(username, primaryGroup, transferPath, direction, slaveName, transferIndex, actualSpeedBytes, minSpeedBytes)
+	}
+}
+
 // StopAll calls Stop() on every registered plugin. Called at shutdown.
 func (pm *PluginManager) StopAll() error {
 	pm.mu.RLock()

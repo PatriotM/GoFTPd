@@ -3,8 +3,12 @@ package core
 import (
 	"fmt"
 	"net"
+	"regexp"
+	"strconv"
 	"strings"
 )
+
+var slowTransferErrorRE = regexp.MustCompile(`transfer was aborted - '([0-9]+)' is < '([0-9]+)'`)
 
 func writeTransferFailure(conn net.Conn, operation string, err error) {
 	if conn == nil {
@@ -62,4 +66,37 @@ func formatTransferFailureLog(err error) string {
 		return "unknown transfer failure"
 	}
 	return fmt.Sprintf("%s (raw: %v)", describeTransferFailure(err), err)
+}
+
+func maybeHandleSlowTransfer(s *Session, direction, transferPath, slaveName string, transferIndex int32, err error) {
+	if s == nil || s.Config == nil || s.Config.PluginManager == nil || err == nil {
+		return
+	}
+	actualSpeedBytes, minSpeedBytes, ok := parseSlowTransferError(err)
+	if !ok {
+		return
+	}
+	username := ""
+	primaryGroup := ""
+	if s.User != nil {
+		username = s.User.Name
+		primaryGroup = s.User.PrimaryGroup
+	}
+	s.Config.PluginManager.HandleSlowTransfer(username, primaryGroup, transferPath, direction, slaveName, transferIndex, actualSpeedBytes, minSpeedBytes)
+}
+
+func parseSlowTransferError(err error) (int64, int64, bool) {
+	if err == nil {
+		return 0, 0, false
+	}
+	match := slowTransferErrorRE.FindStringSubmatch(err.Error())
+	if len(match) != 3 {
+		return 0, 0, false
+	}
+	actualSpeedBytes, err1 := strconv.ParseInt(match[1], 10, 64)
+	minSpeedBytes, err2 := strconv.ParseInt(match[2], 10, 64)
+	if err1 != nil || err2 != nil {
+		return 0, 0, false
+	}
+	return actualSpeedBytes, minSpeedBytes, true
 }
