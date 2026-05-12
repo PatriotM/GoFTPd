@@ -44,7 +44,7 @@ func New() *Handler {
 		minUsersOnline:        2,
 		excludeUsers:          map[string]struct{}{},
 		excludeGroups:         map[string]struct{}{},
-		excludePaths:          []string{"/PRE", "/REQUESTS", "/SPEEDTEST"},
+		excludePaths:          normalizePaths([]string{"/PRE", "/REQUESTS", "/SPEEDTEST"}),
 		excludeExtensions:     lowerSet([]string{"sfv"}),
 		tempBans:              map[string]time.Time{},
 	}

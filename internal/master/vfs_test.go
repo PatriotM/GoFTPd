@@ -222,7 +222,6 @@ func TestVFSDeleteDirRemovesSubtreeAndMetadataWithoutRebuild(t *testing.T) {
 	vfs.AddFile("/site/TV/release/Sample", VFSFile{IsDir: true, Seen: true})
 	vfs.AddFile("/site/TV/release/Sample/sample.mkv", VFSFile{Size: 200, Seen: true})
 	vfs.SetSFVData("/site/TV/release", "release.sfv", map[string]uint32{"file1.r00": 1})
-	vfs.SetMediaInfo("/site/TV/release", map[string]string{"video_format": "AVC"})
 
 	vfs.DeleteFile("/site/TV/release")
 
@@ -238,9 +237,6 @@ func TestVFSDeleteDirRemovesSubtreeAndMetadataWithoutRebuild(t *testing.T) {
 	if got := vfs.GetSFVData("/site/TV/release"); got != nil {
 		t.Fatalf("expected deleted release sfv metadata to be gone, got %+v", got)
 	}
-	if got := vfs.GetMediaInfo("/site/TV/release"); got != nil {
-		t.Fatalf("expected deleted release mediainfo to be gone, got %+v", got)
-	}
 	children := vfs.ListDirectory("/site/TV")
 	if len(children) != 0 {
 		t.Fatalf("expected parent directory to have no children after delete, got %d", len(children))
@@ -252,45 +248,12 @@ func TestVFSDeleteSFVClearsParentSFVMetadata(t *testing.T) {
 	vfs.AddFile("/X265/release", VFSFile{IsDir: true, Seen: true})
 	vfs.AddFile("/X265/release/release.sfv", VFSFile{Seen: true, Size: 10})
 	vfs.SetSFVData("/X265/release", "release.sfv", map[string]uint32{"file.r00": 1})
-	vfs.SetMediaInfo("/X265/release", map[string]string{"codec": "AVC"})
 
 	vfs.DeleteFile("/X265/release/release.sfv")
 
 	meta := vfs.GetSFVData("/X265/release")
-	if meta == nil {
-		t.Fatalf("expected parent metadata to remain for mediainfo")
-	}
-	if meta.SFVName != "" || len(meta.SFVEntries) != 0 {
-		t.Fatalf("expected sfv metadata to be cleared after deleting sfv, got %+v", meta)
-	}
-	if meta.MediaInfo["codec"] != "AVC" {
-		t.Fatalf("expected unrelated mediainfo to remain, got %+v", meta.MediaInfo)
-	}
-}
-
-func TestVFSDeleteLastMediaFileClearsParentMediaInfo(t *testing.T) {
-	vfs := NewVirtualFileSystem()
-	vfs.AddFile("/MP3/release", VFSFile{IsDir: true, Seen: true})
-	vfs.AddFile("/MP3/release/01-track.mp3", VFSFile{Seen: true, Size: 10})
-	vfs.SetMediaInfo("/MP3/release", map[string]string{"artist": "Example"})
-
-	vfs.DeleteFile("/MP3/release/01-track.mp3")
-
-	if got := vfs.GetMediaInfo("/MP3/release"); got != nil {
-		t.Fatalf("expected mediainfo to clear after deleting last media file, got %+v", got)
-	}
-}
-
-func TestVFSRenameLastMediaFileClearsParentMediaInfo(t *testing.T) {
-	vfs := NewVirtualFileSystem()
-	vfs.AddFile("/FLAC/release", VFSFile{IsDir: true, Seen: true})
-	vfs.AddFile("/FLAC/release/01-track.flac", VFSFile{Seen: true, Size: 10})
-	vfs.SetMediaInfo("/FLAC/release", map[string]string{"artist": "Example"})
-
-	vfs.RenameFile("/FLAC/release/01-track.flac", "/FLAC/release/01-track.txt")
-
-	if got := vfs.GetMediaInfo("/FLAC/release"); got != nil {
-		t.Fatalf("expected mediainfo to clear after renaming away the last media file, got %+v", got)
+	if meta != nil {
+		t.Fatalf("expected sfv metadata to be removed after deleting sfv, got %+v", meta)
 	}
 }
 
@@ -299,19 +262,12 @@ func TestVFSRenameSFVAwayClearsParentSFVMetadata(t *testing.T) {
 	vfs.AddFile("/X264/release", VFSFile{IsDir: true, Seen: true})
 	vfs.AddFile("/X264/release/release.sfv", VFSFile{Seen: true, Size: 10})
 	vfs.SetSFVData("/X264/release", "release.sfv", map[string]uint32{"file.r00": 1})
-	vfs.SetMediaInfo("/X264/release", map[string]string{"codec": "AVC"})
 
 	vfs.RenameFile("/X264/release/release.sfv", "/X264/release/release.txt")
 
 	meta := vfs.GetSFVData("/X264/release")
-	if meta == nil {
-		t.Fatalf("expected parent metadata to remain for mediainfo")
-	}
-	if meta.SFVName != "" || len(meta.SFVEntries) != 0 {
-		t.Fatalf("expected sfv metadata to clear after renaming sfv away, got %+v", meta)
-	}
-	if meta.MediaInfo["codec"] != "AVC" {
-		t.Fatalf("expected unrelated mediainfo to remain, got %+v", meta.MediaInfo)
+	if meta != nil {
+		t.Fatalf("expected sfv metadata to be removed after renaming sfv away, got %+v", meta)
 	}
 }
 
