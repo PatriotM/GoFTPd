@@ -81,6 +81,7 @@ var baseSiteHelpEntries = []siteHelpEntry{
 	{Command: "SEARCH", Usage: "<pattern>", Summary: "Search releases", Area: "Search/rescan"},
 	{Command: "RACE", Usage: "<release>", Summary: "Show race stats for a release", Area: "Search/rescan"},
 	{Command: "RESCAN", Usage: "<path>", Summary: "Rescan a path", Area: "Search/rescan"},
+	{Command: "RESCANSTATUS", Usage: "[jobid]", Summary: "Show background rescan progress/output", Area: "Search/rescan"},
 	{Command: "CHMOD", Usage: "<mode> <path>", Summary: "Change file permissions", Area: "Search/rescan"},
 	{Command: "XDUPE", Usage: "", Summary: "Enable XDUPE mode", Area: "Search/rescan"},
 	{Command: "INVITE", Usage: "", Summary: "Show site invite channels", Area: "IRC/sitebot"},
