@@ -3,23 +3,19 @@
 
 # Slow transfer kicker.
 #
-# Watches live uploads and downloads and kicks a user only when the transfer
-# stays below the speed threshold for the full verify window. The slave aborts
-# uploads first, so partial uploads get cleaned up on the slave side.
-# Poll interval for checking live transfers.
-interval_seconds: 5
+# The actual slow-transfer abort now happens in the live slave transfer loop,
+# similar to DrFTPD. This config provides the transfer policy:
+# min speed floors, path/user/group exclusions, and optional tempban/announce.
 
 # Watch uploads and/or downloads.
 monitor_uploads: true
 monitor_downloads: true
 
-# Upload-specific floor and verify window.
+# Upload-specific floor in KB/s.
 min_upload_speed_kbps: 25
-verify_upload_seconds: 20
 
-# Download-specific floor and verify window.
+# Download-specific floor in KB/s.
 min_download_speed_kbps: 50
-verify_download_seconds: 20
 
 # Do nothing unless at least this many logged-in users are online.
 min_users_online: 2
@@ -36,10 +32,12 @@ exclude_paths:
   - "/REQUESTS"
   - "/SPEEDTEST"
 
-# Log a warning when a user first drops below the threshold.
-announce_warn: true
+# File extensions that should never trigger slowkick.
+# Use bare extensions without the leading dot.
+exclude_extensions:
+  - sfv
 
-# Log the actual abort/kick when verification expires.
+# Announce the actual slow abort/kick event.
 announce_kick: true
 
 # Temporarily block the same FTP user from logging straight back in after a

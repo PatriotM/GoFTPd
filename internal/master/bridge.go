@@ -31,6 +31,7 @@ type Bridge struct {
 	readFileCache          map[string]cachedReadFileResult
 	liveTransferStatsCache []core.LiveTransferStat
 	liveTransferStatsAt    time.Time
+	transferSpeedPolicy    func(username, primaryGroup, transferPath, direction string) (int64, int64)
 }
 
 func configureBridgeDataSocket(conn net.Conn) {
@@ -72,6 +73,20 @@ func NewBridge(sm *SlaveManager) *Bridge {
 		log.Printf("[Bridge] Race DB reconcile failed: %v", err)
 	}
 	return b
+}
+
+func (b *Bridge) SetTransferSpeedPolicy(fn func(username, primaryGroup, transferPath, direction string) (int64, int64)) {
+	if b == nil {
+		return
+	}
+	b.transferSpeedPolicy = fn
+}
+
+func (b *Bridge) transferSpeedLimits(username, primaryGroup, transferPath, direction string) (int64, int64) {
+	if b == nil || b.transferSpeedPolicy == nil {
+		return 0, 0
+	}
+	return b.transferSpeedPolicy(username, primaryGroup, transferPath, direction)
 }
 
 func (b *Bridge) StartRemerge(slaveName string) error {
@@ -374,8 +389,9 @@ func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group s
 	configureBridgeDataSocket(slaveConn)
 
 	// Tell slave to receive the file
+	minSpeed, maxSpeed := b.transferSpeedLimits(owner, group, filePath, "upload")
 	recvIdx, err := IssueReceive(slave, filePath, transferType, position, "master",
-		transferResp.Info.TransferIndex, 0, 0)
+		transferResp.Info.TransferIndex, minSpeed, maxSpeed)
 	if err != nil {
 		slaveConn.Close()
 		return 0, 0, fmt.Errorf("issue receive: %w", err)
@@ -456,7 +472,7 @@ func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group s
 //  3. Connect from master to slave's data port
 //  4. Tell slave to SEND the file
 //  5. Bridge data: read from slave, write to clientData
-func (b *Bridge) DownloadFile(filePath string, clientData net.Conn, position int64, transferType byte) (uint32, error) {
+func (b *Bridge) DownloadFile(filePath string, clientData net.Conn, username, primaryGroup string, position int64, transferType byte) (uint32, error) {
 	slave := b.sm.SelectSlaveForDownload(filePath)
 	if slave == nil {
 		return 0, fmt.Errorf("file not found on any available slave: %s", filePath)
@@ -488,8 +504,9 @@ func (b *Bridge) DownloadFile(filePath string, clientData net.Conn, position int
 	configureBridgeDataSocket(slaveConn)
 
 	// Tell slave to send the file
+	minSpeed, maxSpeed := b.transferSpeedLimits(username, primaryGroup, filePath, "download")
 	sendIdx, err := IssueSend(slave, filePath, transferType, position, "master",
-		transferResp.Info.TransferIndex, 0, 0)
+		transferResp.Info.TransferIndex, minSpeed, maxSpeed)
 	if err != nil {
 		slaveConn.Close()
 		return 0, fmt.Errorf("issue send: %w", err)
@@ -1943,7 +1960,8 @@ func (b *Bridge) SlaveReceivePassthrough(filePath string, transferIdx int32, sla
 	slave.IncActiveTransfers()
 	defer slave.DecActiveTransfers()
 
-	recvIdx, err := IssueReceive(slave, filePath, transferType, position, "master", transferIdx, 0, 0)
+	minSpeed, maxSpeed := b.transferSpeedLimits(owner, group, filePath, "upload")
+	recvIdx, err := IssueReceive(slave, filePath, transferType, position, "master", transferIdx, minSpeed, maxSpeed)
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("issue receive: %w", err)
 	}
@@ -1993,13 +2011,14 @@ func (b *Bridge) SlaveReceivePassthrough(filePath string, transferIdx int32, sla
 }
 
 // SlaveSendPassthrough tells a slave to send a file (client already connected directly).
-func (b *Bridge) SlaveSendPassthrough(filePath string, transferIdx int32, slaveName string, position int64, transferType byte) (uint32, int64, error) {
+func (b *Bridge) SlaveSendPassthrough(filePath string, transferIdx int32, slaveName string, username, primaryGroup string, position int64, transferType byte) (uint32, int64, error) {
 	slave := b.sm.GetSlave(slaveName)
 	if slave == nil {
 		return 0, 0, fmt.Errorf("slave %s not found", slaveName)
 	}
 
-	sendIdx, err := IssueSend(slave, filePath, transferType, position, "master", transferIdx, 0, 0)
+	minSpeed, maxSpeed := b.transferSpeedLimits(username, primaryGroup, filePath, "download")
+	sendIdx, err := IssueSend(slave, filePath, transferType, position, "master", transferIdx, minSpeed, maxSpeed)
 	if err != nil {
 		return 0, 0, fmt.Errorf("issue send: %w", err)
 	}
@@ -2068,8 +2087,9 @@ func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group strin
 	}
 
 	// Tell slave to receive the file on this connection
+	minSpeed, maxSpeed := b.transferSpeedLimits(owner, group, filePath, "upload")
 	recvIdx, err := IssueReceive(slave, filePath, transferType, position, remoteAddr,
-		transferResp.Info.TransferIndex, 0, 0)
+		transferResp.Info.TransferIndex, minSpeed, maxSpeed)
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("issue receive: %w", err)
 	}
@@ -2119,7 +2139,7 @@ func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group strin
 
 // SlaveConnectAndSend tells the owning slave to connect out to a remote address (PORT mode passthrough)
 // and send a file directly. The master only orchestrates the control flow.
-func (b *Bridge) SlaveConnectAndSend(filePath, remoteAddr string, position int64, encrypted bool, sslClientMode bool, transferType byte) (uint32, int64, error) {
+func (b *Bridge) SlaveConnectAndSend(filePath, remoteAddr, username, primaryGroup string, position int64, encrypted bool, sslClientMode bool, transferType byte) (uint32, int64, error) {
 	slave := b.sm.SelectSlaveForDownload(filePath)
 	if slave == nil {
 		return 0, 0, fmt.Errorf("file not found on any available slave: %s", filePath)
@@ -2153,7 +2173,8 @@ func (b *Bridge) SlaveConnectAndSend(filePath, remoteAddr string, position int64
 		return 0, 0, fmt.Errorf("unexpected response from slave")
 	}
 
-	sendIdx, err := IssueSend(slave, filePath, transferType, position, remoteAddr, transferResp.Info.TransferIndex, 0, 0)
+	minSpeed, maxSpeed := b.transferSpeedLimits(username, primaryGroup, filePath, "download")
+	sendIdx, err := IssueSend(slave, filePath, transferType, position, remoteAddr, transferResp.Info.TransferIndex, minSpeed, maxSpeed)
 	if err != nil {
 		IssueAbort(slave, transferResp.Info.TransferIndex, "download send setup failed")
 		return 0, 0, fmt.Errorf("issue send: %w", err)

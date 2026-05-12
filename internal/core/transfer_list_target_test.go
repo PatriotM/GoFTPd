@@ -1,8 +1,10 @@
 package core
 
 import (
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"goftpd/internal/acl"
@@ -133,5 +135,51 @@ func TestValidateListTargetExistsHonorsPrivpathForFiles(t *testing.T) {
 
 	if err := s.validateListTargetExists("/PRIVATE/secret.txt", nil); err == nil {
 		t.Fatal("validateListTargetExists should hide files below privpath targets")
+	}
+}
+
+func TestCDUPHonorsPrivpath(t *testing.T) {
+	server, client := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	done := make(chan string, 1)
+	go func() {
+		buf := make([]byte, 512)
+		n, _ := client.Read(buf)
+		done <- string(buf[:n])
+	}()
+
+	s := &Session{
+		Conn:       server,
+		CurrentDir: "/PRIVATE/release",
+		User: &user.User{
+			Name:         "regular",
+			Flags:        "3",
+			PrimaryGroup: "USERS",
+			Groups:       map[string]int{"USERS": 0},
+		},
+		Config: &Config{
+			ACLBasePath: "/",
+		},
+		ACLEngine: &acl.Engine{RulesByType: map[string][]acl.Rule{
+			"list": {
+				{Type: "list", Path: "/*", Requirement: &acl.Requirement{Anyone: true}},
+			},
+			"privpath": {
+				{Type: "privpath", Path: "/PRIVATE", Requirement: &acl.Requirement{Nobody: true}},
+			},
+		}},
+	}
+
+	if quit := s.processCommand("CDUP", nil, nil); quit {
+		t.Fatal("CDUP should not terminate the session")
+	}
+	if s.CurrentDir != "/PRIVATE/release" {
+		t.Fatalf("expected CurrentDir to stay put, got %q", s.CurrentDir)
+	}
+	resp := <-done
+	if !strings.Contains(resp, "550 /PRIVATE: no such file or directory") {
+		t.Fatalf("expected privpath denial response, got %q", resp)
 	}
 }

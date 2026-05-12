@@ -22,7 +22,7 @@ type MasterBridge interface {
 	// DownloadFile routes a download from a slave to the FTP client data connection.
 	// The bridge finds which slave has the file, tells it to send, then bridges data.
 	// For full-file RETR, it returns the streamed CRC32 checksum when available.
-	DownloadFile(filePath string, clientData net.Conn, position int64, transferType byte) (uint32, error)
+	DownloadFile(filePath string, clientData net.Conn, username, primaryGroup string, position int64, transferType byte) (uint32, error)
 
 	// DeleteFile deletes a file on all slaves and from the VFS.
 	DeleteFile(filePath string) error
@@ -166,7 +166,7 @@ type MasterBridge interface {
 	SlaveConnectAndReceive(filePath, remoteAddr, owner, group string, position int64, encrypted bool, sslClientMode bool, transferType byte) (int64, uint32, int64, error)
 
 	// Passthrough PORT: tell the owning slave to connect out to remote address and send file.
-	SlaveConnectAndSend(filePath, remoteAddr string, position int64, encrypted bool, sslClientMode bool, transferType byte) (uint32, int64, error)
+	SlaveConnectAndSend(filePath, remoteAddr, username, primaryGroup string, position int64, encrypted bool, sslClientMode bool, transferType byte) (uint32, int64, error)
 
 	// Passthrough: ask a slave to listen and return its IP:port + transfer index.
 	// sslClientMode selects the TLS role for secure FXP passive sockets.
@@ -180,7 +180,7 @@ type MasterBridge interface {
 	SlaveReceivePassthrough(filePath string, transferIdx int32, slaveName string, owner, group string, position int64, transferType byte) (int64, uint32, int64, error)
 
 	// Passthrough: tell slave to send a file, wait for completion.
-	SlaveSendPassthrough(filePath string, transferIdx int32, slaveName string, position int64, transferType byte) (checksum uint32, elapsedMs int64, err error)
+	SlaveSendPassthrough(filePath string, transferIdx int32, slaveName string, username, primaryGroup string, position int64, transferType byte) (checksum uint32, elapsedMs int64, err error)
 }
 
 // MasterFileEntry is a file/dir entry returned by MasterBridge.ListDir.

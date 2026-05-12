@@ -140,6 +140,18 @@ type LoginValidator interface {
 	ValidateLogin(u *user.User, remoteIP string) error
 }
 
+type TransferSpeedPolicyProvider interface {
+	TransferSpeedPolicy(username, primaryGroup, transferPath, direction string) (minSpeedBytes int64, maxSpeedBytes int64, ok bool)
+}
+
+type SlowTransferHandler interface {
+	HandleSlowTransfer(username, primaryGroup, transferPath, direction, slaveName string, transferIndex int32, actualSpeedBytes, minSpeedBytes int64)
+}
+
+type ConfigReloader interface {
+	ReloadConfig(config map[string]interface{}) error
+}
+
 type RaceUser struct {
 	Name    string
 	Group   string

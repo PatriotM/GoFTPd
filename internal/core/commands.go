@@ -607,7 +607,12 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		fmt.Fprintf(s.Conn, "250 Directory changed to %s\r\n", s.CurrentDir)
 
 	case "CDUP":
-		s.CurrentDir = path.Clean(path.Join(s.CurrentDir, ".."))
+		targetPath := path.Clean(path.Join(s.CurrentDir, ".."))
+		if !s.canListPath(targetPath) {
+			fmt.Fprintf(s.Conn, "550 %s: no such file or directory\r\n", targetPath)
+			return false
+		}
+		s.CurrentDir = targetPath
 		fmt.Fprintf(s.Conn, "250 Directory changed to %s\r\n", s.CurrentDir)
 
 	case "MKD":
@@ -1010,6 +1015,10 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					name := path.Base(target)
 					for _, e := range bridge.ListDir(parent) {
 						if e.Name == name {
+							aclPath := path.Join(s.Config.ACLBasePath, parent, e.Name)
+							if !s.ACLEngine.CanPerform(s.User, "LIST", aclPath) {
+								break
+							}
 							ts := timeutil.FTPMachineUnix(e.ModTime)
 							var parts []string
 							if e.IsSymlink {
@@ -1664,6 +1673,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						return false
 					}
 					log.Printf("[Passthrough] PORT upload failed for user %s path %s: %s", s.User.Name, filePath, formatTransferFailureLog(err))
+					maybeHandleSlowTransfer(s, "upload", filePath, "", 0, err)
 					writeTransferFailure(s.Conn, "Upload", err)
 					return false
 				}
@@ -1768,6 +1778,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 							return false
 						}
 						log.Printf("[Passthrough] Upload failed for user %s path %s: %s", s.User.Name, filePath, formatTransferFailureLog(err))
+						maybeHandleSlowTransfer(s, "upload", filePath, slaveName, s.PassthruXferIdx, err)
 						writeTransferFailure(s.Conn, "Upload", err)
 						return false
 					}
@@ -1789,6 +1800,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 
 					if err != nil {
 						log.Printf("[MASTER] Upload failed: %v", err)
+						maybeHandleSlowTransfer(s, "upload", filePath, "", 0, err)
 						writeTransferFailure(s.Conn, "Upload", err)
 						return false
 					}
@@ -2107,9 +2119,10 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					s.beginTransfer("download", filePath)
 					defer s.endTransfer()
 
-					transferChecksum, xferMs, err := bridge.SlaveConnectAndSend(filePath, portAddr, restOffset, s.DataTLS, s.SSCN, s.currentTransferTypeByte())
+					transferChecksum, xferMs, err := bridge.SlaveConnectAndSend(filePath, portAddr, s.User.Name, s.User.PrimaryGroup, restOffset, s.DataTLS, s.SSCN, s.currentTransferTypeByte())
 					if err != nil {
 						log.Printf("[Passthrough] PORT download failed for user %s path %s: %s", s.User.Name, filePath, formatTransferFailureLog(err))
+						maybeHandleSlowTransfer(s, "download", filePath, "", 0, err)
 						writeTransferFailure(s.Conn, "Download", err)
 						return false
 					}
@@ -2135,7 +2148,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					defer s.endTransfer()
 
 					start := time.Now()
-					transferChecksum, xferMs, err := bridge.SlaveSendPassthrough(filePath, s.PassthruXferIdx, slaveName, restOffset, s.currentTransferTypeByte())
+					transferChecksum, xferMs, err := bridge.SlaveSendPassthrough(filePath, s.PassthruXferIdx, slaveName, s.User.Name, s.User.PrimaryGroup, restOffset, s.currentTransferTypeByte())
 					if xferMs == 0 {
 						xferMs = time.Since(start).Milliseconds()
 					}
@@ -2145,6 +2158,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 
 					if err != nil {
 						log.Printf("[Passthrough] Download failed for user %s path %s: %s", s.User.Name, filePath, formatTransferFailureLog(err))
+						maybeHandleSlowTransfer(s, "download", filePath, slaveName, s.PassthruXferIdx, err)
 						writeTransferFailure(s.Conn, "Download", err)
 					} else {
 						if restOffset == 0 && transferChecksum != 0 {
@@ -2174,13 +2188,14 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					defer s.endTransfer()
 					dataConn = trackTransferConn(s, dataConn, "download")
 					start := time.Now()
-					transferChecksum, err := bridge.DownloadFile(filePath, dataConn, restOffset, s.currentTransferTypeByte())
+					transferChecksum, err := bridge.DownloadFile(filePath, dataConn, s.User.Name, s.User.PrimaryGroup, restOffset, s.currentTransferTypeByte())
 					xferMs := time.Since(start).Milliseconds()
 					dataConn.Close()
 					s.PretCmd = ""
 					s.PretArg = ""
 					if err != nil {
 						log.Printf("[MASTER] Download failed: %v", err)
+						maybeHandleSlowTransfer(s, "download", filePath, "", 0, err)
 						writeTransferFailure(s.Conn, "Download", err)
 					} else {
 						if restOffset == 0 && transferChecksum != 0 {
@@ -2960,16 +2975,21 @@ func dirRaceStatusName(bridge MasterBridge, cfg *Config, dirPath, siteName strin
 	}
 	var statusEntries []string
 	totalBytes, present, total := dirRaceProgress(bridge, cfg, dirPath)
+	extra := listStatusAudioExtra(bridge, cfg, dirPath)
 	if total > 0 {
 		totalMB := float64(totalBytes) / (1024 * 1024)
 		if present >= total {
-			statusEntries = append(statusEntries, fmt.Sprintf("[%s] - ( %.0fM %dF - COMPLETE ) - [%s]", siteName, totalMB, total, siteName))
+			if extra != "" {
+				statusEntries = append(statusEntries, fmt.Sprintf("[%s] - ( %.0fM %dF - COMPLETE - %s ) - [%s]", siteName, totalMB, total, extra, siteName))
+				extra = ""
+			} else {
+				statusEntries = append(statusEntries, fmt.Sprintf("[%s] - ( %.0fM %dF - COMPLETE ) - [%s]", siteName, totalMB, total, siteName))
+			}
 		} else {
 			pct := (present * 100) / total
 			statusEntries = append(statusEntries, fmt.Sprintf("%s - %3d%% Complete - [%s]", progressBar(present, total, 20), pct, siteName))
 		}
 	}
-	extra := listStatusAudioExtra(bridge, cfg, dirPath)
 	if extra != "" {
 		statusEntries = append(statusEntries, extra)
 	}
