@@ -532,9 +532,12 @@ zipscript:
 
   media:
     enabled: true               # enable built-in sample/video probing
-    sections: ["TV", "X264-HD-1080P", "X264-HD-720P", "X264-SD", "X265", "BLURAY"]
+    # Match against the logical section name from the release path.
+    # For nested FOREIGN/PRE/ARCHiVE paths use the child section name, e.g.
+    # TV-NO or X265-FOREIGN instead of FOREIGN/TV-NO.
+    sections: ["BLURAY", "DVDR", "TV-1080P", "TV-720P", "TV-BLURAY", "X264-HD-1080P", "X264-HD-720P", "X264-SD", "X265", "TV-NO", "X265-FOREIGN"]
     sample_only: true           # only probe files under Sample/Samples or *.sample.*
-    video_extensions: ["mkv", "mp4", "avi", "m2ts"]
+    video_extensions: ["mkv", "mp4", "avi", "m2ts", "ts"]
 
 plugins:
   # `enabled` here controls whether the daemon loads the plugin at all.

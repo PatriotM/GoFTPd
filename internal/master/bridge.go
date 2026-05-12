@@ -26,6 +26,7 @@ import (
 type Bridge struct {
 	sm     *SlaveManager
 	raceDB *RaceDB
+	nukeDB *core.NukeHistoryDB
 
 	cacheMu                sync.Mutex
 	readFileCache          map[string]cachedReadFileResult
@@ -62,6 +63,12 @@ func NewBridge(sm *SlaveManager) *Bridge {
 	b := &Bridge{
 		sm:            sm,
 		readFileCache: make(map[string]cachedReadFileResult),
+	}
+	ndb, err := core.GetNukeHistoryDB(false)
+	if err != nil {
+		log.Printf("[Bridge] Nuke DB disabled: %v", err)
+	} else {
+		b.nukeDB = ndb
 	}
 	rdb, err := NewRaceDB("userdata/race.db")
 	if err != nil {
@@ -299,7 +306,7 @@ var _ plugin.MasterBridge = (*Bridge)(nil)
 // ListDir returns directory entries from the master's VFS.
 func (b *Bridge) ListDir(dirPath string) []core.MasterFileEntry {
 	vfsFiles := b.sm.GetVFS().ListDirectory(dirPath)
-	entries := make([]core.MasterFileEntry, 0, len(vfsFiles))
+	entries := make([]core.MasterFileEntry, 0, len(vfsFiles)+3)
 	for _, f := range vfsFiles {
 		entries = append(entries, core.MasterFileEntry{
 			Name:       filepath.Base(f.Path),
@@ -315,7 +322,96 @@ func (b *Bridge) ListDir(dirPath string) []core.MasterFileEntry {
 			XferTime:   f.XferTime,
 		})
 	}
+	entries = append(entries, b.virtualNukeEntries(dirPath)...)
+	sort.SliceStable(entries, func(i, j int) bool {
+		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
+	})
 	return entries
+}
+
+func (b *Bridge) virtualNukeEntries(dirPath string) []core.MasterFileEntry {
+	if b == nil || b.nukeDB == nil {
+		return nil
+	}
+	cleanDirPath := path.Clean(dirPath)
+	if !strings.HasPrefix(strings.ToUpper(path.Base(cleanDirPath)), "[NUKED]-") {
+		return nil
+	}
+	entry, err := b.nukeDB.FindActiveByPath(cleanDirPath)
+	if err != nil || entry == nil {
+		return nil
+	}
+	return nukeVirtualEntriesFromHistory(entry)
+}
+
+func nukeVirtualEntriesFromHistory(entry *core.NukeHistoryEntry) []core.MasterFileEntry {
+	if entry == nil {
+		return nil
+	}
+	now := entry.NukedAt
+	if now <= 0 {
+		now = time.Now().Unix()
+	}
+	owner := strings.TrimSpace(entry.NukedBy)
+	if owner == "" {
+		owner = "goftpd"
+	}
+	group := "NUKED"
+	multiplier := entry.Multiplier
+	if multiplier <= 0 {
+		multiplier = 1
+	}
+	out := make([]core.MasterFileEntry, 0, 3)
+	if name := nukeVirtualEntryName("!NUKE", fmt.Sprintf("x%d", multiplier), entry.Reason); name != "" {
+		out = append(out, core.MasterFileEntry{
+			Name:    name,
+			IsDir:   true,
+			ModTime: now,
+			Owner:   owner,
+			Group:   group,
+		})
+	}
+	if nukees := strings.TrimSpace(entry.Nukees); nukees != "" {
+		if name := nukeVirtualEntryName("!NUKEES", nukees); name != "" {
+			out = append(out, core.MasterFileEntry{
+				Name:    name,
+				IsDir:   true,
+				ModTime: now,
+				Owner:   owner,
+				Group:   group,
+			})
+		}
+	}
+	if name := nukeVirtualEntryName("!NUKER", owner); name != "" {
+		out = append(out, core.MasterFileEntry{
+			Name:    name,
+			IsDir:   true,
+			ModTime: now,
+			Owner:   owner,
+			Group:   group,
+		})
+	}
+	return out
+}
+
+func nukeVirtualEntryName(parts ...string) string {
+	cleaned := make([]string, 0, len(parts))
+	replacer := strings.NewReplacer("/", "-", "\\", "-", ":", "-", "\x00", "", "\r", " ", "\n", " ")
+	for _, part := range parts {
+		part = strings.TrimSpace(replacer.Replace(part))
+		part = strings.Join(strings.Fields(part), " ")
+		if part != "" {
+			cleaned = append(cleaned, part)
+		}
+	}
+	if len(cleaned) == 0 {
+		return ""
+	}
+	name := strings.Join(cleaned, " - ")
+	if len(name) > 200 {
+		name = strings.TrimSpace(name[:200])
+	}
+	return name
 }
 
 func (b *Bridge) PluginListDir(dirPath string) []plugin.FileEntry {
