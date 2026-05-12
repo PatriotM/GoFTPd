@@ -1397,9 +1397,9 @@ func parseMP4SampleDescription(r io.ReadSeeker, start, end int64, handler string
 	case "text", "sbtl", "subt", "clcp":
 		return normalizeSubtitleCodec(entryType), 0, 0, 0, nil
 	case "vide":
-		if 8+28 <= len(buf) {
-			width = int(binary.BigEndian.Uint16(buf[32:34]))
-			height = int(binary.BigEndian.Uint16(buf[34:36]))
+		if 8+36 <= len(buf) {
+			width = int(binary.BigEndian.Uint16(buf[40:42]))
+			height = int(binary.BigEndian.Uint16(buf[42:44]))
 		}
 	}
 	return entryType, channels, width, height, nil

@@ -15,10 +15,10 @@ func TestParseMP4SampleDescriptionReturnsVisualDimensions(t *testing.T) {
 	buf[10] = byte(entrySize >> 8)
 	buf[11] = byte(entrySize)
 	copy(buf[12:16], []byte("avc1"))
-	buf[32] = 0x07
-	buf[33] = 0x80
-	buf[34] = 0x04
-	buf[35] = 0x38
+	buf[40] = 0x07
+	buf[41] = 0x80
+	buf[42] = 0x04
+	buf[43] = 0x38
 
 	codec, channels, width, height, err := parseMP4SampleDescription(newReadSeeker(buf), 0, int64(len(buf)), "vide")
 	if err != nil {
