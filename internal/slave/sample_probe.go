@@ -1,6 +1,7 @@
 package slave
 
 import (
+	"bufio"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -22,9 +23,674 @@ func probeFastVideoMetadata(fullPath string) (map[string]string, bool, error) {
 	case "mkv":
 		fields, err := probeMKVMetadata(fullPath)
 		return fields, true, err
+	case "m2ts", "ts":
+		fields, err := probeTSMetadata(fullPath)
+		return fields, true, err
 	default:
 		return nil, false, nil
 	}
+}
+
+func probeTSMetadata(fullPath string) (map[string]string, error) {
+	f, err := os.Open(fullPath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	packetSize, prefix, err := detectTSPacketLayout(f)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+
+	state := tsProbeState{
+		packetSize: packetSize,
+		prefixSize: prefix,
+		pmtPID:     -1,
+		streams:    map[uint16]*tsStreamInfo{},
+	}
+	reader := bufio.NewReaderSize(f, packetSize*8)
+	packet := make([]byte, packetSize)
+	for {
+		_, err := io.ReadFull(reader, packet)
+		if err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				break
+			}
+			return nil, err
+		}
+		if err := parseTSPacket(packet[prefix:], &state); err != nil {
+			continue
+		}
+	}
+
+	fields := map[string]string{}
+	video := state.bestStream(tsKindVideo)
+	audio := state.bestStream(tsKindAudio)
+	subs := state.bestStream(tsKindSubtitle)
+	if video != nil {
+		if video.codec != "" {
+			fields["video_format"] = normalizeVideoCodec(video.codec)
+		}
+		if video.width > 0 {
+			fields["width"] = strconv.Itoa(video.width)
+		}
+		if video.height > 0 {
+			fields["height"] = strconv.Itoa(video.height)
+		}
+	}
+	if audio != nil {
+		if audio.codec != "" {
+			fields["audio_format"] = normalizeAudioCodec(audio.codec)
+		}
+		if audio.channels > 0 {
+			fields["channels"] = strconv.Itoa(audio.channels)
+		}
+	}
+	if subs != nil && subs.codec != "" {
+		fields["subtitle_format"] = normalizeSubtitleCodec(subs.codec)
+	}
+	if duration := state.bestDurationSeconds(); duration > 0 {
+		fields["duration"] = formatFloatSeconds(duration)
+	}
+	if len(fields) == 0 {
+		return nil, fmt.Errorf("ts: no usable metadata")
+	}
+	deriveMediaInfoFields(fields)
+	return fields, nil
+}
+
+type tsStreamKind int
+
+const (
+	tsKindUnknown tsStreamKind = iota
+	tsKindVideo
+	tsKindAudio
+	tsKindSubtitle
+)
+
+type tsStreamInfo struct {
+	pid      uint16
+	kind     tsStreamKind
+	codec    string
+	channels int
+	firstPTS int64
+	lastPTS  int64
+	width    int
+	height   int
+}
+
+type tsProbeState struct {
+	packetSize int
+	prefixSize int
+	pmtPID     int
+	streams    map[uint16]*tsStreamInfo
+}
+
+func (s *tsProbeState) bestStream(kind tsStreamKind) *tsStreamInfo {
+	for _, stream := range s.streams {
+		if stream.kind == kind {
+			return stream
+		}
+	}
+	return nil
+}
+
+func (s *tsProbeState) bestDurationSeconds() float64 {
+	for _, stream := range s.streams {
+		if stream.kind == tsKindVideo && stream.firstPTS >= 0 && stream.lastPTS > stream.firstPTS {
+			return float64(stream.lastPTS-stream.firstPTS) / 90000.0
+		}
+	}
+	for _, stream := range s.streams {
+		if stream.firstPTS >= 0 && stream.lastPTS > stream.firstPTS {
+			return float64(stream.lastPTS-stream.firstPTS) / 90000.0
+		}
+	}
+	return 0
+}
+
+func detectTSPacketLayout(f *os.File) (int, int, error) {
+	sample := make([]byte, 192*8)
+	n, err := io.ReadFull(f, sample)
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		return 0, 0, err
+	}
+	sample = sample[:n]
+	layouts := []struct {
+		packet int
+		prefix int
+	}{
+		{192, 4},
+		{188, 0},
+	}
+	for _, layout := range layouts {
+		ok := true
+		if len(sample) < layout.packet*3 {
+			continue
+		}
+		for off := layout.prefix; off < len(sample); off += layout.packet {
+			if sample[off] != 0x47 {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			return layout.packet, layout.prefix, nil
+		}
+	}
+	return 0, 0, fmt.Errorf("ts: unsupported packet layout")
+}
+
+func parseTSPacket(pkt []byte, state *tsProbeState) error {
+	if len(pkt) < 188 || pkt[0] != 0x47 {
+		return fmt.Errorf("invalid ts packet")
+	}
+	payloadUnitStart := pkt[1]&0x40 != 0
+	pid := uint16(pkt[1]&0x1F)<<8 | uint16(pkt[2])
+	adaptationControl := (pkt[3] >> 4) & 0x3
+	if adaptationControl == 0 || adaptationControl == 2 {
+		return nil
+	}
+	offset := 4
+	if adaptationControl == 3 {
+		if len(pkt) <= offset {
+			return nil
+		}
+		adaptLen := int(pkt[offset])
+		offset += 1 + adaptLen
+	}
+	if offset >= len(pkt) {
+		return nil
+	}
+	payload := pkt[offset:]
+	switch {
+	case pid == 0:
+		if payloadUnitStart {
+			parsePAT(payload, state)
+		}
+	case state.pmtPID >= 0 && pid == uint16(state.pmtPID):
+		if payloadUnitStart {
+			parsePMT(payload, state)
+		}
+	default:
+		stream := state.streams[pid]
+		if stream == nil || stream.kind == tsKindUnknown {
+			return nil
+		}
+		parseTSPES(payload, payloadUnitStart, stream)
+	}
+	return nil
+}
+
+func parsePAT(payload []byte, state *tsProbeState) {
+	if len(payload) < 8 {
+		return
+	}
+	pointer := int(payload[0])
+	if 1+pointer+8 > len(payload) {
+		return
+	}
+	section := payload[1+pointer:]
+	if len(section) < 8 || section[0] != 0x00 {
+		return
+	}
+	sectionLen := int(binary.BigEndian.Uint16(section[1:3]) & 0x0FFF)
+	if sectionLen < 9 || 3+sectionLen > len(section) {
+		return
+	}
+	data := section[8 : 3+sectionLen-4]
+	for len(data) >= 4 {
+		programNum := binary.BigEndian.Uint16(data[0:2])
+		pid := int(binary.BigEndian.Uint16(data[2:4]) & 0x1FFF)
+		if programNum != 0 {
+			state.pmtPID = pid
+			return
+		}
+		data = data[4:]
+	}
+}
+
+func parsePMT(payload []byte, state *tsProbeState) {
+	if len(payload) < 12 {
+		return
+	}
+	pointer := int(payload[0])
+	if 1+pointer+12 > len(payload) {
+		return
+	}
+	section := payload[1+pointer:]
+	if len(section) < 12 || section[0] != 0x02 {
+		return
+	}
+	sectionLen := int(binary.BigEndian.Uint16(section[1:3]) & 0x0FFF)
+	if sectionLen < 13 || 3+sectionLen > len(section) {
+		return
+	}
+	progInfoLen := int(binary.BigEndian.Uint16(section[10:12]) & 0x0FFF)
+	data := section[12+progInfoLen : 3+sectionLen-4]
+	for len(data) >= 5 {
+		streamType := data[0]
+		pid := binary.BigEndian.Uint16(data[1:3]) & 0x1FFF
+		esInfoLen := int(binary.BigEndian.Uint16(data[3:5]) & 0x0FFF)
+		if 5+esInfoLen > len(data) {
+			return
+		}
+		kind, codec, channels := classifyTSStream(streamType, data[5:5+esInfoLen])
+		if kind != tsKindUnknown {
+			existing := state.streams[pid]
+			if existing == nil {
+				existing = &tsStreamInfo{pid: pid, firstPTS: -1, lastPTS: -1}
+				state.streams[pid] = existing
+			}
+			existing.kind = kind
+			if existing.codec == "" {
+				existing.codec = codec
+			}
+			if existing.channels == 0 {
+				existing.channels = channels
+			}
+		}
+		data = data[5+esInfoLen:]
+	}
+}
+
+func classifyTSStream(streamType byte, descriptors []byte) (tsStreamKind, string, int) {
+	switch streamType {
+	case 0x01, 0x02:
+		return tsKindVideo, "MPEG-2", 0
+	case 0x03, 0x04:
+		return tsKindAudio, "MP3", 2
+	case 0x0F, 0x11:
+		return tsKindAudio, "AAC", 2
+	case 0x1B:
+		return tsKindVideo, "AVC", 0
+	case 0x24:
+		return tsKindVideo, "HEVC", 0
+	case 0x80:
+		return tsKindAudio, "PCM", 2
+	case 0x81:
+		return tsKindAudio, "AC-3", 6
+	case 0x82:
+		return tsKindAudio, "DTS", 6
+	case 0x83:
+		return tsKindAudio, "TrueHD", 8
+	case 0x84:
+		return tsKindAudio, "E-AC-3", 6
+	case 0x85, 0x86:
+		return tsKindAudio, "DTS", 6
+	case 0x90:
+		return tsKindSubtitle, "PGS", 0
+	case 0x06:
+		return classifyPrivateTSDescriptors(descriptors)
+	default:
+		return tsKindUnknown, "", 0
+	}
+}
+
+func classifyPrivateTSDescriptors(descriptors []byte) (tsStreamKind, string, int) {
+	for len(descriptors) >= 2 {
+		tag := descriptors[0]
+		size := int(descriptors[1])
+		if 2+size > len(descriptors) {
+			break
+		}
+		body := descriptors[2 : 2+size]
+		switch tag {
+		case 0x6A:
+			return tsKindAudio, "AC-3", 6
+		case 0x7A:
+			return tsKindAudio, "E-AC-3", 6
+		case 0x7B:
+			return tsKindAudio, "DTS", 6
+		case 0x56, 0x59:
+			return tsKindSubtitle, "PGS", 0
+		}
+		if len(body) >= 4 {
+			reg := string(body[:4])
+			switch reg {
+			case "AC-3":
+				return tsKindAudio, "AC-3", 6
+			case "EAC3":
+				return tsKindAudio, "E-AC-3", 6
+			case "DTS1", "DTS2", "DTS3", "DTSH":
+				return tsKindAudio, "DTS", 6
+			case "HDMV":
+				return tsKindSubtitle, "PGS", 0
+			}
+		}
+		descriptors = descriptors[2+size:]
+	}
+	return tsKindUnknown, "", 0
+}
+
+func parseTSPES(payload []byte, payloadUnitStart bool, stream *tsStreamInfo) {
+	if len(payload) == 0 {
+		return
+	}
+	esPayload := payload
+	if payloadUnitStart && len(payload) >= 14 && payload[0] == 0x00 && payload[1] == 0x00 && payload[2] == 0x01 {
+		ptsDtsFlags := (payload[7] >> 6) & 0x3
+		headerDataLen := int(payload[8])
+		if ptsDtsFlags&0x2 != 0 && len(payload) >= 14 {
+			if pts := parsePESPTS(payload[9:14]); pts >= 0 {
+				if stream.firstPTS < 0 {
+					stream.firstPTS = pts
+				}
+				stream.lastPTS = pts
+			}
+		}
+		start := 9 + headerDataLen
+		if start < len(payload) {
+			esPayload = payload[start:]
+		}
+	}
+	if stream.kind == tsKindVideo && stream.width == 0 && strings.EqualFold(stream.codec, "AVC") {
+		if width, height, ok := findAVCSPSDimensions(esPayload); ok {
+			stream.width = width
+			stream.height = height
+		}
+	}
+}
+
+func parsePESPTS(b []byte) int64 {
+	if len(b) < 5 {
+		return -1
+	}
+	return (int64(b[0]>>1&0x07) << 30) |
+		(int64(binary.BigEndian.Uint16(b[1:3])>>1) << 15) |
+		int64(binary.BigEndian.Uint16(b[3:5])>>1)
+}
+
+func findAVCSPSDimensions(data []byte) (int, int, bool) {
+	for i := 0; i+5 < len(data); i++ {
+		startCodeLen := 0
+		if data[i] == 0x00 && data[i+1] == 0x00 && data[i+2] == 0x01 {
+			startCodeLen = 3
+		} else if i+4 < len(data) && data[i] == 0x00 && data[i+1] == 0x00 && data[i+2] == 0x00 && data[i+3] == 0x01 {
+			startCodeLen = 4
+		}
+		if startCodeLen == 0 {
+			continue
+		}
+		nalStart := i + startCodeLen
+		nalType := data[nalStart] & 0x1F
+		if nalType != 7 {
+			continue
+		}
+		nalEnd := len(data)
+		for j := nalStart + 1; j+3 < len(data); j++ {
+			if data[j] == 0x00 && data[j+1] == 0x00 && (data[j+2] == 0x01 || (j+3 < len(data) && data[j+2] == 0x00 && data[j+3] == 0x01)) {
+				nalEnd = j
+				break
+			}
+		}
+		rbsp := avcRBSP(data[nalStart+1 : nalEnd])
+		if width, height, ok := parseAVCSPS(rbsp); ok {
+			return width, height, true
+		}
+	}
+	return 0, 0, false
+}
+
+func avcRBSP(data []byte) []byte {
+	out := make([]byte, 0, len(data))
+	zeros := 0
+	for _, b := range data {
+		if zeros == 2 && b == 0x03 {
+			zeros = 0
+			continue
+		}
+		out = append(out, b)
+		if b == 0x00 {
+			zeros++
+		} else {
+			zeros = 0
+		}
+	}
+	return out
+}
+
+func parseAVCSPS(rbsp []byte) (int, int, bool) {
+	br := newBitReader(rbsp)
+	profileIDC, ok := br.readBits(8)
+	if !ok {
+		return 0, 0, false
+	}
+	if _, ok := br.readBits(8); !ok { // constraints + reserved
+		return 0, 0, false
+	}
+	if _, ok := br.readBits(8); !ok { // level_idc
+		return 0, 0, false
+	}
+	if _, ok := br.readUE(); !ok { // seq_parameter_set_id
+		return 0, 0, false
+	}
+	chromaFormatIDC := uint(1)
+	switch profileIDC {
+	case 100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135:
+		if chromaFormatIDC, ok = br.readUE(); !ok {
+			return 0, 0, false
+		}
+		if chromaFormatIDC == 3 {
+			if _, ok := br.readBits(1); !ok {
+				return 0, 0, false
+			}
+		}
+		if _, ok := br.readUE(); !ok { // bit_depth_luma_minus8
+			return 0, 0, false
+		}
+		if _, ok := br.readUE(); !ok { // bit_depth_chroma_minus8
+			return 0, 0, false
+		}
+		if _, ok := br.readBits(1); !ok { // qpprime_y_zero_transform_bypass_flag
+			return 0, 0, false
+		}
+		if seqScalingMatrixPresent, ok := br.readBits(1); !ok {
+			return 0, 0, false
+		} else if seqScalingMatrixPresent == 1 {
+			count := 8
+			if chromaFormatIDC == 3 {
+				count = 12
+			}
+			for i := 0; i < count; i++ {
+				present, ok := br.readBits(1)
+				if !ok {
+					return 0, 0, false
+				}
+				if present == 1 {
+					size := 16
+					if i >= 6 {
+						size = 64
+					}
+					if !skipScalingList(br, size) {
+						return 0, 0, false
+					}
+				}
+			}
+		}
+	}
+	if _, ok := br.readUE(); !ok { // log2_max_frame_num_minus4
+		return 0, 0, false
+	}
+	picOrderCntType, ok := br.readUE()
+	if !ok {
+		return 0, 0, false
+	}
+	if picOrderCntType == 0 {
+		if _, ok := br.readUE(); !ok {
+			return 0, 0, false
+		}
+	} else if picOrderCntType == 1 {
+		if _, ok := br.readBits(1); !ok {
+			return 0, 0, false
+		}
+		if _, ok := br.readSE(); !ok {
+			return 0, 0, false
+		}
+		if _, ok := br.readSE(); !ok {
+			return 0, 0, false
+		}
+		numRefFramesInPicOrderCntCycle, ok := br.readUE()
+		if !ok {
+			return 0, 0, false
+		}
+		for i := uint(0); i < numRefFramesInPicOrderCntCycle; i++ {
+			if _, ok := br.readSE(); !ok {
+				return 0, 0, false
+			}
+		}
+	}
+	if _, ok := br.readUE(); !ok { // max_num_ref_frames
+		return 0, 0, false
+	}
+	if _, ok := br.readBits(1); !ok { // gaps_in_frame_num_value_allowed_flag
+		return 0, 0, false
+	}
+	picWidthInMbsMinus1, ok := br.readUE()
+	if !ok {
+		return 0, 0, false
+	}
+	picHeightInMapUnitsMinus1, ok := br.readUE()
+	if !ok {
+		return 0, 0, false
+	}
+	frameMbsOnlyFlag, ok := br.readBits(1)
+	if !ok {
+		return 0, 0, false
+	}
+	if frameMbsOnlyFlag == 0 {
+		if _, ok := br.readBits(1); !ok {
+			return 0, 0, false
+		}
+	}
+	if _, ok := br.readBits(1); !ok { // direct_8x8_inference_flag
+		return 0, 0, false
+	}
+	frameCropLeft, frameCropRight, frameCropTop, frameCropBottom := uint(0), uint(0), uint(0), uint(0)
+	frameCroppingFlag, ok := br.readBits(1)
+	if !ok {
+		return 0, 0, false
+	}
+	if frameCroppingFlag == 1 {
+		if frameCropLeft, ok = br.readUE(); !ok {
+			return 0, 0, false
+		}
+		if frameCropRight, ok = br.readUE(); !ok {
+			return 0, 0, false
+		}
+		if frameCropTop, ok = br.readUE(); !ok {
+			return 0, 0, false
+		}
+		if frameCropBottom, ok = br.readUE(); !ok {
+			return 0, 0, false
+		}
+	}
+
+	width := int((picWidthInMbsMinus1 + 1) * 16)
+	height := int((picHeightInMapUnitsMinus1 + 1) * 16)
+	if frameMbsOnlyFlag == 0 {
+		height *= 2
+	}
+	cropUnitX, cropUnitY := 1, 2
+	switch chromaFormatIDC {
+	case 0:
+		cropUnitX = 1
+		cropUnitY = 2 - int(frameMbsOnlyFlag)
+	case 1:
+		cropUnitX = 2
+		cropUnitY = 2 * (2 - int(frameMbsOnlyFlag))
+	case 2:
+		cropUnitX = 2
+		cropUnitY = 2 - int(frameMbsOnlyFlag)
+	case 3:
+		cropUnitX = 1
+		cropUnitY = 2 - int(frameMbsOnlyFlag)
+	}
+	width -= int(frameCropLeft+frameCropRight) * cropUnitX
+	height -= int(frameCropTop+frameCropBottom) * cropUnitY
+	if width <= 0 || height <= 0 {
+		return 0, 0, false
+	}
+	return width, height, true
+}
+
+type bitReader struct {
+	data []byte
+	pos  int
+}
+
+func newBitReader(data []byte) *bitReader {
+	return &bitReader{data: data}
+}
+
+func (b *bitReader) readBits(n int) (uint, bool) {
+	if n <= 0 || b.pos+n > len(b.data)*8 {
+		return 0, false
+	}
+	var out uint
+	for i := 0; i < n; i++ {
+		byteIdx := (b.pos + i) / 8
+		bitIdx := 7 - ((b.pos + i) % 8)
+		out = (out << 1) | uint((b.data[byteIdx]>>bitIdx)&1)
+	}
+	b.pos += n
+	return out, true
+}
+
+func (b *bitReader) readUE() (uint, bool) {
+	zeros := 0
+	for {
+		bit, ok := b.readBits(1)
+		if !ok {
+			return 0, false
+		}
+		if bit == 1 {
+			break
+		}
+		zeros++
+	}
+	if zeros == 0 {
+		return 0, true
+	}
+	value, ok := b.readBits(zeros)
+	if !ok {
+		return 0, false
+	}
+	return (1 << zeros) - 1 + value, true
+}
+
+func (b *bitReader) readSE() (int, bool) {
+	v, ok := b.readUE()
+	if !ok {
+		return 0, false
+	}
+	n := int(v)
+	if n%2 == 0 {
+		return -(n / 2), true
+	}
+	return (n + 1) / 2, true
+}
+
+func skipScalingList(br *bitReader, size int) bool {
+	lastScale := 8
+	nextScale := 8
+	for i := 0; i < size; i++ {
+		if nextScale != 0 {
+			deltaScale, ok := br.readSE()
+			if !ok {
+				return false
+			}
+			nextScale = (lastScale + deltaScale + 256) % 256
+		}
+		if nextScale != 0 {
+			lastScale = nextScale
+		}
+	}
+	return true
 }
 
 func probeAVIMetadata(fullPath string) (map[string]string, error) {
