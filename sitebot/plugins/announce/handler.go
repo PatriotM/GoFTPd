@@ -895,10 +895,14 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 	case event.EventSlowUploadKick:
 		message := strings.TrimSpace(vars["message"])
 		if message == "" {
-			message = fmt.Sprintf("%s/%s was kicked for slow upload %s at %sKB/s in %s (floor %sKB/s).",
-				vars["username"], vars["group"], vars["filename"], vars["speed_kbps"], vars["path"], vars["min_speed_kbps"])
+			target := strings.TrimSpace(vars["relname"])
+			if target == "" {
+				target = strings.TrimSpace(vars["path"])
+			}
+			message = fmt.Sprintf("%s/%s slowup kick: %s @ %sKB/s (< %sKB/s) in %s.",
+				vars["username"], vars["group"], vars["filename"], vars["speed_kbps"], vars["min_speed_kbps"], target)
 			if secs := strings.TrimSpace(vars["tempban_seconds"]); secs != "" && secs != "0" {
-				message += fmt.Sprintf(" Tempbanned for %ss.", secs)
+				message += fmt.Sprintf(" Tempban %ss.", secs)
 			}
 		}
 		vars["message"] = message
@@ -914,10 +918,14 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 	case event.EventSlowDownloadKick:
 		message := strings.TrimSpace(vars["message"])
 		if message == "" {
-			message = fmt.Sprintf("%s/%s was kicked for slow download %s at %sKB/s from %s (floor %sKB/s).",
-				vars["username"], vars["group"], vars["filename"], vars["speed_kbps"], vars["path"], vars["min_speed_kbps"])
+			target := strings.TrimSpace(vars["relname"])
+			if target == "" {
+				target = strings.TrimSpace(vars["path"])
+			}
+			message = fmt.Sprintf("%s/%s slowdn kick: %s @ %sKB/s (< %sKB/s) from %s.",
+				vars["username"], vars["group"], vars["filename"], vars["speed_kbps"], vars["min_speed_kbps"], target)
 			if secs := strings.TrimSpace(vars["tempban_seconds"]); secs != "" && secs != "0" {
-				message += fmt.Sprintf(" Tempbanned for %ss.", secs)
+				message += fmt.Sprintf(" Tempban %ss.", secs)
 			}
 		}
 		vars["message"] = message
