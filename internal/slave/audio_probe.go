@@ -117,6 +117,7 @@ func probeMP3Metadata(fullPath string) (map[string]string, error) {
 	fields["audio_format"] = "MP3"
 	fields["bitrate"] = strconv.Itoa(firstBitrate)
 	fields["bitrate_mode"] = mode
+	fields["sample_rate"] = strconv.Itoa(sampleRate)
 	fields["sampling_rate"] = strconv.Itoa(sampleRate)
 	fields["samplerate"] = strconv.Itoa(sampleRate)
 	fields["channels"] = channels
@@ -373,6 +374,7 @@ func probeFLACMetadata(fullPath string) (map[string]string, error) {
 		durationSeconds = float64(totalSamples) / float64(sampleRate)
 	}
 	fields["sampling_rate"] = strconv.Itoa(int(sampleRate))
+	fields["sample_rate"] = strconv.Itoa(int(sampleRate))
 	fields["samplerate"] = strconv.Itoa(int(sampleRate))
 	fields["channels"] = strconv.Itoa(channels)
 	if durationSeconds > 0 {

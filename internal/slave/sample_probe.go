@@ -388,10 +388,23 @@ func parseTSPES(payload []byte, payloadUnitStart bool, stream *tsStreamInfo) {
 			esPayload = payload[start:]
 		}
 	}
-	if stream.kind == tsKindVideo && stream.width == 0 && strings.EqualFold(stream.codec, "AVC") {
-		if width, height, ok := findAVCSPSDimensions(esPayload); ok {
-			stream.width = width
-			stream.height = height
+	if stream.kind == tsKindVideo && stream.width == 0 {
+		switch {
+		case strings.EqualFold(stream.codec, "AVC"):
+			if width, height, ok := findAVCSPSDimensions(esPayload); ok {
+				stream.width = width
+				stream.height = height
+			}
+		case strings.EqualFold(stream.codec, "HEVC"):
+			if width, height, ok := findHEVCSPSDimensions(esPayload); ok {
+				stream.width = width
+				stream.height = height
+			}
+		case strings.EqualFold(stream.codec, "MPEG-2"):
+			if width, height, ok := findMPEG2SequenceDimensions(esPayload); ok {
+				stream.width = width
+				stream.height = height
+			}
 		}
 	}
 }
@@ -431,6 +444,50 @@ func findAVCSPSDimensions(data []byte) (int, int, bool) {
 		rbsp := avcRBSP(data[nalStart+1 : nalEnd])
 		if width, height, ok := parseAVCSPS(rbsp); ok {
 			return width, height, true
+		}
+	}
+	return 0, 0, false
+}
+
+func findHEVCSPSDimensions(data []byte) (int, int, bool) {
+	for i := 0; i+6 < len(data); i++ {
+		startCodeLen := 0
+		if data[i] == 0x00 && data[i+1] == 0x00 && data[i+2] == 0x01 {
+			startCodeLen = 3
+		} else if i+4 < len(data) && data[i] == 0x00 && data[i+1] == 0x00 && data[i+2] == 0x00 && data[i+3] == 0x01 {
+			startCodeLen = 4
+		}
+		if startCodeLen == 0 {
+			continue
+		}
+		nalStart := i + startCodeLen
+		nalType := (data[nalStart] >> 1) & 0x3F
+		if nalType != 33 {
+			continue
+		}
+		nalEnd := len(data)
+		for j := nalStart + 2; j+3 < len(data); j++ {
+			if data[j] == 0x00 && data[j+1] == 0x00 && (data[j+2] == 0x01 || (j+3 < len(data) && data[j+2] == 0x00 && data[j+3] == 0x01)) {
+				nalEnd = j
+				break
+			}
+		}
+		rbsp := avcRBSP(data[nalStart+2 : nalEnd])
+		if width, height, ok := parseHEVCSPS(rbsp); ok {
+			return width, height, true
+		}
+	}
+	return 0, 0, false
+}
+
+func findMPEG2SequenceDimensions(data []byte) (int, int, bool) {
+	for i := 0; i+7 < len(data); i++ {
+		if data[i] == 0x00 && data[i+1] == 0x00 && data[i+2] == 0x01 && data[i+3] == 0xB3 {
+			width := int(data[i+4])<<4 | int(data[i+5]>>4)
+			height := int(data[i+5]&0x0F)<<8 | int(data[i+6])
+			if width > 0 && height > 0 {
+				return width, height, true
+			}
 		}
 	}
 	return 0, 0, false
@@ -616,6 +673,156 @@ func parseAVCSPS(rbsp []byte) (int, int, bool) {
 		return 0, 0, false
 	}
 	return width, height, true
+}
+
+func parseHEVCSPS(rbsp []byte) (int, int, bool) {
+	br := newBitReader(rbsp)
+	if _, ok := br.readBits(4); !ok { // sps_video_parameter_set_id
+		return 0, 0, false
+	}
+	maxSubLayersMinus1, ok := br.readBits(3)
+	if !ok {
+		return 0, 0, false
+	}
+	if _, ok := br.readBits(1); !ok { // sps_temporal_id_nesting_flag
+		return 0, 0, false
+	}
+	if !skipHEVCProfileTierLevel(br, int(maxSubLayersMinus1)) {
+		return 0, 0, false
+	}
+	if _, ok := br.readUE(); !ok { // sps_seq_parameter_set_id
+		return 0, 0, false
+	}
+	chromaFormatIDC, ok := br.readUE()
+	if !ok {
+		return 0, 0, false
+	}
+	if chromaFormatIDC == 3 {
+		if _, ok := br.readBits(1); !ok { // separate_colour_plane_flag
+			return 0, 0, false
+		}
+	}
+	picWidth, ok := br.readUE()
+	if !ok {
+		return 0, 0, false
+	}
+	picHeight, ok := br.readUE()
+	if !ok {
+		return 0, 0, false
+	}
+	confWinFlag, ok := br.readBits(1)
+	if !ok {
+		return 0, 0, false
+	}
+	confLeft, confRight, confTop, confBottom := uint(0), uint(0), uint(0), uint(0)
+	if confWinFlag == 1 {
+		if confLeft, ok = br.readUE(); !ok {
+			return 0, 0, false
+		}
+		if confRight, ok = br.readUE(); !ok {
+			return 0, 0, false
+		}
+		if confTop, ok = br.readUE(); !ok {
+			return 0, 0, false
+		}
+		if confBottom, ok = br.readUE(); !ok {
+			return 0, 0, false
+		}
+	}
+	subWidthC, subHeightC := 1, 1
+	switch chromaFormatIDC {
+	case 1:
+		subWidthC = 2
+		subHeightC = 2
+	case 2:
+		subWidthC = 2
+		subHeightC = 1
+	case 3:
+		subWidthC = 1
+		subHeightC = 1
+	}
+	width := int(picWidth) - int(confLeft+confRight)*subWidthC
+	height := int(picHeight) - int(confTop+confBottom)*subHeightC
+	if width <= 0 || height <= 0 {
+		return 0, 0, false
+	}
+	return width, height, true
+}
+
+func skipHEVCProfileTierLevel(br *bitReader, maxSubLayersMinus1 int) bool {
+	if _, ok := br.readBits(2); !ok { // general_profile_space
+		return false
+	}
+	if _, ok := br.readBits(1); !ok { // general_tier_flag
+		return false
+	}
+	if _, ok := br.readBits(5); !ok { // general_profile_idc
+		return false
+	}
+	if _, ok := br.readBits(32); !ok { // general_profile_compatibility_flags
+		return false
+	}
+	if _, ok := br.readBits(16); !ok { // general_constraint_indicator_flags[47:32]
+		return false
+	}
+	if _, ok := br.readBits(16); !ok { // general_constraint_indicator_flags[31:16]
+		return false
+	}
+	if _, ok := br.readBits(16); !ok { // general_constraint_indicator_flags[15:0]
+		return false
+	}
+	if _, ok := br.readBits(8); !ok { // general_level_idc
+		return false
+	}
+	subLayerProfilePresent := make([]uint, maxSubLayersMinus1)
+	subLayerLevelPresent := make([]uint, maxSubLayersMinus1)
+	for i := 0; i < maxSubLayersMinus1; i++ {
+		var ok bool
+		if subLayerProfilePresent[i], ok = br.readBits(1); !ok {
+			return false
+		}
+		if subLayerLevelPresent[i], ok = br.readBits(1); !ok {
+			return false
+		}
+	}
+	if maxSubLayersMinus1 > 0 {
+		for i := maxSubLayersMinus1; i < 8; i++ {
+			if _, ok := br.readBits(2); !ok {
+				return false
+			}
+		}
+	}
+	for i := 0; i < maxSubLayersMinus1; i++ {
+		if subLayerProfilePresent[i] == 1 {
+			if _, ok := br.readBits(2); !ok {
+				return false
+			}
+			if _, ok := br.readBits(1); !ok {
+				return false
+			}
+			if _, ok := br.readBits(5); !ok {
+				return false
+			}
+			if _, ok := br.readBits(32); !ok {
+				return false
+			}
+			if _, ok := br.readBits(16); !ok {
+				return false
+			}
+			if _, ok := br.readBits(16); !ok {
+				return false
+			}
+			if _, ok := br.readBits(16); !ok {
+				return false
+			}
+		}
+		if subLayerLevelPresent[i] == 1 {
+			if _, ok := br.readBits(8); !ok {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 type bitReader struct {
@@ -1060,13 +1267,19 @@ func parseMP4Boxes(r io.ReadSeeker, start, end int64, state *mp4ProbeState, trac
 			}
 		case "stsd":
 			if track != nil {
-				codec, channels, err := parseMP4SampleDescription(r, payloadStart, payloadEnd, track.handler)
+				codec, channels, width, height, err := parseMP4SampleDescription(r, payloadStart, payloadEnd, track.handler)
 				if err == nil {
 					if codec != "" {
 						track.codec = codec
 					}
 					if channels > 0 {
 						track.channels = channels
+					}
+					if width > 0 && track.width == 0 {
+						track.width = width
+					}
+					if height > 0 && track.height == 0 {
+						track.height = height
 					}
 				}
 			}
@@ -1156,33 +1369,40 @@ func parseMP4Handler(r io.ReadSeeker, start, end int64) (string, error) {
 	return string(buf[8:12]), nil
 }
 
-func parseMP4SampleDescription(r io.ReadSeeker, start, end int64, handler string) (string, int, error) {
+func parseMP4SampleDescription(r io.ReadSeeker, start, end int64, handler string) (string, int, int, int, error) {
 	buf, err := readBoxPayload(r, start, end, int(end-start))
 	if err != nil {
-		return "", 0, err
+		return "", 0, 0, 0, err
 	}
 	if len(buf) < 16 {
-		return "", 0, fmt.Errorf("stsd: short")
+		return "", 0, 0, 0, fmt.Errorf("stsd: short")
 	}
 	entryCount := binary.BigEndian.Uint32(buf[4:8])
 	if entryCount == 0 {
-		return "", 0, fmt.Errorf("stsd: no entries")
+		return "", 0, 0, 0, fmt.Errorf("stsd: no entries")
 	}
 	entrySize := int(binary.BigEndian.Uint32(buf[8:12]))
 	if entrySize < 8 || 8+entrySize > len(buf) {
-		return "", 0, fmt.Errorf("stsd: invalid entry")
+		return "", 0, 0, 0, fmt.Errorf("stsd: invalid entry")
 	}
 	entryType := string(buf[12:16])
 	channels := 0
+	width := 0
+	height := 0
 	switch handler {
 	case "soun":
 		if 8+28 <= len(buf) {
 			channels = int(binary.BigEndian.Uint16(buf[32:34]))
 		}
 	case "text", "sbtl", "subt", "clcp":
-		return normalizeSubtitleCodec(entryType), 0, nil
+		return normalizeSubtitleCodec(entryType), 0, 0, 0, nil
+	case "vide":
+		if 8+28 <= len(buf) {
+			width = int(binary.BigEndian.Uint16(buf[32:34]))
+			height = int(binary.BigEndian.Uint16(buf[34:36]))
+		}
 	}
-	return entryType, channels, nil
+	return entryType, channels, width, height, nil
 }
 
 func readBoxPayload(r io.ReadSeeker, start, end int64, minLen int) ([]byte, error) {
@@ -1249,15 +1469,15 @@ func probeMKVMetadata(fullPath string) (map[string]string, error) {
 }
 
 type mkvProbeState struct {
-	timecodeScale  uint64
-	durationUnits  float64
+	timecodeScale   uint64
+	durationUnits   float64
 	durationSeconds float64
-	videoCodec     string
-	audioCodec     string
-	subtitleCodec  string
-	width          int
-	height         int
-	audioChannels  int
+	videoCodec      string
+	audioCodec      string
+	subtitleCodec   string
+	width           int
+	height          int
+	audioChannels   int
 }
 
 func parseMKVElements(r io.ReadSeeker, fileSize int64, state *mkvProbeState) error {

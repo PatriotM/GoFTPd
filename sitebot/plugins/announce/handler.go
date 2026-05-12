@@ -559,12 +559,12 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 		}
 		outs = append(outs, plugin.Output{Type: "NEWDAY", Text: p.render("NEWDAY", vars, fallback)})
 	case event.EventAudioInfo:
-		fallback := fmt.Sprintf("AUDIO-INFO: [%s] %s Get ready for some %s from %s at %sHz in %s %s (%s).",
-			section, rel, vars["genre"], vars["year"], vars["sample_rate"], vars["channels"], vars["bitrate"], vars["bitrate_mode"])
+		fallback := fmt.Sprintf("AUDIO-INFO: [%s] %s %s.",
+			section, rel, formatAudioInfoSummary(vars))
 		outs = append(outs, plugin.Output{Type: "AUDIOINFO", Text: p.render("AUDIOINFO", vars, fallback)})
 	case event.EventMediaInfo:
-		fallback := fmt.Sprintf("SAMPLE-INFO: [%s] %s - Video: %s %sx%s - Audio: %s %s - Subs: %s - Duration: %s",
-			section, rel, vars["video_format"], vars["width"], vars["height"], vars["audio_format"], vars["channels"], vars["subtitle_format"], vars["duration"])
+		fallback := fmt.Sprintf("SAMPLE-INFO: [%s] %s - Video: %s - Audio: %s - Subs: %s - Duration: %s",
+			section, rel, formatSampleVideoLabel(vars), formatSampleAudioLabel(vars), formatSampleSubtitleLabel(vars), formatSampleDurationLabel(vars))
 		outs = append(outs, plugin.Output{Type: "MEDIAINFO", Text: p.render("MEDIAINFO", vars, fallback)})
 	case event.EventSpeedtest:
 		nick := vars["nick"]
@@ -1036,6 +1036,80 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 		outs = append(outs, plugin.Output{Type: "OLDPRETIME", Text: p.render("OLDPRETIME", vars, fallback)})
 	}
 	return outs, nil
+}
+
+func formatAudioInfoSummary(vars map[string]string) string {
+	parts := []string{}
+	if genre := strings.TrimSpace(vars["genre"]); genre != "" {
+		parts = append(parts, "Get ready for some "+genre)
+	} else {
+		parts = append(parts, "Get ready for some audio")
+	}
+	if year := strings.TrimSpace(vars["year"]); year != "" {
+		parts = append(parts, "from "+year)
+	}
+	if sampleRate := strings.TrimSpace(vars["sample_rate"]); sampleRate != "" {
+		parts = append(parts, "at "+sampleRate+"Hz")
+	}
+	audioTail := []string{}
+	if channels := strings.TrimSpace(vars["channels"]); channels != "" {
+		audioTail = append(audioTail, channels)
+	}
+	if bitrate := strings.TrimSpace(vars["bitrate"]); bitrate != "" {
+		audioTail = append(audioTail, bitrate)
+	}
+	if mode := strings.TrimSpace(vars["bitrate_mode"]); mode != "" {
+		audioTail = append(audioTail, "("+mode+")")
+	}
+	if len(audioTail) > 0 {
+		parts = append(parts, "in "+strings.Join(audioTail, " "))
+	}
+	return strings.Join(parts, " ")
+}
+
+func formatSampleVideoLabel(vars map[string]string) string {
+	codec := strings.TrimSpace(vars["video_format"])
+	width := strings.TrimSpace(vars["width"])
+	height := strings.TrimSpace(vars["height"])
+	switch {
+	case codec != "" && width != "" && height != "":
+		return codec + " " + width + "x" + height
+	case codec != "":
+		return codec
+	case width != "" && height != "":
+		return width + "x" + height
+	default:
+		return "Unknown"
+	}
+}
+
+func formatSampleAudioLabel(vars map[string]string) string {
+	codec := strings.TrimSpace(vars["audio_format"])
+	channels := strings.TrimSpace(vars["channels"])
+	switch {
+	case codec != "" && channels != "":
+		return codec + " " + channels
+	case codec != "":
+		return codec
+	case channels != "":
+		return channels
+	default:
+		return "None"
+	}
+}
+
+func formatSampleSubtitleLabel(vars map[string]string) string {
+	if subs := strings.TrimSpace(vars["subtitle_format"]); subs != "" {
+		return subs
+	}
+	return "None"
+}
+
+func formatSampleDurationLabel(vars map[string]string) string {
+	if duration := strings.TrimSpace(vars["duration"]); duration != "" {
+		return duration
+	}
+	return "Unknown"
 }
 
 func isReleaseDir(eventPath, section string) bool {
