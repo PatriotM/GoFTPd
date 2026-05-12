@@ -1276,7 +1276,7 @@ type RaceUserStat struct {
 	Group      string
 	Files      int
 	Bytes      int64
-	Speed      float64 // bytes/sec average across this user's files
+	Speed      float64 // bytes/sec average of this user's per-file speeds (pzs-ng style)
 	PeakSpeed  float64 // bytes/sec of this user's fastest single file
 	SlowSpeed  float64 // bytes/sec of this user's slowest single file
 	Percent    int
@@ -1288,7 +1288,7 @@ type RaceGroupStat struct {
 	Name    string
 	Files   int
 	Bytes   int64
-	Speed   float64
+	Speed   float64 // bytes/sec average of this group's per-file speeds (pzs-ng style)
 	Percent int
 }
 
@@ -1534,8 +1534,8 @@ func (vfs *VirtualFileSystem) computeRaceStateFilteredLocked(dirPath string, exc
 		if cache.Total > 0 {
 			us.Percent = (us.Files * 100) / cache.Total
 		}
-		if us.DurationMs > 0 {
-			us.Speed = float64(us.Bytes) / (float64(us.DurationMs) / 1000.0)
+		if us.Files > 0 {
+			us.Speed = us.Speed / float64(us.Files)
 		}
 		cache.Users = append(cache.Users, *us)
 	}
@@ -1554,10 +1554,14 @@ func (vfs *VirtualFileSystem) computeRaceStateFilteredLocked(dirPath string, exc
 		if cache.Total > 0 {
 			gs.Percent = (gs.Files * 100) / cache.Total
 		}
-		for _, us := range cache.Users {
-			if us.Group == gs.Name {
-				gs.Speed += us.Speed
+		if gs.Files > 0 {
+			for _, us := range cache.Users {
+				if us.Group != gs.Name {
+					continue
+				}
+				gs.Speed += us.Speed * float64(us.Files)
 			}
+			gs.Speed = gs.Speed / float64(gs.Files)
 		}
 		cache.Groups = append(cache.Groups, *gs)
 	}
