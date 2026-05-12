@@ -759,11 +759,13 @@ func (vfs *VirtualFileSystem) HydrateRaceFile(path, owner, group string, xferTim
 		return false
 	}
 	changed := false
-	if strings.TrimSpace(file.Owner) == "" && strings.TrimSpace(owner) != "" {
+	currentOwner := strings.TrimSpace(file.Owner)
+	currentGroup := strings.TrimSpace(file.Group)
+	if (currentOwner == "" || strings.EqualFold(currentOwner, "GoFTPd") || strings.EqualFold(currentOwner, "ftp")) && strings.TrimSpace(owner) != "" {
 		file.Owner = owner
 		changed = true
 	}
-	if strings.TrimSpace(file.Group) == "" && strings.TrimSpace(group) != "" {
+	if (currentGroup == "" || strings.EqualFold(currentGroup, "GoFTPd") || strings.EqualFold(currentGroup, "ftp")) && strings.TrimSpace(group) != "" {
 		file.Group = group
 		changed = true
 	}
