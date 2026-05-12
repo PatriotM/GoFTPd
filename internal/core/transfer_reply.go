@@ -30,6 +30,8 @@ func describeTransferFailure(err error) string {
 	lower := strings.ToLower(raw)
 
 	switch {
+	case strings.Contains(lower, "transfer was aborted -"):
+		return "transfer was aborted because the live transfer speed stayed below the configured minimum"
 	case strings.Contains(lower, "tls server handshake failed") && strings.Contains(lower, "i/o timeout"):
 		return "remote peer accepted the data connection but did not finish the TLS handshake in time"
 	case strings.Contains(lower, "tls client handshake failed") && strings.Contains(lower, "i/o timeout"):
@@ -56,6 +58,10 @@ func describeTransferFailure(err error) string {
 		return "slave acknowledged setup but reported the source file missing before transfer start"
 	case strings.Contains(lower, "send ack:") && strings.Contains(lower, "file not found:"):
 		return "slave acknowledged setup but reported the download source missing before transfer start"
+	case strings.Contains(lower, "file not found: file not found:"):
+		return "slave reported the requested source file missing during transfer setup"
+	case strings.Contains(lower, "file not found:"):
+		return "requested source file was not available on the selected slave"
 	default:
 		return "transfer failed for an unclassified reason"
 	}

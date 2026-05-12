@@ -1259,6 +1259,10 @@ func (s *Slave) handleMediaInfo(ac *protocol.AsyncCommand) interface{} {
 		if err != nil || info.IsDir() {
 			continue
 		}
+		if fields, handled, probeErr := probeFastAudioMetadata(fullPath); handled && probeErr == nil {
+			deriveMediaInfoFields(fields)
+			return &protocol.AsyncResponseMediaInfo{Index: ac.Index, Fields: fields}
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		cmd := exec.CommandContext(ctx, binary, "--Output=JSON", fullPath)
 		out, err := cmd.Output()
