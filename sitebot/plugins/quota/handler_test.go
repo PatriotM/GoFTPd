@@ -103,6 +103,50 @@ func TestSetUserTrialRemovesDisabledFlag(t *testing.T) {
 	}
 }
 
+func TestScanAndProcessHonorsForcePassing(t *testing.T) {
+	root := t.TempDir()
+	usersDir := filepath.Join(root, "users")
+	if err := os.MkdirAll(usersDir, 0755); err != nil {
+		t.Fatalf("mkdir users: %v", err)
+	}
+	userPath := filepath.Join(usersDir, "carol")
+	if err := writeUserFile(userPath, "GROUP iND\nFLAGS 3\nWKUP 1 0 0\nDAYUP 1 0 0\n"); err != nil {
+		t.Fatalf("write user: %v", err)
+	}
+
+	p := New()
+	p.usersDir = usersDir
+	p.byeDir = filepath.Join(root, "byefiles")
+	p.stateFile = filepath.Join(root, "state.yml")
+	p.trialQuotaBytes = gibToBytes(1)
+	p.trialDaysDefault = 1
+	p.state.Users = map[string]*trackedUser{
+		"carol": {
+			Status:         statusTrial,
+			TrialStartUnix: time.Now().Add(-48 * time.Hour).Unix(),
+			TrialDays:      1,
+			DaysRemaining:  0,
+			ForcePassing:   true,
+		},
+	}
+
+	if err := p.scanAndProcess(); err != nil {
+		t.Fatalf("scanAndProcess: %v", err)
+	}
+
+	state := p.state.Users["carol"]
+	if state == nil || state.Status != statusTrial {
+		t.Fatalf("expected trial status preserved, got %+v", state)
+	}
+	content, err := os.ReadFile(userPath)
+	if err != nil {
+		t.Fatalf("read user file: %v", err)
+	}
+	if strings.Contains(string(content), "FLAGS 63") || strings.Contains(string(content), "FLAGS 36") {
+		t.Fatalf("expected disabled flag to stay removed, got:\n%s", string(content))
+	}
+}
+
 func writeUserFile(path, content string) error {
 	if !strings.HasSuffix(content, "\n") {
 		content += "\n"
