@@ -72,6 +72,11 @@ func NewBridge(sm *SlaveManager) *Bridge {
 	if err := b.raceDB.Reconcile(sm.GetVFS()); err != nil {
 		log.Printf("[Bridge] Race DB reconcile failed: %v", err)
 	}
+	if hydrated, err := b.raceDB.HydrateVFS(sm.GetVFS()); err != nil {
+		log.Printf("[Bridge] Race DB VFS hydrate failed: %v", err)
+	} else if hydrated > 0 {
+		log.Printf("[Bridge] Hydrated %d persisted race file entries into VFS", hydrated)
+	}
 	return b
 }
 

@@ -4334,6 +4334,77 @@ func zipDirRaceStats(bridge MasterBridge, dirPath string, entries []MasterFileEn
 	return users, totalBytes, total
 }
 
+func addZipRaceEntry(users []VFSRaceUser, entry MasterFileEntry, expectedTotal int) ([]VFSRaceUser, int64) {
+	if entry.IsDir || entry.IsSymlink || strings.HasPrefix(strings.TrimSpace(entry.Name), ".") || !isZipPayloadName(entry.Name) {
+		return users, 0
+	}
+
+	owner := entry.Owner
+	if owner == "" {
+		owner = "unknown"
+	}
+	group := entry.Group
+	if group == "" {
+		group = "NoGroup"
+	}
+
+	found := false
+	for i := range users {
+		if users[i].Name != owner || users[i].Group != group {
+			continue
+		}
+		users[i].Files++
+		users[i].Bytes += entry.Size
+		if entry.XferTime > 0 {
+			fileSpeed := float64(entry.Size) / (float64(entry.XferTime) / 1000.0)
+			users[i].DurationMs += entry.XferTime
+			if fileSpeed > users[i].PeakSpeed {
+				users[i].PeakSpeed = fileSpeed
+			}
+			if users[i].SlowSpeed == 0 || fileSpeed < users[i].SlowSpeed {
+				users[i].SlowSpeed = fileSpeed
+			}
+			users[i].Speed = float64(users[i].Bytes) / (float64(users[i].DurationMs) / 1000.0)
+		}
+		found = true
+		break
+	}
+	if !found {
+		u := VFSRaceUser{
+			Name:  owner,
+			Group: group,
+			Files: 1,
+			Bytes: entry.Size,
+		}
+		if entry.XferTime > 0 {
+			fileSpeed := float64(entry.Size) / (float64(entry.XferTime) / 1000.0)
+			u.Speed = fileSpeed
+			u.PeakSpeed = fileSpeed
+			u.SlowSpeed = fileSpeed
+			u.DurationMs = entry.XferTime
+		}
+		users = append(users, u)
+	}
+
+	percentBase := expectedTotal
+	if percentBase <= 0 {
+		percentBase = 1
+	}
+	for i := range users {
+		users[i].Percent = (users[i].Files * 100) / percentBase
+	}
+	sort.Slice(users, func(i, j int) bool {
+		if users[i].Files != users[j].Files {
+			return users[i].Files > users[j].Files
+		}
+		if users[i].Bytes != users[j].Bytes {
+			return users[i].Bytes > users[j].Bytes
+		}
+		return strings.ToLower(users[i].Name) < strings.ToLower(users[j].Name)
+	})
+	return users, entry.Size
+}
+
 func raceGroupsFromUsers(users []VFSRaceUser, totalFiles int) []VFSRaceGroup {
 	groupMap := make(map[string]*VFSRaceGroup)
 	for _, u := range users {
@@ -4650,6 +4721,21 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 		expected := zipExpectedPartsFromDIZ(bridge, dirPath)
 		entries := bridge.ListDir(dirPath)
 		users, totalBytes, total := zipDirRaceStats(bridge, dirPath, entries, expected)
+		raceComplete := zipDirCompleteAfterUpload(bridge, dirPath, fileName, entries, expected)
+		if raceComplete && expected > 0 && total < expected {
+			for _, entry := range entries {
+				if !strings.EqualFold(strings.TrimSpace(entry.Name), strings.TrimSpace(fileName)) {
+					continue
+				}
+				var addedBytes int64
+				users, addedBytes = addZipRaceEntry(users, entry, expected)
+				if addedBytes > 0 {
+					totalBytes += addedBytes
+					total++
+				}
+				break
+			}
+		}
 		if total > 0 {
 			raceDurationMs := bridge.GetRaceWallClockMilliseconds(dirPath)
 			displayDurationMs := raceDurationMs
@@ -4694,7 +4780,7 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 				data["leader_pct"] = fmt.Sprintf("%d", leader.Percent)
 				data["leader_speed"] = fmt.Sprintf("%.2fMB/s", leader.Speed/1024.0/1024.0)
 			}
-			return users, groups, totalBytes, totalFiles, raceDurationMs, expected == 0 || total >= expected
+			return users, groups, totalBytes, totalFiles, raceDurationMs, raceComplete || expected == 0 || total >= expected
 		}
 		return nil, nil, 0, 0, 0, false
 	}
