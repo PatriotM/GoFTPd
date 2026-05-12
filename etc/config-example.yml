@@ -585,6 +585,11 @@ plugins:
     config_file: "plugins/request/config.yml"
   releaseguard:
     enabled: false
+    # Blocks bad MKD release names before the directory is created.
+    # Example use: only allow TV-style names in /TV-FR with:
+    #   allow_dirs:
+    #     - path: "/TV-FR/*"
+    #       pattern: "\\.S[0-9]{2}E[0-9]{2}\\."
     config_file: "plugins/releaseguard/config.yml"
   pre:
     enabled: true

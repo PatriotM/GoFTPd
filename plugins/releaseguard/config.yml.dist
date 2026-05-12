@@ -29,4 +29,23 @@ deny_dirs:
 # Allow-only rules by path/section.
 # If one or more allow rules match the target path, the release name must
 # match at least one of those rule regexes or MKD is denied.
+#
+# Example: only allow TV episode-style names in /TV-FR.
+# This blocks unrelated documentaries or movie-style releases from being MKD'd
+# in that section.
+# allow_dirs:
+#   - path: "/TV-FR/*"
+#     pattern: "\\.S[0-9]{2}E[0-9]{2}\\."
+#
+# Example: allow both normal episodic TV and daily shows in /TV-NO.
+# allow_dirs:
+#   - path: "/TV-NO/*"
+#     pattern: "\\.S[0-9]{2}E[0-9]{2}\\."
+#   - path: "/TV-NO/*"
+#     pattern: "\\.[0-9]{4}\\.[0-9]{2}\\.[0-9]{2}\\."
+#
+# Example: stricter documentary bucket that only accepts YEAR in the dirname.
+# allow_dirs:
+#   - path: "/DOCU/*"
+#     pattern: "\\.(19|20)[0-9]{2}\\."
 allow_dirs: []
