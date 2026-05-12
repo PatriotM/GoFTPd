@@ -479,7 +479,7 @@ func (r *RaceDB) GetMediaInfo(dirPath string) map[string]string {
         ORDER BY rm.field_key
     `, dirPath)
 	if err != nil {
-		log.Printf("[RaceDB] mediainfo query failed for %s: %v", dirPath, err)
+		log.Printf("[RaceDB] media probe query failed for %s: %v", dirPath, err)
 		return nil
 	}
 	defer rows.Close()
@@ -488,7 +488,7 @@ func (r *RaceDB) GetMediaInfo(dirPath string) map[string]string {
 	for rows.Next() {
 		var key, value string
 		if err := rows.Scan(&key, &value); err != nil {
-			log.Printf("[RaceDB] mediainfo row scan failed for %s: %v", dirPath, err)
+			log.Printf("[RaceDB] media probe row scan failed for %s: %v", dirPath, err)
 			return nil
 		}
 		key = strings.TrimSpace(key)
@@ -498,7 +498,7 @@ func (r *RaceDB) GetMediaInfo(dirPath string) map[string]string {
 		}
 	}
 	if err := rows.Err(); err != nil {
-		log.Printf("[RaceDB] mediainfo row iteration failed for %s: %v", dirPath, err)
+		log.Printf("[RaceDB] media probe row iteration failed for %s: %v", dirPath, err)
 		return nil
 	}
 	if len(out) == 0 {

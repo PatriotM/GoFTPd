@@ -59,18 +59,18 @@ type zipRescanResult struct {
 }
 
 type rescanJob struct {
-	ID              string
-	User            string
-	Target          string
-	CreatedAt       time.Time
-	StartedAt       time.Time
-	CompletedAt     time.Time
-	Status          string
-	TotalItems      int
-	CompletedItems  int
-	lines           []string
-	lastReadByUser  map[string]int
-	mu              sync.Mutex
+	ID             string
+	User           string
+	Target         string
+	CreatedAt      time.Time
+	StartedAt      time.Time
+	CompletedAt    time.Time
+	Status         string
+	TotalItems     int
+	CompletedItems int
+	lines          []string
+	lastReadByUser map[string]int
+	mu             sync.Mutex
 }
 
 type rescanJobManager struct {
@@ -776,22 +776,20 @@ func shouldRefreshRescanMediaInfo(cfg *Config, dirPath string) bool {
 func findAudioRescanCandidate(bridge MasterBridge, dirPath string) (string, bool) {
 	entries := bridge.ListDir(dirPath)
 	audioFiles := make([]string, 0, len(entries))
+	audioExts := map[string]bool{"mp3": true, "flac": true, "m4a": true, "wav": true}
 	for _, entry := range entries {
 		if entry.IsDir || entry.IsSymlink || entry.Size <= 0 || entry.XferTime <= 0 {
 			continue
 		}
-		lower := strings.ToLower(strings.TrimSpace(entry.Name))
-		switch {
-		case strings.HasSuffix(lower, ".mp3"),
-			strings.HasSuffix(lower, ".flac"),
-			strings.HasSuffix(lower, ".m4a"),
-			strings.HasSuffix(lower, ".wav"):
-			candidatePath := path.Join(dirPath, entry.Name)
-			if activeUploadForPathWithBridge(bridge, candidatePath) {
-				continue
-			}
-			audioFiles = append(audioFiles, entry.Name)
+		ext := strings.ToLower(strings.TrimPrefix(path.Ext(strings.TrimSpace(entry.Name)), "."))
+		if !audioExts[ext] {
+			continue
 		}
+		candidatePath := path.Join(dirPath, entry.Name)
+		if activeUploadForPathWithBridge(bridge, candidatePath) {
+			continue
+		}
+		audioFiles = append(audioFiles, entry.Name)
 	}
 	sort.Strings(audioFiles)
 	if len(audioFiles) == 0 {
@@ -806,31 +804,37 @@ func findFirstUsableAudioInfo(bridge MasterBridge, cfg *Config, dirPath string) 
 	}
 	entries := bridge.ListDir(dirPath)
 	audioFiles := make([]string, 0, len(entries))
+	audioExts := make(map[string]bool)
+	for _, ext := range cfg.Zipscript.Audio.Extensions {
+		ext = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(ext, ".")))
+		if ext != "" {
+			audioExts[ext] = true
+		}
+	}
+	if len(audioExts) == 0 {
+		audioExts = map[string]bool{"mp3": true, "flac": true, "m4a": true, "wav": true}
+	}
 	for _, entry := range entries {
 		if entry.IsDir || entry.IsSymlink || entry.Size <= 0 || entry.XferTime <= 0 {
 			continue
 		}
-		lower := strings.ToLower(strings.TrimSpace(entry.Name))
-		switch {
-		case strings.HasSuffix(lower, ".mp3"),
-			strings.HasSuffix(lower, ".flac"),
-			strings.HasSuffix(lower, ".m4a"),
-			strings.HasSuffix(lower, ".wav"):
-			candidatePath := path.Join(dirPath, entry.Name)
-			if activeUploadForPathWithBridge(bridge, candidatePath) {
-				continue
-			}
-			audioFiles = append(audioFiles, entry.Name)
+		ext := strings.ToLower(strings.TrimPrefix(path.Ext(strings.TrimSpace(entry.Name)), "."))
+		if !audioExts[ext] {
+			continue
 		}
+		candidatePath := path.Join(dirPath, entry.Name)
+		if activeUploadForPathWithBridge(bridge, candidatePath) {
+			continue
+		}
+		audioFiles = append(audioFiles, entry.Name)
 	}
 	sort.Strings(audioFiles)
 	if len(audioFiles) == 0 {
 		return "", nil, false
 	}
-	binary, timeoutSeconds := zipscriptMediaInfoSettings(cfg)
 	for _, name := range audioFiles {
 		candidatePath := path.Join(dirPath, name)
-		fields, err := bridge.ProbeMediaInfo(candidatePath, binary, timeoutSeconds)
+		fields, err := bridge.ProbeMediaInfo(candidatePath, "", 0)
 		if err != nil || !zipscript.AudioInfoLooksUsable(fields) {
 			continue
 		}

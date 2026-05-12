@@ -12,6 +12,7 @@ type Config struct {
 	Incomplete   IncompleteConfig   `yaml:"incomplete"`
 	AllowedFiles AllowedFilesConfig `yaml:"allowed_files"`
 	Audio        AudioConfig        `yaml:"audio"`
+	Media        MediaConfig        `yaml:"media"`
 	Hooks        HooksConfig        `yaml:"hooks"`
 
 	// Legacy flat keys kept for compatibility with the first pass.
@@ -89,6 +90,8 @@ type AllowedFilesConfig struct {
 
 type AudioConfig struct {
 	Enabled                 bool            `yaml:"enabled"`
+	Sections                []string        `yaml:"sections"`
+	Extensions              []string        `yaml:"extensions"`
 	CBRCheck                bool            `yaml:"cbr_check"`
 	YearCheck               bool            `yaml:"year_check"`
 	BannedGenreCheck        bool            `yaml:"banned_genre_check"`
@@ -114,6 +117,13 @@ type AudioSortConfig struct {
 	Year              bool  `yaml:"year"`
 	Group             bool  `yaml:"group"`
 	SeparateBySection *bool `yaml:"separate_by_section"`
+}
+
+type MediaConfig struct {
+	Enabled         *bool    `yaml:"enabled"`
+	Sections        []string `yaml:"sections"`
+	SampleOnly      *bool    `yaml:"sample_only"`
+	VideoExtensions []string `yaml:"video_extensions"`
 }
 
 type HooksConfig struct {
@@ -256,6 +266,26 @@ func (c *Config) ApplyDefaults() {
 	if c.Audio.STORFLACInfo == nil {
 		enabled := true
 		c.Audio.STORFLACInfo = &enabled
+	}
+	if len(c.Audio.Sections) == 0 {
+		c.Audio.Sections = []string{"FLAC", "MP3"}
+	}
+	if len(c.Audio.Extensions) == 0 {
+		c.Audio.Extensions = []string{"flac", "mp3", "m4a", "wav"}
+	}
+	if c.Media.Enabled == nil {
+		enabled := true
+		c.Media.Enabled = &enabled
+	}
+	if c.Media.SampleOnly == nil {
+		enabled := true
+		c.Media.SampleOnly = &enabled
+	}
+	if len(c.Media.Sections) == 0 {
+		c.Media.Sections = []string{"TV", "X264-HD-1080P", "X264-HD-720P", "X264-SD", "X265", "BLURAY"}
+	}
+	if len(c.Media.VideoExtensions) == 0 {
+		c.Media.VideoExtensions = []string{"mkv", "mp4", "avi", "m2ts"}
 	}
 	if len(c.SFV.PathCheck) == 0 {
 		c.SFV.PathCheck = []string{"*"}

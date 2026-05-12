@@ -94,7 +94,7 @@ func IssueMediaInfo(rs *RemoteSlave, path, binary string, timeoutSeconds int) (s
 	}
 	return index, rs.SendCommand(&protocol.AsyncCommand{
 		Index: index,
-		Name:  "mediainfo",
+		Name:  "mediaProbe",
 		Args:  []string{path, binary, fmt.Sprintf("%d", timeoutSeconds)},
 	})
 }

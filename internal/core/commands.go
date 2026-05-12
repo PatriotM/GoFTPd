@@ -3596,73 +3596,26 @@ func createMasterSFVMissingMarker(cfg *Config, bridge MasterBridge, dirPath, fil
 	}
 }
 
-func zipscriptMediaInfoSettings(cfg *Config) (string, int) {
-	if cfg != nil && cfg.Plugins != nil {
-		if pluginCfg, ok := cfg.Plugins["mediainfo"]; ok {
-			binary := "mediainfo"
-			timeoutSeconds := 10
-			if raw, ok := pluginCfg["binary"].(string); ok && strings.TrimSpace(raw) != "" {
-				binary = strings.TrimSpace(raw)
-			}
-			switch v := pluginCfg["timeout_seconds"].(type) {
-			case int:
-				timeoutSeconds = v
-			case int64:
-				timeoutSeconds = int(v)
-			case float64:
-				timeoutSeconds = int(v)
-			}
-			if timeoutSeconds <= 0 {
-				timeoutSeconds = 10
-			}
-			return binary, timeoutSeconds
-		}
-	}
-	return "mediainfo", 10
-}
-
-func mediaInfoPluginSettings(cfg *Config) (binary string, timeoutSeconds int, sections []string, sampleOnly bool, audioExts map[string]bool, videoExts map[string]bool) {
-	binary = "mediainfo"
-	timeoutSeconds = 10
-	sections = []string{"FLAC", "MP3", "TV", "X264-HD-1080P", "X264-HD-720P", "X264-SD", "X265", "BLURAY"}
+func mediaInfoPluginSettings(cfg *Config) (sections []string, sampleOnly bool, videoExts map[string]bool) {
+	sections = []string{"TV", "X264-HD-1080P", "X264-HD-720P", "X264-SD", "X265", "BLURAY"}
 	sampleOnly = true
-	audioExts = extensionSetLower([]string{"flac", "mp3", "m4a", "wav"})
 	videoExts = extensionSetLower([]string{"mkv", "mp4", "avi", "m2ts"})
-	if cfg == nil || cfg.Plugins == nil {
+	if cfg == nil {
 		return
 	}
-	pluginCfg, ok := cfg.Plugins["mediainfo"]
-	if !ok || pluginCfg == nil {
+	if len(cfg.Zipscript.Media.Sections) > 0 {
+		sections = append([]string(nil), cfg.Zipscript.Media.Sections...)
+	}
+	if cfg.Zipscript.Media.SampleOnly != nil {
+		sampleOnly = *cfg.Zipscript.Media.SampleOnly
+	}
+	if len(cfg.Zipscript.Media.VideoExtensions) > 0 {
+		videoExts = extensionSetLower(cfg.Zipscript.Media.VideoExtensions)
+	}
+	if cfg.Zipscript.Media.Enabled != nil && !*cfg.Zipscript.Media.Enabled {
+		sections = nil
+		videoExts = map[string]bool{}
 		return
-	}
-	if raw, ok := pluginCfg["binary"].(string); ok && strings.TrimSpace(raw) != "" {
-		binary = strings.TrimSpace(raw)
-	}
-	switch v := pluginCfg["timeout_seconds"].(type) {
-	case int:
-		timeoutSeconds = v
-	case int64:
-		timeoutSeconds = int(v)
-	case float64:
-		timeoutSeconds = int(v)
-	}
-	if timeoutSeconds <= 0 {
-		timeoutSeconds = 10
-	}
-	if timeoutSeconds > 10 {
-		timeoutSeconds = 10
-	}
-	if raw, ok := interfaceStringSlice(pluginCfg["sections"]); ok && len(raw) > 0 {
-		sections = raw
-	}
-	if raw, ok := pluginCfg["sample_only"].(bool); ok {
-		sampleOnly = raw
-	}
-	if raw, ok := interfaceStringSlice(pluginCfg["audio_extensions"]); ok && len(raw) > 0 {
-		audioExts = extensionSetLower(raw)
-	}
-	if raw, ok := interfaceStringSlice(pluginCfg["video_extensions"]); ok && len(raw) > 0 {
-		videoExts = extensionSetLower(raw)
 	}
 	return
 }
@@ -3905,7 +3858,7 @@ func probeSTORSitebotMediaInfo(s *Session, bridge MasterBridge, dirPath, filePat
 	if hadMediaInfo || s == nil || bridge == nil || s.Config == nil {
 		return nil
 	}
-	binary, timeoutSeconds, sections, sampleOnly, _, videoExts := mediaInfoPluginSettings(s.Config)
+	sections, sampleOnly, videoExts := mediaInfoPluginSettings(s.Config)
 	section := sectionFromPathWithConfig(s.Config, dirPath)
 	if len(sections) > 0 && !mediaInfoSectionMatch(section, sections) {
 		return nil
@@ -3917,10 +3870,10 @@ func probeSTORSitebotMediaInfo(s *Session, bridge MasterBridge, dirPath, filePat
 	if sampleOnly && !isSampleMediaPath(filePath) {
 		return nil
 	}
-	fields, err := bridge.ProbeMediaInfo(filePath, binary, timeoutSeconds)
+	fields, err := bridge.ProbeMediaInfo(filePath, "", 0)
 	if err != nil {
 		if s.Config.Debug {
-			log.Printf("[MASTER-ZS] stor mediainfo probe skipped for %s: %v", filePath, err)
+			log.Printf("[MASTER-ZS] stor media probe skipped for %s: %v", filePath, err)
 		}
 		return nil
 	}
@@ -3950,17 +3903,16 @@ func applyAudioZipscriptChecksForDir(s *Session, bridge MasterBridge, dirPath, f
 	if cached := bridge.GetDirMediaInfo(dirPath); zipscript.AudioInfoLooksUsable(cached) {
 		return cached, nil
 	}
-	binary, timeoutSeconds := zipscriptMediaInfoSettings(s.Config)
-	fields, err := bridge.ProbeMediaInfo(filePath, binary, timeoutSeconds)
+	fields, err := bridge.ProbeMediaInfo(filePath, "", 0)
 	if err != nil {
 		if s.Config.Debug {
-			log.Printf("[MASTER-ZS] mediainfo probe skipped for %s: %v", filePath, err)
+			log.Printf("[MASTER-ZS] audio probe skipped for %s: %v", filePath, err)
 		}
 		return nil, nil
 	}
 	if !zipscript.AudioInfoLooksUsable(fields) {
 		if s.Config.Debug {
-			log.Printf("[MASTER-ZS] mediainfo probe for %s was not usable for release metadata", filePath)
+			log.Printf("[MASTER-ZS] audio probe for %s was not usable for release metadata", filePath)
 		}
 		return fields, nil
 	}

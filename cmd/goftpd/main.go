@@ -25,7 +25,6 @@ import (
 	"goftpd/plugins/autonuke"
 	"goftpd/plugins/dateddirs"
 	"goftpd/plugins/imdb"
-	"goftpd/plugins/mediainfo"
 	"goftpd/plugins/pre"
 	"goftpd/plugins/pretime"
 	"goftpd/plugins/releaseguard"
@@ -371,8 +370,6 @@ func main() {
 			p = tvmaze.New()
 		case "imdb":
 			p = imdb.New()
-		case "mediainfo":
-			p = mediainfo.New()
 		case "pre":
 			p = pre.New()
 		case "pretime":

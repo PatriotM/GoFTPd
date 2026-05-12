@@ -238,7 +238,7 @@ type AsyncResponseZipIntegrity struct {
 
 func (ar *AsyncResponseZipIntegrity) GetIndex() string { return ar.Index }
 
-// AsyncResponseMediaInfo returns flattened mediainfo metadata from a slave.
+// AsyncResponseMediaInfo returns normalized media probe metadata from a slave.
 type AsyncResponseMediaInfo struct {
 	Index  string
 	Fields map[string]string

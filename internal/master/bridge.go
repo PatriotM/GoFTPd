@@ -1184,9 +1184,6 @@ func (b *Bridge) CheckZipIntegrity(archivePath string) (bool, error) {
 }
 
 func (b *Bridge) ProbeMediaInfo(filePath, binary string, timeoutSeconds int) (map[string]string, error) {
-	if strings.TrimSpace(binary) == "" {
-		binary = "mediainfo"
-	}
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = 20
 	}
@@ -1198,7 +1195,7 @@ func (b *Bridge) ProbeMediaInfo(filePath, binary string, timeoutSeconds int) (ma
 	for _, slave := range candidates {
 		index, err := IssueMediaInfo(slave, filePath, binary, timeoutSeconds)
 		if err != nil {
-			lastErr = fmt.Errorf("issue mediainfo to %s: %w", slave.Name(), err)
+			lastErr = fmt.Errorf("issue media probe to %s: %w", slave.Name(), err)
 			continue
 		}
 		resp, err := slave.FetchResponse(index, time.Duration(timeoutSeconds+5)*time.Second)
@@ -1623,7 +1620,7 @@ func (b *Bridge) CacheMediaInfo(dirPath string, fields map[string]string) {
 	b.sm.SetReleaseMediaInfo(cleanDirPath, fields)
 	if b.raceDB != nil {
 		if err := b.raceDB.SaveMediaInfo(cleanDirPath, fields); err != nil {
-			log.Printf("[Bridge] Race DB mediainfo sync failed for %s: %v", cleanDirPath, err)
+			log.Printf("[Bridge] Race DB media probe sync failed for %s: %v", cleanDirPath, err)
 		}
 	}
 }
