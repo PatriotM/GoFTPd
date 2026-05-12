@@ -31,7 +31,7 @@ type Bridge struct {
 	readFileCache          map[string]cachedReadFileResult
 	liveTransferStatsCache []core.LiveTransferStat
 	liveTransferStatsAt    time.Time
-	transferSpeedPolicy    func(username, primaryGroup, transferPath, direction string) (int64, int64)
+	transferSpeedPolicy    func(username, primaryGroup, transferPath, direction string) (int64, int64, int64)
 }
 
 func configureBridgeDataSocket(conn net.Conn) {
@@ -75,16 +75,16 @@ func NewBridge(sm *SlaveManager) *Bridge {
 	return b
 }
 
-func (b *Bridge) SetTransferSpeedPolicy(fn func(username, primaryGroup, transferPath, direction string) (int64, int64)) {
+func (b *Bridge) SetTransferSpeedPolicy(fn func(username, primaryGroup, transferPath, direction string) (int64, int64, int64)) {
 	if b == nil {
 		return
 	}
 	b.transferSpeedPolicy = fn
 }
 
-func (b *Bridge) transferSpeedLimits(username, primaryGroup, transferPath, direction string) (int64, int64) {
+func (b *Bridge) transferSpeedLimits(username, primaryGroup, transferPath, direction string) (int64, int64, int64) {
 	if b == nil || b.transferSpeedPolicy == nil {
-		return 0, 0
+		return 0, 0, 0
 	}
 	return b.transferSpeedPolicy(username, primaryGroup, transferPath, direction)
 }
@@ -389,9 +389,9 @@ func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group s
 	configureBridgeDataSocket(slaveConn)
 
 	// Tell slave to receive the file
-	minSpeed, maxSpeed := b.transferSpeedLimits(owner, group, filePath, "upload")
+	minSpeed, maxSpeed, graceSeconds := b.transferSpeedLimits(owner, group, filePath, "upload")
 	recvIdx, err := IssueReceive(slave, filePath, transferType, position, "master",
-		transferResp.Info.TransferIndex, minSpeed, maxSpeed)
+		transferResp.Info.TransferIndex, minSpeed, maxSpeed, graceSeconds)
 	if err != nil {
 		slaveConn.Close()
 		return 0, 0, fmt.Errorf("issue receive: %w", err)
@@ -504,9 +504,9 @@ func (b *Bridge) DownloadFile(filePath string, clientData net.Conn, username, pr
 	configureBridgeDataSocket(slaveConn)
 
 	// Tell slave to send the file
-	minSpeed, maxSpeed := b.transferSpeedLimits(username, primaryGroup, filePath, "download")
+	minSpeed, maxSpeed, graceSeconds := b.transferSpeedLimits(username, primaryGroup, filePath, "download")
 	sendIdx, err := IssueSend(slave, filePath, transferType, position, "master",
-		transferResp.Info.TransferIndex, minSpeed, maxSpeed)
+		transferResp.Info.TransferIndex, minSpeed, maxSpeed, graceSeconds)
 	if err != nil {
 		slaveConn.Close()
 		return 0, fmt.Errorf("issue send: %w", err)
@@ -883,13 +883,13 @@ func (b *Bridge) copyFileBetweenSlaves(sourceSlave, destSlave *RemoteSlave, from
 		return fmt.Errorf("unexpected destination connect response for %s: %T", toPath, connectResp)
 	}
 
-	sendIdx, err := IssueSend(sourceSlave, fromPath, 'I', 0, remoteAddr, transferResp.Info.TransferIndex, 0, 0)
+	sendIdx, err := IssueSend(sourceSlave, fromPath, 'I', 0, remoteAddr, transferResp.Info.TransferIndex, 0, 0, 0)
 	if err != nil {
 		IssueAbort(sourceSlave, transferResp.Info.TransferIndex, "archive send setup failed")
 		IssueAbort(destSlave, destTransferResp.Info.TransferIndex, "archive send setup failed")
 		return fmt.Errorf("source send failed for %s: %w", fromPath, err)
 	}
-	recvIdx, err := IssueReceive(destSlave, toPath, 'I', 0, remoteAddr, destTransferResp.Info.TransferIndex, 0, 0)
+	recvIdx, err := IssueReceive(destSlave, toPath, 'I', 0, remoteAddr, destTransferResp.Info.TransferIndex, 0, 0, 0)
 	if err != nil {
 		IssueAbort(sourceSlave, transferResp.Info.TransferIndex, "archive receive setup failed")
 		IssueAbort(destSlave, destTransferResp.Info.TransferIndex, "archive receive setup failed")
@@ -1960,8 +1960,8 @@ func (b *Bridge) SlaveReceivePassthrough(filePath string, transferIdx int32, sla
 	slave.IncActiveTransfers()
 	defer slave.DecActiveTransfers()
 
-	minSpeed, maxSpeed := b.transferSpeedLimits(owner, group, filePath, "upload")
-	recvIdx, err := IssueReceive(slave, filePath, transferType, position, "master", transferIdx, minSpeed, maxSpeed)
+	minSpeed, maxSpeed, graceSeconds := b.transferSpeedLimits(owner, group, filePath, "upload")
+	recvIdx, err := IssueReceive(slave, filePath, transferType, position, "master", transferIdx, minSpeed, maxSpeed, graceSeconds)
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("issue receive: %w", err)
 	}
@@ -2017,8 +2017,8 @@ func (b *Bridge) SlaveSendPassthrough(filePath string, transferIdx int32, slaveN
 		return 0, 0, fmt.Errorf("slave %s not found", slaveName)
 	}
 
-	minSpeed, maxSpeed := b.transferSpeedLimits(username, primaryGroup, filePath, "download")
-	sendIdx, err := IssueSend(slave, filePath, transferType, position, "master", transferIdx, minSpeed, maxSpeed)
+	minSpeed, maxSpeed, graceSeconds := b.transferSpeedLimits(username, primaryGroup, filePath, "download")
+	sendIdx, err := IssueSend(slave, filePath, transferType, position, "master", transferIdx, minSpeed, maxSpeed, graceSeconds)
 	if err != nil {
 		return 0, 0, fmt.Errorf("issue send: %w", err)
 	}
@@ -2087,9 +2087,9 @@ func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group strin
 	}
 
 	// Tell slave to receive the file on this connection
-	minSpeed, maxSpeed := b.transferSpeedLimits(owner, group, filePath, "upload")
+	minSpeed, maxSpeed, graceSeconds := b.transferSpeedLimits(owner, group, filePath, "upload")
 	recvIdx, err := IssueReceive(slave, filePath, transferType, position, remoteAddr,
-		transferResp.Info.TransferIndex, minSpeed, maxSpeed)
+		transferResp.Info.TransferIndex, minSpeed, maxSpeed, graceSeconds)
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("issue receive: %w", err)
 	}
@@ -2173,8 +2173,8 @@ func (b *Bridge) SlaveConnectAndSend(filePath, remoteAddr, username, primaryGrou
 		return 0, 0, fmt.Errorf("unexpected response from slave")
 	}
 
-	minSpeed, maxSpeed := b.transferSpeedLimits(username, primaryGroup, filePath, "download")
-	sendIdx, err := IssueSend(slave, filePath, transferType, position, remoteAddr, transferResp.Info.TransferIndex, minSpeed, maxSpeed)
+	minSpeed, maxSpeed, graceSeconds := b.transferSpeedLimits(username, primaryGroup, filePath, "download")
+	sendIdx, err := IssueSend(slave, filePath, transferType, position, remoteAddr, transferResp.Info.TransferIndex, minSpeed, maxSpeed, graceSeconds)
 	if err != nil {
 		IssueAbort(slave, transferResp.Info.TransferIndex, "download send setup failed")
 		return 0, 0, fmt.Errorf("issue send: %w", err)

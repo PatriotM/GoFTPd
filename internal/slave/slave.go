@@ -26,9 +26,9 @@ import (
 )
 
 const (
-	socketTimeout = 10 * time.Second
-	actualTimeout = 60 * time.Second
-	minTransferBufferSize = 32 * 1024
+	socketTimeout             = 10 * time.Second
+	actualTimeout             = 60 * time.Second
+	minTransferBufferSize     = 32 * 1024
 	defaultTransferBufferSize = 256 * 1024
 )
 
@@ -641,7 +641,7 @@ func (s *Slave) handleConnect(ac *protocol.AsyncCommand) interface{} {
 
 // handleReceive - slave receives (uploads) a file from the FTP client via the data connection.
 //
-// Args: [type, position, transferIndex, inetAddress, path, minSpeed, maxSpeed]
+// Args: [type, position, transferIndex, inetAddress, path, minSpeed, maxSpeed, graceSeconds]
 func (s *Slave) handleReceive(ac *protocol.AsyncCommand) interface{} {
 	if len(ac.Args) < 5 {
 		return &protocol.AsyncResponseError{Index: ac.Index, Message: "receive: not enough args"}
@@ -651,6 +651,7 @@ func (s *Slave) handleReceive(ac *protocol.AsyncCommand) interface{} {
 	var position int64
 	var minSpeed int64
 	var maxSpeed int64
+	var graceSeconds int64
 	var transferType byte = 'I'
 	if len(ac.Args) > 0 && strings.TrimSpace(ac.Args[0]) != "" {
 		transferType = strings.ToUpper(strings.TrimSpace(ac.Args[0]))[0]
@@ -665,6 +666,9 @@ func (s *Slave) handleReceive(ac *protocol.AsyncCommand) interface{} {
 	if len(ac.Args) > 6 {
 		fmt.Sscanf(ac.Args[6], "%d", &maxSpeed)
 	}
+	if len(ac.Args) > 7 {
+		fmt.Sscanf(ac.Args[7], "%d", &graceSeconds)
+	}
 
 	val, ok := s.transfers.Load(transferIdx)
 	if !ok {
@@ -672,7 +676,7 @@ func (s *Slave) handleReceive(ac *protocol.AsyncCommand) interface{} {
 	}
 	t := val.(*Transfer)
 	t.SetPath(path)
-	t.SetSpeedLimits(minSpeed, maxSpeed)
+	t.SetSpeedLimits(minSpeed, maxSpeed, graceSeconds)
 	t.SetTransferMode(transferType)
 
 	// Acknowledge to master that we're starting (: sendResponse(new AsyncResponse(ac.getIndex())))
@@ -685,7 +689,7 @@ func (s *Slave) handleReceive(ac *protocol.AsyncCommand) interface{} {
 
 // handleSend - slave sends (downloads) a file to the FTP client via the data connection.
 //
-// Args: [type, position, transferIndex, inetAddress, path, minSpeed, maxSpeed]
+// Args: [type, position, transferIndex, inetAddress, path, minSpeed, maxSpeed, graceSeconds]
 func (s *Slave) handleSend(ac *protocol.AsyncCommand) interface{} {
 	if len(ac.Args) < 5 {
 		return &protocol.AsyncResponseError{Index: ac.Index, Message: "send: not enough args"}
@@ -695,6 +699,7 @@ func (s *Slave) handleSend(ac *protocol.AsyncCommand) interface{} {
 	var position int64
 	var minSpeed int64
 	var maxSpeed int64
+	var graceSeconds int64
 	var transferType byte = 'I'
 	if len(ac.Args) > 0 && strings.TrimSpace(ac.Args[0]) != "" {
 		transferType = strings.ToUpper(strings.TrimSpace(ac.Args[0]))[0]
@@ -709,6 +714,9 @@ func (s *Slave) handleSend(ac *protocol.AsyncCommand) interface{} {
 	if len(ac.Args) > 6 {
 		fmt.Sscanf(ac.Args[6], "%d", &maxSpeed)
 	}
+	if len(ac.Args) > 7 {
+		fmt.Sscanf(ac.Args[7], "%d", &graceSeconds)
+	}
 
 	val, ok := s.transfers.Load(transferIdx)
 	if !ok {
@@ -716,7 +724,7 @@ func (s *Slave) handleSend(ac *protocol.AsyncCommand) interface{} {
 	}
 	t := val.(*Transfer)
 	t.SetPath(path)
-	t.SetSpeedLimits(minSpeed, maxSpeed)
+	t.SetSpeedLimits(minSpeed, maxSpeed, graceSeconds)
 	t.SetTransferMode(transferType)
 
 	// Acknowledge to master

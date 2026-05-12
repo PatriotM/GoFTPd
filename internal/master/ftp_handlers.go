@@ -150,7 +150,7 @@ func (sm *SlaveManager) ExecuteUpload(state *MasterTransferState, clientAddr str
 		state.ResumeOffset,
 		clientAddr,
 		state.TransferIndex,
-		0, 0, // min/max speed
+		0, 0, 0, // min/max speed, grace
 	)
 	if err != nil {
 		return fmt.Errorf("issue receive failed: %w", err)
@@ -179,7 +179,7 @@ func (sm *SlaveManager) ExecuteDownload(state *MasterTransferState, clientAddr s
 		state.ResumeOffset,
 		clientAddr,
 		state.TransferIndex,
-		0, 0, // min/max speed
+		0, 0, 0, // min/max speed, grace
 	)
 	if err != nil {
 		return fmt.Errorf("issue send failed: %w", err)

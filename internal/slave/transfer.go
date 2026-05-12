@@ -37,6 +37,7 @@ type Transfer struct {
 	activeAddress string
 	minSpeed      int64
 	maxSpeed      int64
+	minSpeedGrace time.Duration
 	mode          byte
 
 	path        string
@@ -68,10 +69,14 @@ func (t *Transfer) SetActiveAddress(address string) {
 	t.mu.Unlock()
 }
 
-func (t *Transfer) SetSpeedLimits(minSpeed, maxSpeed int64) {
+func (t *Transfer) SetSpeedLimits(minSpeed, maxSpeed int64, graceSeconds int64) {
 	t.mu.Lock()
 	t.minSpeed = minSpeed
 	t.maxSpeed = maxSpeed
+	if graceSeconds < 0 {
+		graceSeconds = 0
+	}
+	t.minSpeedGrace = time.Duration(graceSeconds) * time.Second
 	t.mu.Unlock()
 }
 
@@ -554,8 +559,12 @@ func (t *Transfer) checkMinSpeed(lastCheck *time.Time, first *bool) error {
 	minSpeed := t.minSpeed
 	started := t.started
 	transferred := t.transferred
+	grace := t.minSpeedGrace
 	t.mu.Unlock()
 	if minSpeed <= 0 || started.IsZero() || transferred <= 0 {
+		return nil
+	}
+	if grace > 0 && time.Since(started) < grace {
 		return nil
 	}
 	delay := 200 * time.Millisecond
