@@ -26,9 +26,9 @@ import (
 )
 
 const (
-	socketTimeout = 10 * time.Second
-	actualTimeout = 60 * time.Second
-	minTransferBufferSize = 32 * 1024
+	socketTimeout             = 10 * time.Second
+	actualTimeout             = 60 * time.Second
+	minTransferBufferSize     = 32 * 1024
 	defaultTransferBufferSize = 256 * 1024
 )
 
@@ -311,7 +311,7 @@ func (s *Slave) handleCommand(ac *protocol.AsyncCommand) interface{} {
 	case "zipIntegrity":
 		return s.handleZipIntegrity(ac)
 
-	case "mediainfo":
+	case "mediaProbe":
 		return s.handleMediaInfo(ac)
 
 	case "writeFile":
@@ -641,7 +641,7 @@ func (s *Slave) handleConnect(ac *protocol.AsyncCommand) interface{} {
 
 // handleReceive - slave receives (uploads) a file from the FTP client via the data connection.
 //
-// Args: [type, position, transferIndex, inetAddress, path, minSpeed, maxSpeed]
+// Args: [type, position, transferIndex, inetAddress, path, minSpeed, maxSpeed, graceSeconds]
 func (s *Slave) handleReceive(ac *protocol.AsyncCommand) interface{} {
 	if len(ac.Args) < 5 {
 		return &protocol.AsyncResponseError{Index: ac.Index, Message: "receive: not enough args"}
@@ -651,6 +651,7 @@ func (s *Slave) handleReceive(ac *protocol.AsyncCommand) interface{} {
 	var position int64
 	var minSpeed int64
 	var maxSpeed int64
+	var graceSeconds int64
 	var transferType byte = 'I'
 	if len(ac.Args) > 0 && strings.TrimSpace(ac.Args[0]) != "" {
 		transferType = strings.ToUpper(strings.TrimSpace(ac.Args[0]))[0]
@@ -665,6 +666,9 @@ func (s *Slave) handleReceive(ac *protocol.AsyncCommand) interface{} {
 	if len(ac.Args) > 6 {
 		fmt.Sscanf(ac.Args[6], "%d", &maxSpeed)
 	}
+	if len(ac.Args) > 7 {
+		fmt.Sscanf(ac.Args[7], "%d", &graceSeconds)
+	}
 
 	val, ok := s.transfers.Load(transferIdx)
 	if !ok {
@@ -672,7 +676,7 @@ func (s *Slave) handleReceive(ac *protocol.AsyncCommand) interface{} {
 	}
 	t := val.(*Transfer)
 	t.SetPath(path)
-	t.SetSpeedLimits(minSpeed, maxSpeed)
+	t.SetSpeedLimits(minSpeed, maxSpeed, graceSeconds)
 	t.SetTransferMode(transferType)
 
 	// Acknowledge to master that we're starting (: sendResponse(new AsyncResponse(ac.getIndex())))
@@ -685,7 +689,7 @@ func (s *Slave) handleReceive(ac *protocol.AsyncCommand) interface{} {
 
 // handleSend - slave sends (downloads) a file to the FTP client via the data connection.
 //
-// Args: [type, position, transferIndex, inetAddress, path, minSpeed, maxSpeed]
+// Args: [type, position, transferIndex, inetAddress, path, minSpeed, maxSpeed, graceSeconds]
 func (s *Slave) handleSend(ac *protocol.AsyncCommand) interface{} {
 	if len(ac.Args) < 5 {
 		return &protocol.AsyncResponseError{Index: ac.Index, Message: "send: not enough args"}
@@ -695,6 +699,7 @@ func (s *Slave) handleSend(ac *protocol.AsyncCommand) interface{} {
 	var position int64
 	var minSpeed int64
 	var maxSpeed int64
+	var graceSeconds int64
 	var transferType byte = 'I'
 	if len(ac.Args) > 0 && strings.TrimSpace(ac.Args[0]) != "" {
 		transferType = strings.ToUpper(strings.TrimSpace(ac.Args[0]))[0]
@@ -709,6 +714,9 @@ func (s *Slave) handleSend(ac *protocol.AsyncCommand) interface{} {
 	if len(ac.Args) > 6 {
 		fmt.Sscanf(ac.Args[6], "%d", &maxSpeed)
 	}
+	if len(ac.Args) > 7 {
+		fmt.Sscanf(ac.Args[7], "%d", &graceSeconds)
+	}
 
 	val, ok := s.transfers.Load(transferIdx)
 	if !ok {
@@ -716,7 +724,7 @@ func (s *Slave) handleSend(ac *protocol.AsyncCommand) interface{} {
 	}
 	t := val.(*Transfer)
 	t.SetPath(path)
-	t.SetSpeedLimits(minSpeed, maxSpeed)
+	t.SetSpeedLimits(minSpeed, maxSpeed, graceSeconds)
 	t.SetTransferMode(transferType)
 
 	// Acknowledge to master
@@ -1231,19 +1239,9 @@ func validateZipIntegrity(fullPath string) (bool, error) {
 
 func (s *Slave) handleMediaInfo(ac *protocol.AsyncCommand) interface{} {
 	if len(ac.Args) < 1 {
-		return &protocol.AsyncResponseError{Index: ac.Index, Message: "mediainfo: missing path"}
+		return &protocol.AsyncResponseError{Index: ac.Index, Message: "media probe: missing path"}
 	}
 	filePath := ac.Args[0]
-	binary := "mediainfo"
-	if len(ac.Args) > 1 && strings.TrimSpace(ac.Args[1]) != "" {
-		binary = strings.TrimSpace(ac.Args[1])
-	}
-	timeout := 20 * time.Second
-	if len(ac.Args) > 2 {
-		if n, err := strconv.Atoi(strings.TrimSpace(ac.Args[2])); err == nil && n > 0 {
-			timeout = time.Duration(n) * time.Second
-		}
-	}
 
 	for _, root := range s.roots {
 		fullPath := filepath.Join(root, filePath)
@@ -1251,96 +1249,17 @@ func (s *Slave) handleMediaInfo(ac *protocol.AsyncCommand) interface{} {
 		if err != nil || info.IsDir() {
 			continue
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		cmd := exec.CommandContext(ctx, binary, "--Output=JSON", fullPath)
-		out, err := cmd.Output()
-		cancel()
-		if ctx.Err() == context.DeadlineExceeded {
-			return &protocol.AsyncResponseError{Index: ac.Index, Message: "mediainfo: timeout"}
+		if fields, handled, probeErr := probeFastAudioMetadata(fullPath); handled && probeErr == nil {
+			deriveMediaInfoFields(fields)
+			return &protocol.AsyncResponseMediaInfo{Index: ac.Index, Fields: fields}
 		}
-		if err != nil {
-			return &protocol.AsyncResponseError{Index: ac.Index, Message: fmt.Sprintf("mediainfo failed: %v", err)}
+		if fields, handled, probeErr := probeFastVideoMetadata(fullPath); handled && probeErr == nil {
+			deriveMediaInfoFields(fields)
+			return &protocol.AsyncResponseMediaInfo{Index: ac.Index, Fields: fields}
 		}
-		fields, err := flattenMediaInfo(out)
-		if err != nil {
-			return &protocol.AsyncResponseError{Index: ac.Index, Message: fmt.Sprintf("mediainfo parse failed: %v", err)}
-		}
-		return &protocol.AsyncResponseMediaInfo{Index: ac.Index, Fields: fields}
+		return &protocol.AsyncResponseError{Index: ac.Index, Message: "media probe unsupported for file type: " + filepath.Ext(fullPath)}
 	}
 	return &protocol.AsyncResponseError{Index: ac.Index, Message: "file not found: " + filePath}
-}
-
-func flattenMediaInfo(data []byte) (map[string]string, error) {
-	var root map[string]interface{}
-	if err := json.Unmarshal(data, &root); err != nil {
-		return nil, err
-	}
-	fields := map[string]string{}
-	media, _ := root["media"].(map[string]interface{})
-	tracks, _ := media["track"].([]interface{})
-	for _, rawTrack := range tracks {
-		track, _ := rawTrack.(map[string]interface{})
-		kind := mediaTrackKind(track)
-		if kind == "" {
-			continue
-		}
-		prefix := string(kind[0]) + "_"
-		for key, val := range track {
-			value := stringifyMediaValue(val)
-			if value == "" {
-				continue
-			}
-			fields[prefix+mediaKey(key)] = value
-		}
-	}
-	deriveMediaInfoFields(fields)
-	return fields, nil
-}
-
-func mediaTrackKind(track map[string]interface{}) string {
-	raw, _ := track["@type"].(string)
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "general":
-		return "general"
-	case "video":
-		return "video"
-	case "audio":
-		return "audio"
-	case "text":
-		return "subtitle"
-	default:
-		return ""
-	}
-}
-
-func mediaKey(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	var b strings.Builder
-	lastUnderscore := false
-	for _, r := range s {
-		ok := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
-		if ok {
-			b.WriteRune(r)
-			lastUnderscore = false
-		} else if !lastUnderscore {
-			b.WriteByte('_')
-			lastUnderscore = true
-		}
-	}
-	return strings.Trim(b.String(), "_")
-}
-
-func stringifyMediaValue(v interface{}) string {
-	switch x := v.(type) {
-	case string:
-		return strings.TrimSpace(x)
-	case float64:
-		return strconv.FormatFloat(x, 'f', -1, 64)
-	case bool:
-		return strconv.FormatBool(x)
-	default:
-		return ""
-	}
 }
 
 func deriveMediaInfoFields(f map[string]string) {

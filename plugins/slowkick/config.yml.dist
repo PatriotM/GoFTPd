@@ -13,9 +13,13 @@ monitor_downloads: true
 
 # Upload-specific floor in KB/s.
 min_upload_speed_kbps: 25
+# Grace period before upload minspeed enforcement starts.
+verify_upload_seconds: 5
 
 # Download-specific floor in KB/s.
 min_download_speed_kbps: 50
+# Grace period before download minspeed enforcement starts.
+verify_download_seconds: 5
 
 # Do nothing unless at least this many logged-in users are online.
 min_users_online: 2

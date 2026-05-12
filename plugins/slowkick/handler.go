@@ -16,6 +16,8 @@ type Handler struct {
 	svc                   *plugin.Services
 	monitorUploads        bool
 	monitorDownloads      bool
+	uploadGrace           time.Duration
+	downloadGrace         time.Duration
 	minUploadSpeedBytes   float64
 	minDownloadSpeedBytes float64
 	minUsersOnline        int
@@ -35,12 +37,14 @@ func New() *Handler {
 	return &Handler{
 		monitorUploads:        true,
 		monitorDownloads:      true,
+		uploadGrace:           5 * time.Second,
+		downloadGrace:         5 * time.Second,
 		minUploadSpeedBytes:   25 * 1024,
 		minDownloadSpeedBytes: 50 * 1024,
 		minUsersOnline:        2,
 		excludeUsers:          map[string]struct{}{},
 		excludeGroups:         map[string]struct{}{},
-		excludePaths:          []string{"/PRE", "/REQUESTS", "/SPEEDTEST"},
+		excludePaths:          normalizePaths([]string{"/PRE", "/REQUESTS", "/SPEEDTEST"}),
 		excludeExtensions:     lowerSet([]string{"sfv"}),
 		tempBans:              map[string]time.Time{},
 	}
@@ -60,6 +64,8 @@ func (h *Handler) ReloadConfig(cfg map[string]interface{}) error {
 func (h *Handler) applyConfig(cfg map[string]interface{}, initial bool) error {
 	h.monitorUploads = boolConfig(cfg, "monitor_uploads", true)
 	h.monitorDownloads = boolConfig(cfg, "monitor_downloads", true)
+	h.uploadGrace = durationSecondsConfig(cfg, "verify_upload_seconds", 5)
+	h.downloadGrace = durationSecondsConfig(cfg, "verify_download_seconds", 5)
 	h.minUploadSpeedBytes = float64(intConfig(cfg["min_upload_speed_kbps"], 25) * 1024)
 	h.minDownloadSpeedBytes = float64(intConfig(cfg["min_download_speed_kbps"], 50) * 1024)
 	h.minUsersOnline = intConfig(cfg["min_users_online"], 2)
@@ -115,27 +121,27 @@ func (h *Handler) ValidateLogin(u *user.User, remoteIP string) error {
 	return nil
 }
 
-func (h *Handler) TransferSpeedPolicy(username, primaryGroup, transferPath, direction string) (int64, int64, bool) {
+func (h *Handler) TransferSpeedPolicy(username, primaryGroup, transferPath, direction string) (int64, int64, int64, bool) {
 	username = strings.TrimSpace(username)
 	if username == "" {
-		return 0, 0, false
+		return 0, 0, 0, false
 	}
 	if !h.shouldApplyTransferPolicy(username, primaryGroup, transferPath, direction) {
-		return 0, 0, false
+		return 0, 0, 0, false
 	}
 	switch strings.ToLower(strings.TrimSpace(direction)) {
 	case "upload":
 		if h.minUploadSpeedBytes <= 0 {
-			return 0, 0, false
+			return 0, 0, 0, false
 		}
-		return int64(h.minUploadSpeedBytes), 0, true
+		return int64(h.minUploadSpeedBytes), 0, int64(h.uploadGrace / time.Second), true
 	case "download":
 		if h.minDownloadSpeedBytes <= 0 {
-			return 0, 0, false
+			return 0, 0, 0, false
 		}
-		return int64(h.minDownloadSpeedBytes), 0, true
+		return int64(h.minDownloadSpeedBytes), 0, int64(h.downloadGrace / time.Second), true
 	default:
-		return 0, 0, false
+		return 0, 0, 0, false
 	}
 }
 

@@ -1181,6 +1181,7 @@ func (sm *SlaveManager) loadReleaseSnapshotFromDisk(filePath string) error {
 	sm.releaseStateMu.Lock()
 	defer sm.releaseStateMu.Unlock()
 	sm.rebuildReleaseFactsLocked(snapshotFile.Releases)
+	sm.vfs.LoadStartupReleaseFacts(snapshotFile.Releases)
 	return nil
 }
 

@@ -73,6 +73,7 @@ type VirtualFileSystem struct {
 	files          map[string]*VFSFile
 	children       map[string]map[string]struct{}
 	dirMeta        map[string]*VFSDirMeta // dir path -> metadata (SFV cache etc)
+	startupFacts   map[string]*vfsReleaseSnapshot
 	protectedDirs  map[string]bool
 	hiddenPaths    map[string]bool
 	excludePaths   map[string]bool
@@ -107,6 +108,7 @@ func NewVirtualFileSystem() *VirtualFileSystem {
 		files:         make(map[string]*VFSFile),
 		children:      make(map[string]map[string]struct{}),
 		dirMeta:       make(map[string]*VFSDirMeta),
+		startupFacts:  make(map[string]*vfsReleaseSnapshot),
 		protectedDirs: make(map[string]bool),
 		hiddenPaths:   make(map[string]bool),
 		excludePaths:  make(map[string]bool),
@@ -179,6 +181,7 @@ func (vfs *VirtualFileSystem) AddFile(path string, file VFSFile) {
 		vfs.ensureChildrenBucketLocked(path)
 	}
 	vfs.touchAncestorsLocked(path, file.LastModified)
+	vfs.invalidateStartupFactsForPathLocked(path, file.IsDir)
 	vfs.markPersistDirtyLocked()
 }
 
@@ -194,6 +197,7 @@ func (vfs *VirtualFileSystem) UpdateFileVerification(path string, checksum uint3
 		return false
 	}
 	file.Checksum = checksum
+	vfs.invalidateStartupFactsForPathLocked(path, false)
 	vfs.markPersistDirtyLocked()
 	return true
 }
@@ -251,6 +255,7 @@ func (vfs *VirtualFileSystem) AddSymlink(linkPath, targetPath string) {
 	vfs.linkChildLocked(cleanVFSPath(filepath.Dir(linkPath)), linkPath)
 	vfs.ensureChildrenBucketLocked(linkPath)
 	vfs.touchAncestorsLocked(linkPath, time.Now().Unix())
+	vfs.invalidateStartupFactsForPathLocked(linkPath, true)
 	vfs.markPersistDirtyLocked()
 }
 
@@ -298,6 +303,7 @@ func (vfs *VirtualFileSystem) PurgeUnseen(slaveName string) {
 		}
 	}
 	if changed {
+		vfs.startupFacts = make(map[string]*vfsReleaseSnapshot)
 		vfs.markPersistDirtyLocked()
 	}
 }
@@ -326,6 +332,7 @@ func (vfs *VirtualFileSystem) PurgeUnseenChildren(slaveName, dirPath string) {
 		changed = vfs.deletePathLocked(childPath) || changed
 	}
 	if changed {
+		vfs.startupFacts = make(map[string]*vfsReleaseSnapshot)
 		vfs.markPersistDirtyLocked()
 	}
 }
@@ -421,6 +428,7 @@ func (vfs *VirtualFileSystem) DeleteFile(path string) {
 	}
 	parent := cleanVFSPath(filepath.Dir(path))
 	vfs.touchAncestorsLocked(parent, time.Now().Unix())
+	vfs.invalidateStartupFactsForPathLocked(path, false)
 	vfs.markPersistDirtyLocked()
 }
 
@@ -660,6 +668,19 @@ func (vfs *VirtualFileSystem) computeReleaseSnapshotLocked(dirPath string) *vfsR
 			snapshot.HasSFV = true
 		}
 	}
+	if startup := vfs.startupFacts[dirPath]; startup != nil {
+		if startup.VisibleCount > snapshot.VisibleCount {
+			snapshot.VisibleCount = startup.VisibleCount
+		}
+		snapshot.HasSFV = snapshot.HasSFV || startup.HasSFV
+		snapshot.HasNFO = snapshot.HasNFO || startup.HasNFO
+		if startup.Total > snapshot.Total {
+			snapshot.Total = startup.Total
+		}
+		if startup.Present > snapshot.Present {
+			snapshot.Present = startup.Present
+		}
+	}
 	return snapshot
 }
 
@@ -688,6 +709,78 @@ func (vfs *VirtualFileSystem) SnapshotReleaseFacts() map[string]*vfsReleaseSnaps
 		return nil
 	}
 	return out
+}
+
+func (vfs *VirtualFileSystem) invalidateStartupFactsForPathLocked(path string, isDir bool) {
+	if len(vfs.startupFacts) == 0 {
+		return
+	}
+	path = cleanVFSPath(path)
+	dirPath := path
+	if !isDir {
+		dirPath = cleanVFSPath(filepath.Dir(path))
+	}
+	delete(vfs.startupFacts, dirPath)
+	if isDir {
+		prefix := strings.TrimRight(filepath.ToSlash(dirPath), "/") + "/"
+		for key := range vfs.startupFacts {
+			if key == dirPath || strings.HasPrefix(filepath.ToSlash(key), prefix) {
+				delete(vfs.startupFacts, key)
+			}
+		}
+	}
+}
+
+func (vfs *VirtualFileSystem) LoadStartupReleaseFacts(facts map[string]*vfsReleaseSnapshot) {
+	vfs.mu.Lock()
+	defer vfs.mu.Unlock()
+
+	if len(facts) == 0 {
+		vfs.startupFacts = make(map[string]*vfsReleaseSnapshot)
+		return
+	}
+	vfs.startupFacts = make(map[string]*vfsReleaseSnapshot, len(facts))
+	for dirPath, snapshot := range facts {
+		if snapshot == nil {
+			continue
+		}
+		copyState := *snapshot
+		vfs.startupFacts[cleanVFSPath(dirPath)] = &copyState
+	}
+}
+
+func (vfs *VirtualFileSystem) HydrateRaceFile(path, owner, group string, xferTime int64, checksum uint32) bool {
+	vfs.mu.Lock()
+	defer vfs.mu.Unlock()
+
+	path = cleanVFSPath(path)
+	file := vfs.files[path]
+	if file == nil || file.IsDir {
+		return false
+	}
+	changed := false
+	currentOwner := strings.TrimSpace(file.Owner)
+	currentGroup := strings.TrimSpace(file.Group)
+	if (currentOwner == "" || strings.EqualFold(currentOwner, "GoFTPd") || strings.EqualFold(currentOwner, "ftp")) && strings.TrimSpace(owner) != "" {
+		file.Owner = owner
+		changed = true
+	}
+	if (currentGroup == "" || strings.EqualFold(currentGroup, "GoFTPd") || strings.EqualFold(currentGroup, "ftp")) && strings.TrimSpace(group) != "" {
+		file.Group = group
+		changed = true
+	}
+	if file.XferTime <= 0 && xferTime > 0 {
+		file.XferTime = xferTime
+		changed = true
+	}
+	if file.Checksum == 0 && checksum != 0 {
+		file.Checksum = checksum
+		changed = true
+	}
+	if changed {
+		vfs.markPersistDirtyLocked()
+	}
+	return changed
 }
 
 // FileExists checks if a path exists in the VFS
@@ -771,6 +864,7 @@ func (vfs *VirtualFileSystem) RenameFile(from, to string) {
 	now := time.Now().Unix()
 	vfs.touchAncestorsLocked(fromParent, now)
 	vfs.touchAncestorsLocked(toParent, now)
+	vfs.startupFacts = make(map[string]*vfsReleaseSnapshot)
 	vfs.markPersistDirtyLocked()
 }
 
@@ -826,6 +920,7 @@ func (vfs *VirtualFileSystem) RelocateFile(from, to, newSlaveName string) {
 	now := time.Now().Unix()
 	vfs.touchAncestorsLocked(fromParent, now)
 	vfs.touchAncestorsLocked(toParent, now)
+	vfs.startupFacts = make(map[string]*vfsReleaseSnapshot)
 	vfs.markPersistDirtyLocked()
 }
 
@@ -848,6 +943,7 @@ func (vfs *VirtualFileSystem) ClearSlave(slaveName string) {
 			}
 		}
 		vfs.rebuildChildrenLocked()
+		vfs.startupFacts = make(map[string]*vfsReleaseSnapshot)
 		vfs.markPersistDirtyLocked()
 	}
 }
@@ -1182,7 +1278,7 @@ type RaceUserStat struct {
 	Group      string
 	Files      int
 	Bytes      int64
-	Speed      float64 // bytes/sec average across this user's files
+	Speed      float64 // bytes/sec average of this user's per-file speeds (pzs-ng style)
 	PeakSpeed  float64 // bytes/sec of this user's fastest single file
 	SlowSpeed  float64 // bytes/sec of this user's slowest single file
 	Percent    int
@@ -1194,7 +1290,7 @@ type RaceGroupStat struct {
 	Name    string
 	Files   int
 	Bytes   int64
-	Speed   float64
+	Speed   float64 // bytes/sec sum of user speeds in this group (gl/pzs-style grouptop feel)
 	Percent int
 }
 
@@ -1440,8 +1536,8 @@ func (vfs *VirtualFileSystem) computeRaceStateFilteredLocked(dirPath string, exc
 		if cache.Total > 0 {
 			us.Percent = (us.Files * 100) / cache.Total
 		}
-		if us.DurationMs > 0 {
-			us.Speed = float64(us.Bytes) / (float64(us.DurationMs) / 1000.0)
+		if us.Files > 0 {
+			us.Speed = us.Speed / float64(us.Files)
 		}
 		cache.Users = append(cache.Users, *us)
 	}
@@ -1461,9 +1557,10 @@ func (vfs *VirtualFileSystem) computeRaceStateFilteredLocked(dirPath string, exc
 			gs.Percent = (gs.Files * 100) / cache.Total
 		}
 		for _, us := range cache.Users {
-			if us.Group == gs.Name {
-				gs.Speed += us.Speed
+			if us.Group != gs.Name {
+				continue
 			}
+			gs.Speed += us.Speed
 		}
 		cache.Groups = append(cache.Groups, *gs)
 	}

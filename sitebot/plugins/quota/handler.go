@@ -30,6 +30,7 @@ type trackedUser struct {
 	DaysRemaining  int    `yaml:"days_remaining"`
 	IRCNick        string `yaml:"irc_nick,omitempty"`
 	LastQuotaWeek  string `yaml:"last_quota_week,omitempty"`
+	ForcePassing   bool   `yaml:"force_passing,omitempty"`
 }
 
 type persistedState struct {
@@ -328,6 +329,26 @@ func (p *Plugin) handleStaffCommand(evt *event.Event) ([]plugin.Output, error) {
 	case "quota":
 		err = p.setUserQuota(username)
 		line = fmt.Sprintf("QUOTA: %s set to QUOTA.", username)
+	case "pass":
+		enable := true
+		if len(args) >= 3 {
+			switch strings.ToLower(strings.TrimSpace(args[2])) {
+			case "on", "true", "1", "yes":
+				enable = true
+			case "off", "false", "0", "no":
+				enable = false
+			default:
+				return p.reply(evt, p.render("QUOTACMD_ERROR", map[string]string{
+					"response": "pass expects on or off",
+				}, "QUOTA: pass expects on or off")), nil
+			}
+		}
+		err = p.setUserForcePassing(username, enable)
+		if enable {
+			line = fmt.Sprintf("QUOTA: %s forced to PASSING.", username)
+		} else {
+			line = fmt.Sprintf("QUOTA: %s force-pass cleared.", username)
+		}
 	case "extend":
 		if len(args) < 3 {
 			return p.reply(evt, p.render("QUOTACMD_USAGE", map[string]string{
@@ -422,11 +443,11 @@ func (p *Plugin) buildStatusLines() ([]string, error) {
 			"user":           entry.Username,
 			"group":          entry.Group,
 			"size":           formatBytes(entry.WkUpBytes),
-			"status":         passLabel(entry.WkUpBytes >= p.quotaBytes),
-			"status_plain":   passWord(entry.WkUpBytes >= p.quotaBytes),
-			"status_colored": passColored(entry.WkUpBytes >= p.quotaBytes),
+			"status":         passLabel(entry.WkUpBytes >= p.quotaBytes || p.isForcePassingLocked(entry.Username)),
+			"status_plain":   passWord(entry.WkUpBytes >= p.quotaBytes || p.isForcePassingLocked(entry.Username)),
+			"status_colored": passColored(entry.WkUpBytes >= p.quotaBytes || p.isForcePassingLocked(entry.Username)),
 			"days_remaining": strconv.Itoa(entry.DaysRemaining),
-		}, fmt.Sprintf("[ %02d ] %s/%s ( %s Up ) is currently %s.", idx+1, entry.Username, entry.Group, formatBytes(entry.WkUpBytes), passWord(entry.WkUpBytes >= p.quotaBytes))))
+		}, fmt.Sprintf("[ %02d ] %s/%s ( %s Up ) is currently %s.", idx+1, entry.Username, entry.Group, formatBytes(entry.WkUpBytes), passWord(entry.WkUpBytes >= p.quotaBytes || p.isForcePassingLocked(entry.Username)))))
 	}
 
 	lines = append(lines, p.render("QUOTACMD_TRIAL_HEADER", map[string]string{
@@ -440,11 +461,11 @@ func (p *Plugin) buildStatusLines() ([]string, error) {
 			"user":           entry.Username,
 			"group":          entry.Group,
 			"size":           formatBytes(entry.WkUpBytes),
-			"status":         passLabel(entry.WkUpBytes >= p.trialQuotaBytes),
-			"status_plain":   passWord(entry.WkUpBytes >= p.trialQuotaBytes),
-			"status_colored": passColored(entry.WkUpBytes >= p.trialQuotaBytes),
+			"status":         passLabel(entry.WkUpBytes >= p.trialQuotaBytes || p.isForcePassingLocked(entry.Username)),
+			"status_plain":   passWord(entry.WkUpBytes >= p.trialQuotaBytes || p.isForcePassingLocked(entry.Username)),
+			"status_colored": passColored(entry.WkUpBytes >= p.trialQuotaBytes || p.isForcePassingLocked(entry.Username)),
 			"days_remaining": strconv.Itoa(entry.DaysRemaining),
-		}, fmt.Sprintf("[ %02d ] %s/trial ( %s Up ) is currently %s. (%d days left)", idx+1, entry.Username, formatBytes(entry.WkUpBytes), passWord(entry.WkUpBytes >= p.trialQuotaBytes), entry.DaysRemaining)))
+		}, fmt.Sprintf("[ %02d ] %s/trial ( %s Up ) is currently %s. (%d days left)", idx+1, entry.Username, formatBytes(entry.WkUpBytes), passWord(entry.WkUpBytes >= p.trialQuotaBytes || p.isForcePassingLocked(entry.Username)), entry.DaysRemaining)))
 	}
 
 	return lines, nil
@@ -537,6 +558,9 @@ func (p *Plugin) scanAndProcess() error {
 				changed = true
 			}
 			if left <= 0 {
+				if state.ForcePassing {
+					break
+				}
 				if snap.WkUpBytes >= p.trialQuotaBytes {
 					state.Status = statusQuota
 					state.LastQuotaWeek = ""
@@ -565,6 +589,9 @@ func (p *Plugin) scanAndProcess() error {
 			if now.Weekday() == time.Sunday && state.LastQuotaWeek != weekKey {
 				state.LastQuotaWeek = weekKey
 				changed = true
+				if state.ForcePassing {
+					break
+				}
 				if snap.WkUpBytes < p.quotaBytes {
 					if p.quotaFailback {
 						state.Status = statusTrial
@@ -629,6 +656,28 @@ func (p *Plugin) setUserQuota(username string) error {
 	state.TrialDays = p.trialDaysDefault
 	state.DaysRemaining = daysUntilSunday(now)
 	state.LastQuotaWeek = ""
+	return p.saveStateLocked()
+}
+
+func (p *Plugin) setUserForcePassing(username string, enabled bool) error {
+	if err := p.ensureUserFile(username); err != nil {
+		return err
+	}
+	if enabled {
+		if err := p.setDisabledFlag(username, false); err != nil {
+			return err
+		}
+	}
+	now := time.Now()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	state := p.ensureStateUserLocked(username)
+	if enabled && state.Status == statusDisabled {
+		state.Status = statusQuota
+		state.DaysRemaining = daysUntilSunday(now)
+		state.LastQuotaWeek = ""
+	}
+	state.ForcePassing = enabled
 	return p.saveStateLocked()
 }
 
@@ -926,11 +975,16 @@ func (p *Plugin) render(key string, vars map[string]string, fallback string) str
 }
 
 func (p *Plugin) staffUsage() string {
-	return "!" + p.staffCommand + " <trial|quota|extend|delete> <username> [days]"
+	return "!" + p.staffCommand + " <trial|quota|pass|extend|delete> <username> [days|on|off]"
 }
 
 func (p *Plugin) staffExtendUsage() string {
 	return "!" + p.staffCommand + " extend <username> <days>"
+}
+
+func (p *Plugin) isForcePassingLocked(username string) bool {
+	state := p.state.Users[username]
+	return state != nil && state.ForcePassing
 }
 
 func parseUserSnapshot(path, username string) (userSnapshot, error) {

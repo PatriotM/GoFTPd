@@ -382,11 +382,11 @@ announce.BANNEDCMD_LINE = "%c01{BANNED:} %c05{%line}"
 
 announce.BANNEDCMD_ERROR = "%c01{BANNED:} %c04{%response}"
 
-announce.TOPCMD_HEADER = "%c03{TOP UPLOADERS FOR THE DAY:} %c14{[ }%count %c01{Users ]}"
+announce.TOPCMD_HEADER = "%c03{TOP UPLOADERS FOR THE DAY:} %c14{[ }%c01{%count} %c01{Users ]}"
 
-announce.TOPCMD_ENTRY = "%c14{[ }%c06{%rank} %c14{]} %user %c01{- (}%files %c01{Files) - (}%size%c01{)}"
+announce.TOPCMD_ENTRY = "%c14{[ }%c06{%rank} %c14{]} %user %c01{- (}%c01{%files} %c01{Files) - (}%c01{%size}%c01{)}"
 
-announce.TOPCMD_TOTAL = "%c03{TOTAL UPLOADS FOR THE DAY:} %c01{( }%files %c01{Files ) - ( }%size%c01{)}"
+announce.TOPCMD_TOTAL = "%c03{TOTAL UPLOADS FOR THE DAY:} %c01{( }%c01{%files} %c01{Files ) - ( }%c01{%size}%c01{)}"
 
 announce.TOPCMD_EMPTY = "%c03{TOP:} %c05{No uploads recorded for today.}"
 
@@ -401,10 +401,10 @@ announce.BW_ERROR = "%c01{BANDWiDTH:} %c04{%response}"
 announce.RULESCMD_LINE = "%c01{RULES:} %c05{%line}"
 
 announce.RULESCMD_ERROR = "%c01{RULES:} %c04{%response}"
-announce.QUOTACMD_QUOTA_HEADER = "%c02{QUOTA:} %c05{WEEKLY QUOTA} %c14{[ }%count %c01{Users - (Min }%quota_gb%c01{) ]}"
-announce.QUOTACMD_QUOTA_ENTRY = "%c14{[ }%c06{%rank} %c14{]} %user%c01{/}%c06{%group} %c01{( }%size %c01{Up ) is currently }%status_colored%c01{.}"
-announce.QUOTACMD_TRIAL_HEADER = "%c02{QUOTA:} %c05{TRIAL QUOTA} %c01{[ Trial List - }%count %c01{Trialing - (Min }%quota_gb%c01{) ]}"
-announce.QUOTACMD_TRIAL_ENTRY = "%c14{[ }%c06{%rank} %c14{]} %user%c01{/trial ( }%size %c01{Up ) is currently }%status_colored%c01{. (}%days_remaining%c01{ days left)}"
+announce.QUOTACMD_QUOTA_HEADER = "%c02{QUOTA:} %c05{WEEKLY QUOTA} %c14{[ }%c06{%count} %c01{Users - (Min }%c06{%quota_gb}%c01{) ]}"
+announce.QUOTACMD_QUOTA_ENTRY = "%c14{[ }%c06{%rank} %c14{]} %user%c01{/}%c06{%group} %c01{( }%c06{%size} %c01{Up ) is currently }%status_colored%c01{.}"
+announce.QUOTACMD_TRIAL_HEADER = "%c02{QUOTA:} %c05{TRIAL QUOTA} %c01{[ Trial List - }%c06{%count} %c01{Trialing - (Min }%c06{%quota_gb}%c01{) ]}"
+announce.QUOTACMD_TRIAL_ENTRY = "%c14{[ }%c06{%rank} %c14{]} %user%c01{/trial ( }%c06{%size} %c01{Up ) is currently }%status_colored%c01{. (}%c06{%days_remaining}%c01{ days left)}"
 announce.QUOTACMD_EMPTY = "%c02{QUOTA:} %c04{No trial or quota users tracked.}"
 announce.QUOTACMD_OK = "%c02{QUOTA:} %c05{%response}"
 announce.QUOTACMD_ERROR = "%c02{QUOTA:} %c04{%response}"

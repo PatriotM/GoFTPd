@@ -6,7 +6,38 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"goftpd/internal/plugin"
 )
+
+type testBridge struct {
+	entries map[string][]plugin.FileEntry
+}
+
+func (b *testBridge) PluginListDir(path string) []plugin.FileEntry {
+	return append([]plugin.FileEntry(nil), b.entries[path]...)
+}
+func (b *testBridge) MakeDir(path, owner, group string) error { return nil }
+func (b *testBridge) Symlink(linkPath, targetPath string) error { return nil }
+func (b *testBridge) Chmod(path string, mode uint32) error { return nil }
+func (b *testBridge) CreateSparseFile(path string, size int64, owner, group string) error { return nil }
+func (b *testBridge) DeleteFile(path string) error { return nil }
+func (b *testBridge) RenameFile(from, toDir, toName string) error { return nil }
+func (b *testBridge) RelocatePath(from, toDir, toName string) error { return nil }
+func (b *testBridge) RelocatePathToSlave(from, toDir, toName, targetSlave string) error { return nil }
+func (b *testBridge) WriteFile(path string, content []byte) error { return nil }
+func (b *testBridge) ReadFile(path string) ([]byte, error) { return nil, nil }
+func (b *testBridge) ProbeMediaInfo(path, binary string, timeoutSeconds int) (map[string]string, error) {
+	return nil, nil
+}
+func (b *testBridge) CacheMediaInfo(path string, fields map[string]string) {}
+func (b *testBridge) FileExists(path string) bool { return false }
+func (b *testBridge) GetFileSize(path string) int64 { return -1 }
+func (b *testBridge) GetSFVData(dirPath string) map[string]uint32 { return nil }
+func (b *testBridge) GetDirMediaInfo(dirPath string) map[string]string { return nil }
+func (b *testBridge) PluginGetVFSRaceStats(dirPath string) (users []plugin.RaceUser, groups []plugin.RaceGroup, totalBytes int64, present int, total int) {
+	return nil, nil, 0, 0, 0
+}
 
 func TestLoadConfigNormalizesSections(t *testing.T) {
 	cfg := loadConfig(map[string]interface{}{
@@ -120,5 +151,32 @@ func TestAppendHistoryWritesJSONL(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("history output missing %s: %s", want, text)
 		}
+	}
+}
+
+func TestExpandPatternSkipsSymlinkCandidates(t *testing.T) {
+	h := &Handler{
+		svc: &plugin.Services{
+			Bridge: &testBridge{
+				entries: map[string][]plugin.FileEntry{
+					"/MP3": {
+						{Name: "!Today_MP3", IsDir: true, IsSymlink: true},
+						{Name: "0512", IsDir: true},
+					},
+					"/MP3/0512": {
+						{Name: "Real.Release-2026-GRP", IsDir: true},
+						{Name: "!Linked.Release", IsDir: true, IsSymlink: true},
+					},
+				},
+			},
+		},
+	}
+
+	got := h.expandPattern("/MP3/*")
+	if len(got) != 1 {
+		t.Fatalf("expected only one real release candidate, got %+v", got)
+	}
+	if got[0].Path != "/MP3/0512/Real.Release-2026-GRP" {
+		t.Fatalf("unexpected release candidate: %+v", got[0])
 	}
 }

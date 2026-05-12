@@ -123,13 +123,13 @@ type MasterBridge interface {
 	// currently present and checksum-valid according to live VFS state.
 	GetVerifiedSFVPresentFiles(dirPath string) map[string]bool
 
-	// GetDirMediaInfo returns cached release-level mediainfo fields for a directory.
+	// GetDirMediaInfo returns cached release-level media probe fields for a directory.
 	GetDirMediaInfo(dirPath string) map[string]string
 
-	// ProbeMediaInfo runs mediainfo for a file and returns normalized key/value output.
+	// ProbeMediaInfo runs the built-in media probe for a file and returns normalized key/value output.
 	ProbeMediaInfo(filePath, binary string, timeoutSeconds int) (map[string]string, error)
 
-	// CacheMediaInfo stores release-level mediainfo fields for a directory.
+	// CacheMediaInfo stores release-level media probe fields for a directory.
 	CacheMediaInfo(dirPath string, fields map[string]string)
 
 	// ClaimReleaseMetadataAnnouncement atomically marks one release-scoped

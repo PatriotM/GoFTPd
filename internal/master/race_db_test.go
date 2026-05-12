@@ -177,6 +177,52 @@ func TestRaceDBGetRaceStatsUsesNormalizedFilenameKeys(t *testing.T) {
 	if len(groups) != 1 || groups[0].Name != "GRP" || groups[0].Files != 1 {
 		t.Fatalf("unexpected group stats: %+v", groups)
 	}
+	if users[0].Speed != 1234 {
+		t.Fatalf("expected single-file pzs-ng user speed 1234 bytes/s, got %f", users[0].Speed)
+	}
+	if groups[0].Speed != 1234 {
+		t.Fatalf("expected single-file pzs-ng group speed 1234 bytes/s, got %f", groups[0].Speed)
+	}
+}
+
+func TestRaceDBGetRaceStatsUsesAveragePerFileSpeeds(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "race.db")
+	rdb, err := NewRaceDB(dbPath)
+	if err != nil {
+		t.Fatalf("NewRaceDB failed: %v", err)
+	}
+	defer rdb.Close()
+
+	releasePath := "/site/MP3/Average.Speed-GRP"
+	if err := rdb.SaveSFV(releasePath, "release.sfv", map[string]uint32{
+		"01-track.mp3": 1,
+		"02-track.mp3": 2,
+	}); err != nil {
+		t.Fatalf("SaveSFV failed: %v", err)
+	}
+	if err := rdb.RecordUpload(releasePath+"/01-track.mp3", "steel", "GRP", 100, 1000, 1); err != nil {
+		t.Fatalf("RecordUpload track 1 failed: %v", err)
+	}
+	if err := rdb.RecordUpload(releasePath+"/02-track.mp3", "steel", "GRP", 200, 4000, 2); err != nil {
+		t.Fatalf("RecordUpload track 2 failed: %v", err)
+	}
+
+	users, groups, _, present, total := rdb.GetRaceStats(releasePath)
+	if total != 2 || present != 2 {
+		t.Fatalf("expected complete release, got present=%d total=%d", present, total)
+	}
+	if len(users) != 1 || len(groups) != 1 {
+		t.Fatalf("unexpected stats shape users=%+v groups=%+v", users, groups)
+	}
+	if users[0].DurationMs != 5000 {
+		t.Fatalf("expected summed duration 5000ms, got %d", users[0].DurationMs)
+	}
+	if users[0].Speed != 75 {
+		t.Fatalf("expected pzs-ng style average user speed 75 bytes/s, got %f", users[0].Speed)
+	}
+	if groups[0].Speed != 75 {
+		t.Fatalf("expected pzs-ng style average group speed 75 bytes/s, got %f", groups[0].Speed)
+	}
 }
 
 func TestRaceDBGetImmediateReleaseProgressReturnsDirectChildrenOnly(t *testing.T) {

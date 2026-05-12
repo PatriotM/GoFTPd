@@ -12,6 +12,7 @@ status_commands: ["quota"]
 # Staff command surface:
 #   !quotactl trial <user> [days]
 #   !quotactl quota <user>
+#   !quotactl pass <user> [on|off]
 #   !quotactl extend <user> <days>
 #   !quotactl delete <user> [reason]
 staff_command: "quotactl"

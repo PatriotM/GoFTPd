@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -322,7 +323,7 @@ func (r *RaceDB) ReplaceReleaseFiles(dirPath, sfvName string, entries map[string
 
 func (r *RaceDB) DeletePath(path string, isDir bool) error {
 	if isDir {
-		_, err := r.db.Exec(`DELETE FROM releases WHERE path = ?`, path)
+		_, err := r.db.Exec(`DELETE FROM releases WHERE path = ? OR path LIKE ?`, path, path+"/%")
 		return err
 	}
 
@@ -397,6 +398,33 @@ func (r *RaceDB) RenamePath(from, to string, isDir bool) error {
 }
 
 func (r *RaceDB) Reconcile(vfs *VirtualFileSystem) error {
+	releaseRows, err := r.db.Query(`SELECT path FROM releases`)
+	if err != nil {
+		return err
+	}
+	var stale []string
+	for releaseRows.Next() {
+		var dirPath string
+		if err := releaseRows.Scan(&dirPath); err != nil {
+			releaseRows.Close()
+			return err
+		}
+		file := vfs.GetFile(dirPath)
+		if file == nil || !file.IsDir {
+			stale = append(stale, dirPath)
+		}
+	}
+	if err := releaseRows.Err(); err != nil {
+		releaseRows.Close()
+		return err
+	}
+	releaseRows.Close()
+	for _, dirPath := range stale {
+		if _, err := r.db.Exec(`DELETE FROM releases WHERE path = ?`, dirPath); err != nil {
+			return err
+		}
+	}
+
 	sfvRows, err := r.db.Query(`
         SELECT rel.path, rel.sfv_name, rf.filename, rf.expected_crc32
         FROM releases rel
@@ -451,7 +479,7 @@ func (r *RaceDB) GetMediaInfo(dirPath string) map[string]string {
         ORDER BY rm.field_key
     `, dirPath)
 	if err != nil {
-		log.Printf("[RaceDB] mediainfo query failed for %s: %v", dirPath, err)
+		log.Printf("[RaceDB] media probe query failed for %s: %v", dirPath, err)
 		return nil
 	}
 	defer rows.Close()
@@ -460,7 +488,7 @@ func (r *RaceDB) GetMediaInfo(dirPath string) map[string]string {
 	for rows.Next() {
 		var key, value string
 		if err := rows.Scan(&key, &value); err != nil {
-			log.Printf("[RaceDB] mediainfo row scan failed for %s: %v", dirPath, err)
+			log.Printf("[RaceDB] media probe row scan failed for %s: %v", dirPath, err)
 			return nil
 		}
 		key = strings.TrimSpace(key)
@@ -470,7 +498,7 @@ func (r *RaceDB) GetMediaInfo(dirPath string) map[string]string {
 		}
 	}
 	if err := rows.Err(); err != nil {
-		log.Printf("[RaceDB] mediainfo row iteration failed for %s: %v", dirPath, err)
+		log.Printf("[RaceDB] media probe row iteration failed for %s: %v", dirPath, err)
 		return nil
 	}
 	if len(out) == 0 {
@@ -516,7 +544,16 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 	}
 
 	userRows, err := r.db.Query(`
-        SELECT p.uploader, p.grp, COUNT(*), COALESCE(SUM(p.size_bytes),0), COALESCE(SUM(p.duration_ms),0)
+        SELECT
+            p.uploader,
+            p.grp,
+            COUNT(*),
+            COALESCE(SUM(p.size_bytes),0),
+            COALESCE(SUM(p.duration_ms),0),
+            COALESCE(AVG(CASE
+                WHEN p.duration_ms > 0 THEN (CAST(p.size_bytes AS REAL) / CAST(p.duration_ms AS REAL)) * 1000.0
+                ELSE NULL
+            END), 0)
         FROM release_files p
         JOIN release_files e
           ON e.release_id = p.release_id
@@ -536,15 +573,18 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 
 	var users []core.VFSRaceUser
 	var userDurations []int64
+	var userAverageSpeeds []float64
 	for userRows.Next() {
 		var u core.VFSRaceUser
 		var durationMs int64
-		if err := userRows.Scan(&u.Name, &u.Group, &u.Files, &u.Bytes, &durationMs); err != nil {
+		var averageSpeed float64
+		if err := userRows.Scan(&u.Name, &u.Group, &u.Files, &u.Bytes, &durationMs, &averageSpeed); err != nil {
 			log.Printf("[RaceDB] user row scan failed for %s: %v", dirPath, err)
 			return nil, nil, 0, 0, 0
 		}
 		users = append(users, u)
 		userDurations = append(userDurations, durationMs)
+		userAverageSpeeds = append(userAverageSpeeds, averageSpeed)
 	}
 	if err := userRows.Err(); err != nil {
 		log.Printf("[RaceDB] user rows iteration failed for %s: %v", dirPath, err)
@@ -556,9 +596,7 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 		u := &users[i]
 		durationMs := userDurations[i]
 		u.DurationMs = durationMs
-		if durationMs > 0 {
-			u.Speed = float64(u.Bytes) / (float64(durationMs) / 1000.0)
-		}
+		u.Speed = userAverageSpeeds[i]
 		var peakBytes, peakMs sql.NullInt64
 		err := r.db.QueryRow(`
             SELECT size_bytes, duration_ms FROM release_files
@@ -614,7 +652,10 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 	}
 
 	groupRows, err := r.db.Query(`
-        SELECT p.grp, COUNT(*), COALESCE(SUM(p.size_bytes),0), COALESCE(SUM(p.duration_ms),0)
+        SELECT
+            p.grp,
+            COUNT(*),
+            COALESCE(SUM(p.size_bytes),0)
         FROM release_files p
         JOIN release_files e
           ON e.release_id = p.release_id
@@ -635,16 +676,15 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 	var groups []core.VFSRaceGroup
 	for groupRows.Next() {
 		var g core.VFSRaceGroup
-		var durationMs int64
-		if err := groupRows.Scan(&g.Name, &g.Files, &g.Bytes, &durationMs); err != nil {
+		if err := groupRows.Scan(&g.Name, &g.Files, &g.Bytes); err != nil {
 			log.Printf("[RaceDB] group row scan failed for %s: %v", dirPath, err)
 			return nil, nil, 0, 0, 0
 		}
-		_ = durationMs
 		for _, u := range users {
-			if u.Group == g.Name {
-				g.Speed += u.Speed
+			if u.Group != g.Name {
+				continue
 			}
+			g.Speed += u.Speed
 		}
 		if total > 0 {
 			g.Percent = (g.Files * 100) / total
@@ -660,6 +700,48 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 	}
 
 	return users, groups, totalBytes, present, total
+}
+
+func (r *RaceDB) HydrateVFS(vfs *VirtualFileSystem) (int, error) {
+	if r == nil || r.db == nil || vfs == nil {
+		return 0, nil
+	}
+
+	rows, err := r.db.Query(`
+        SELECT r.path, p.filename, p.uploader, p.grp, p.duration_ms, p.checksum
+        FROM releases r
+        JOIN release_files p
+          ON p.release_id = r.id
+        JOIN release_files e
+          ON e.release_id = p.release_id
+         AND e.is_expected = 1
+         AND e.filename = p.filename
+        WHERE p.is_present = 1
+          AND p.duration_ms > 0
+          AND p.checksum = e.expected_crc32
+    `)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	hydrated := 0
+	for rows.Next() {
+		var dirPath, fileName, owner, group string
+		var durationMs int64
+		var checksum int64
+		if err := rows.Scan(&dirPath, &fileName, &owner, &group, &durationMs, &checksum); err != nil {
+			return hydrated, err
+		}
+		filePath := filepath.ToSlash(path.Join(dirPath, fileName))
+		if vfs.HydrateRaceFile(filePath, owner, group, durationMs, uint32(checksum)) {
+			hydrated++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return hydrated, err
+	}
+	return hydrated, nil
 }
 
 func (r *RaceDB) HasRelease(dirPath string) bool {

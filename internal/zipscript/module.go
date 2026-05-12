@@ -714,15 +714,28 @@ func AudioCheckEnabled(cfg Config, dirPath, fileName string) bool {
 	if !cfg.Enabled || !cfg.Audio.Enabled {
 		return false
 	}
-	section := strings.ToUpper(strings.Trim(path.Clean(dirPath), "/"))
-	if idx := strings.Index(section, "/"); idx >= 0 {
-		section = section[:idx]
-	}
-	if section != "MP3" && section != "FLAC" {
+	section, _ := SectionInfoFromPath(dirPath)
+	if len(cfg.Audio.Sections) > 0 && !matchesAnySectionName(section, cfg.Audio.Sections) {
 		return false
 	}
 	ext := normalizedExt(fileName)
-	return ext == "mp3" || ext == "flac" || ext == "m4a" || ext == "wav"
+	for _, allowed := range cfg.Audio.Extensions {
+		if strings.EqualFold(strings.TrimSpace(allowed), ext) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesAnySectionName(section string, patterns []string) bool {
+	section = strings.ToLower(strings.TrimSpace(section))
+	for _, pat := range patterns {
+		pat = strings.ToLower(strings.TrimSpace(pat))
+		if pat != "" && strings.Contains(section, pat) {
+			return true
+		}
+	}
+	return false
 }
 
 func ShowAudioInfoOnCWDForDir(cfg Config, dirPath string, fields map[string]string) bool {

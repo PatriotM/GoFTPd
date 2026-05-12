@@ -2,6 +2,7 @@ package user
 
 import (
 	"fmt"
+	"log"
 	"os"
 	pathpkg "path"
 	"path/filepath"
@@ -502,10 +503,55 @@ func (u *User) UpdateStats(bytes int64, isUpload bool) {
 	u.UpdateStatsWithCredits(bytes, isUpload, true)
 }
 
+func sameLocalDay(a, b time.Time) bool {
+	ay, am, ad := a.Date()
+	by, bm, bd := b.Date()
+	return ay == by && am == bm && ad == bd
+}
+
+func sameLocalMonth(a, b time.Time) bool {
+	ay, am, _ := a.Date()
+	by, bm, _ := b.Date()
+	return ay == by && am == bm
+}
+
+func sameISOWeek(a, b time.Time) bool {
+	ay, aw := a.ISOWeek()
+	by, bw := b.ISOWeek()
+	return ay == by && aw == bw
+}
+
+// ResetTransferStatPeriodsIfDue resets day/week/month transfer stats when the
+// persisted LastLogin anchor belongs to an older period than now.
+func (u *User) ResetTransferStatPeriodsIfDue(now time.Time) bool {
+	if u == nil || u.LastLogin <= 0 {
+		return false
+	}
+	prev := time.Unix(u.LastLogin, 0).In(now.Location())
+	changed := false
+	if !sameLocalDay(prev, now) {
+		u.DayUp = StatLine{}
+		u.DayDn = StatLine{}
+		changed = true
+	}
+	if !sameISOWeek(prev, now) {
+		u.WkUp = StatLine{}
+		u.WkDn = StatLine{}
+		changed = true
+	}
+	if !sameLocalMonth(prev, now) {
+		u.MonthUp = StatLine{}
+		u.MonthDn = StatLine{}
+		changed = true
+	}
+	return changed
+}
+
 // UpdateStatsWithCredits increments throughput metrics and optionally applies
 // ratio credits. Free sections such as speedtest still count traffic, but do
 // not add upload credits or charge download credits.
 func (u *User) UpdateStatsWithCredits(bytes int64, isUpload bool, applyCredits bool) {
+	u.ResetTransferStatPeriodsIfDue(time.Now())
 	if isUpload {
 		u.AllUp.Files++
 		u.AllUp.Bytes += bytes
@@ -536,7 +582,9 @@ func (u *User) UpdateStatsWithCredits(bytes int64, isUpload bool, applyCredits b
 			}
 		}
 	}
-	u.Save()
+	if err := u.Save(); err != nil {
+		log.Printf("[USER] failed to persist stats for %s: %v", u.Name, err)
+	}
 }
 
 func (u *User) HasFlag(flag string) bool {

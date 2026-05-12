@@ -43,10 +43,12 @@ type AnnouncePlugin struct {
 	slowDnKickChans     []string
 	pretimeMode         string
 	pretimeInlineWait   time.Duration
+	loginFailCooldown   time.Duration
 	asyncEmit           func(outType, text, section, relpath string)
 	mu                  sync.Mutex
 	state               map[string]*releaseState
 	pendingPretime      map[string]*pendingPretime
+	lastLoginFail       map[string]time.Time
 }
 
 func New() *AnnouncePlugin {
@@ -54,13 +56,20 @@ func New() *AnnouncePlugin {
 		state:             map[string]*releaseState{},
 		pretimeMode:       "newline",
 		pretimeInlineWait: 1500 * time.Millisecond,
+		loginFailCooldown: 10 * time.Second,
 		pendingPretime:    map[string]*pendingPretime{},
+		lastLoginFail:     map[string]time.Time{},
 	}
 }
 func (p *AnnouncePlugin) Name() string { return "Announce" }
 func (p *AnnouncePlugin) Initialize(config map[string]interface{}) error {
 	if debug, ok := config["debug"].(bool); ok {
 		p.debug = debug
+	}
+	if secs, ok := config["loginfail_cooldown_seconds"]; ok {
+		if v := configInt(secs, 10); v > 0 {
+			p.loginFailCooldown = time.Duration(v) * time.Second
+		}
 	}
 	p.slowUploadWarnChans = p.routeTargets(config, "SLOWUPLOADWARN", "SLOWKICK", "SLAVEAUTH", "LOGIN")
 	p.slowUploadKickChans = p.routeTargets(config, "SLOWUPLOADKICK", "SLOWKICK", "SLAVEAUTH", "LOGIN")
@@ -497,6 +506,27 @@ func (p *AnnouncePlugin) emitInlinePretime(evt *event.Event, section, rel string
 	return true
 }
 
+func loginFailKey(vars map[string]string) string {
+	username := strings.ToLower(strings.TrimSpace(vars["username"]))
+	reason := strings.ToLower(strings.TrimSpace(vars["reason"]))
+	ip := strings.ToLower(strings.TrimSpace(vars["remote_ip"]))
+	mask := strings.ToLower(strings.TrimSpace(vars["remote_mask"]))
+	return username + "|" + reason + "|" + ip + "|" + mask
+}
+
+func configInt(raw interface{}, fallback int) int {
+	switch v := raw.(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	default:
+		return fallback
+	}
+}
+
 func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -529,12 +559,12 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 		}
 		outs = append(outs, plugin.Output{Type: "NEWDAY", Text: p.render("NEWDAY", vars, fallback)})
 	case event.EventAudioInfo:
-		fallback := fmt.Sprintf("AUDIO-INFO: [%s] %s Get ready for some %s from %s at %sHz in %s %s (%s).",
-			section, rel, vars["genre"], vars["year"], vars["sample_rate"], vars["channels"], vars["bitrate"], vars["bitrate_mode"])
+		fallback := fmt.Sprintf("AUDIO-INFO: [%s] %s %s.",
+			section, rel, formatAudioInfoSummary(vars))
 		outs = append(outs, plugin.Output{Type: "AUDIOINFO", Text: p.render("AUDIOINFO", vars, fallback)})
 	case event.EventMediaInfo:
-		fallback := fmt.Sprintf("SAMPLE-INFO: [%s] %s - Video: %s %sx%s - Audio: %s %s - Subs: %s - Duration: %s",
-			section, rel, vars["video_format"], vars["width"], vars["height"], vars["audio_format"], vars["channels"], vars["subtitle_format"], vars["duration"])
+		fallback := fmt.Sprintf("SAMPLE-INFO: [%s] %s - Video: %s - Audio: %s - Subs: %s - Duration: %s",
+			section, rel, formatSampleVideoLabel(vars), formatSampleAudioLabel(vars), formatSampleSubtitleLabel(vars), formatSampleDurationLabel(vars))
 		outs = append(outs, plugin.Output{Type: "MEDIAINFO", Text: p.render("MEDIAINFO", vars, fallback)})
 	case event.EventSpeedtest:
 		nick := vars["nick"]
@@ -763,6 +793,13 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 	case event.EventUnnuke:
 		outs = append(outs, plugin.Output{Type: "UNNUKE", Text: p.render("UNNUKE", vars, fmt.Sprintf("UNNUKE: [%s] %s by %s", section, rel, evt.User))})
 	case event.EventLoginFail:
+		key := loginFailKey(vars)
+		if key != "|||" && p.loginFailCooldown > 0 {
+			if last, ok := p.lastLoginFail[key]; ok && time.Since(last) < p.loginFailCooldown {
+				return nil, nil
+			}
+			p.lastLoginFail[key] = time.Now()
+		}
 		message := strings.TrimSpace(vars["message"])
 		if message == "" {
 			mask := strings.TrimSpace(vars["remote_mask"])
@@ -858,10 +895,14 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 	case event.EventSlowUploadKick:
 		message := strings.TrimSpace(vars["message"])
 		if message == "" {
-			message = fmt.Sprintf("%s/%s was kicked for slow upload %s at %sKB/s in %s (floor %sKB/s).",
-				vars["username"], vars["group"], vars["filename"], vars["speed_kbps"], vars["path"], vars["min_speed_kbps"])
+			target := strings.TrimSpace(vars["relname"])
+			if target == "" {
+				target = strings.TrimSpace(vars["path"])
+			}
+			message = fmt.Sprintf("%s/%s slowup kick: %s @ %sKB/s (< %sKB/s) in %s.",
+				vars["username"], vars["group"], vars["filename"], vars["speed_kbps"], vars["min_speed_kbps"], target)
 			if secs := strings.TrimSpace(vars["tempban_seconds"]); secs != "" && secs != "0" {
-				message += fmt.Sprintf(" Tempbanned for %ss.", secs)
+				message += fmt.Sprintf(" Tempban %ss.", secs)
 			}
 		}
 		vars["message"] = message
@@ -877,10 +918,14 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 	case event.EventSlowDownloadKick:
 		message := strings.TrimSpace(vars["message"])
 		if message == "" {
-			message = fmt.Sprintf("%s/%s was kicked for slow download %s at %sKB/s from %s (floor %sKB/s).",
-				vars["username"], vars["group"], vars["filename"], vars["speed_kbps"], vars["path"], vars["min_speed_kbps"])
+			target := strings.TrimSpace(vars["relname"])
+			if target == "" {
+				target = strings.TrimSpace(vars["path"])
+			}
+			message = fmt.Sprintf("%s/%s slowdn kick: %s @ %sKB/s (< %sKB/s) from %s.",
+				vars["username"], vars["group"], vars["filename"], vars["speed_kbps"], vars["min_speed_kbps"], target)
 			if secs := strings.TrimSpace(vars["tempban_seconds"]); secs != "" && secs != "0" {
-				message += fmt.Sprintf(" Tempbanned for %ss.", secs)
+				message += fmt.Sprintf(" Tempban %ss.", secs)
 			}
 		}
 		vars["message"] = message
@@ -999,6 +1044,80 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 		outs = append(outs, plugin.Output{Type: "OLDPRETIME", Text: p.render("OLDPRETIME", vars, fallback)})
 	}
 	return outs, nil
+}
+
+func formatAudioInfoSummary(vars map[string]string) string {
+	parts := []string{}
+	if genre := strings.TrimSpace(vars["genre"]); genre != "" {
+		parts = append(parts, "Get ready for some "+genre)
+	} else {
+		parts = append(parts, "Get ready for some audio")
+	}
+	if year := strings.TrimSpace(vars["year"]); year != "" {
+		parts = append(parts, "from "+year)
+	}
+	if sampleRate := strings.TrimSpace(vars["sample_rate"]); sampleRate != "" {
+		parts = append(parts, "at "+sampleRate+"Hz")
+	}
+	audioTail := []string{}
+	if channels := strings.TrimSpace(vars["channels"]); channels != "" {
+		audioTail = append(audioTail, channels)
+	}
+	if bitrate := strings.TrimSpace(vars["bitrate"]); bitrate != "" {
+		audioTail = append(audioTail, bitrate)
+	}
+	if mode := strings.TrimSpace(vars["bitrate_mode"]); mode != "" {
+		audioTail = append(audioTail, "("+mode+")")
+	}
+	if len(audioTail) > 0 {
+		parts = append(parts, "in "+strings.Join(audioTail, " "))
+	}
+	return strings.Join(parts, " ")
+}
+
+func formatSampleVideoLabel(vars map[string]string) string {
+	codec := strings.TrimSpace(vars["video_format"])
+	width := strings.TrimSpace(vars["width"])
+	height := strings.TrimSpace(vars["height"])
+	switch {
+	case codec != "" && width != "" && height != "":
+		return codec + " " + width + "x" + height
+	case codec != "":
+		return codec
+	case width != "" && height != "":
+		return width + "x" + height
+	default:
+		return "Unknown"
+	}
+}
+
+func formatSampleAudioLabel(vars map[string]string) string {
+	codec := strings.TrimSpace(vars["audio_format"])
+	channels := strings.TrimSpace(vars["channels"])
+	switch {
+	case codec != "" && channels != "":
+		return codec + " " + channels
+	case codec != "":
+		return codec
+	case channels != "":
+		return channels
+	default:
+		return "None"
+	}
+}
+
+func formatSampleSubtitleLabel(vars map[string]string) string {
+	if subs := strings.TrimSpace(vars["subtitle_format"]); subs != "" {
+		return subs
+	}
+	return "None"
+}
+
+func formatSampleDurationLabel(vars map[string]string) string {
+	if duration := strings.TrimSpace(vars["duration"]); duration != "" {
+		return duration
+	}
+	return "Unknown"
 }
 
 func isReleaseDir(eventPath, section string) bool {

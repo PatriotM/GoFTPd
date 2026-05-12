@@ -155,3 +155,30 @@ func TestUploadRaceAnnouncesStopAfterComplete(t *testing.T) {
 		t.Fatalf("expected no post-complete race outputs, got %+v", outs)
 	}
 }
+
+func TestFormatAudioInfoSummaryOmitsMissingSampleRate(t *testing.T) {
+	got := formatAudioInfoSummary(map[string]string{
+		"genre":        "Acoustic",
+		"year":         "2020",
+		"sample_rate":  "",
+		"channels":     "Stereo",
+		"bitrate":      "2991kbps",
+		"bitrate_mode": "VBR",
+	})
+
+	want := "Get ready for some Acoustic from 2020 in Stereo 2991kbps (VBR)"
+	if got != want {
+		t.Fatalf("summary = %q, want %q", got, want)
+	}
+}
+
+func TestFormatSampleVideoLabelFallsBackCleanlyWithoutDimensions(t *testing.T) {
+	got := formatSampleVideoLabel(map[string]string{
+		"video_format": "AVC",
+		"width":        "",
+		"height":       "",
+	})
+	if got != "AVC" {
+		t.Fatalf("video label = %q, want %q", got, "AVC")
+	}
+}

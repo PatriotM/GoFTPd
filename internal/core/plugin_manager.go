@@ -188,9 +188,9 @@ func (pm *PluginManager) ValidateLogin(u *user.User, remoteIP string) error {
 	return nil
 }
 
-func (pm *PluginManager) TransferSpeedLimits(username, primaryGroup, transferPath, direction string) (int64, int64) {
+func (pm *PluginManager) TransferSpeedLimits(username, primaryGroup, transferPath, direction string) (int64, int64, int64) {
 	if pm == nil {
-		return 0, 0
+		return 0, 0, 0
 	}
 
 	pm.mu.RLock()
@@ -203,13 +203,13 @@ func (pm *PluginManager) TransferSpeedLimits(username, primaryGroup, transferPat
 		if !ok {
 			continue
 		}
-		minSpeed, maxSpeed, ok := provider.TransferSpeedPolicy(username, primaryGroup, transferPath, direction)
+		minSpeed, maxSpeed, graceSeconds, ok := provider.TransferSpeedPolicy(username, primaryGroup, transferPath, direction)
 		if !ok {
 			continue
 		}
-		return minSpeed, maxSpeed
+		return minSpeed, maxSpeed, graceSeconds
 	}
-	return 0, 0
+	return 0, 0, 0
 }
 
 func (pm *PluginManager) HandleSlowTransfer(username, primaryGroup, transferPath, direction, slaveName string, transferIndex int32, actualSpeedBytes, minSpeedBytes int64) {

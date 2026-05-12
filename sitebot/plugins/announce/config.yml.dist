@@ -7,6 +7,10 @@ default_channel: "#goftpd-staff"
 #   ./etc/templates/drftpd.theme
 theme_file: "./etc/templates/pzsng.theme"
 
+# Collapse repeated LOGINFAIL announces for the same username/reason/source
+# within this many seconds, so staff does not get flooded by retry storms.
+loginfail_cooldown_seconds: 10
+
 # Explicit type -> channel routes.
 type_routes:
   NUKE: ["#goftpd-nuke"]

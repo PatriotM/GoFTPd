@@ -5,6 +5,9 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"goftpd/internal/zipscript"
 )
@@ -55,6 +58,129 @@ type zipRescanResult struct {
 	Errors       []string
 }
 
+type rescanJob struct {
+	ID             string
+	User           string
+	Target         string
+	CreatedAt      time.Time
+	StartedAt      time.Time
+	CompletedAt    time.Time
+	Status         string
+	TotalItems     int
+	CompletedItems int
+	lines          []string
+	lastReadByUser map[string]int
+	mu             sync.Mutex
+}
+
+type rescanJobManager struct {
+	seq        uint64
+	mu         sync.RWMutex
+	jobs       map[string]*rescanJob
+	lastByUser map[string]string
+}
+
+var globalRescanJobs = &rescanJobManager{
+	jobs:       make(map[string]*rescanJob),
+	lastByUser: make(map[string]string),
+}
+
+func (m *rescanJobManager) Create(user, target string, totalItems int) *rescanJob {
+	id := fmt.Sprintf("R%06d", atomic.AddUint64(&m.seq, 1))
+	job := &rescanJob{
+		ID:             id,
+		User:           user,
+		Target:         target,
+		CreatedAt:      time.Now(),
+		Status:         "queued",
+		TotalItems:     totalItems,
+		lastReadByUser: make(map[string]int),
+	}
+	m.mu.Lock()
+	m.jobs[id] = job
+	if strings.TrimSpace(user) != "" {
+		m.lastByUser[strings.ToLower(strings.TrimSpace(user))] = id
+	}
+	m.mu.Unlock()
+	return job
+}
+
+func (m *rescanJobManager) Find(id, user string) *rescanJob {
+	id = strings.TrimSpace(id)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if id == "" {
+		id = m.lastByUser[strings.ToLower(strings.TrimSpace(user))]
+	}
+	return m.jobs[id]
+}
+
+func (j *rescanJob) Start() {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.Status = "running"
+	j.StartedAt = time.Now()
+}
+
+func (j *rescanJob) Complete() {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.Status = "done"
+	j.CompletedAt = time.Now()
+}
+
+func (j *rescanJob) CurrentStatus() string {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.Status
+}
+
+func (j *rescanJob) Fail(err error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.Status = "failed"
+	j.CompletedAt = time.Now()
+	if err != nil {
+		j.lines = append(j.lines, "ERROR: "+strings.TrimSpace(err.Error()))
+	}
+}
+
+func (j *rescanJob) Advance() {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.CompletedItems++
+}
+
+func (j *rescanJob) Append(line string) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.lines = append(j.lines, line)
+}
+
+func (j *rescanJob) SnapshotUnread(user string) (status string, target string, totalItems, completedItems int, createdAt, startedAt, completedAt time.Time, lines []string) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	status = j.Status
+	target = j.Target
+	totalItems = j.TotalItems
+	completedItems = j.CompletedItems
+	createdAt = j.CreatedAt
+	startedAt = j.StartedAt
+	completedAt = j.CompletedAt
+	key := strings.ToLower(strings.TrimSpace(user))
+	from := j.lastReadByUser[key]
+	if from < 0 || from > len(j.lines) {
+		from = 0
+	}
+	lines = append([]string(nil), j.lines[from:]...)
+	j.lastReadByUser[key] = len(j.lines)
+	return
+}
+
 func (s *Session) HandleSiteRescan(args []string) bool {
 	opts, err := parseRescanOptions(s.CurrentDir, args)
 	if err != nil {
@@ -92,13 +218,11 @@ func (s *Session) HandleSiteRescan(args []string) bool {
 	}
 
 	if exists && !targetEntry.IsDir {
-		fmt.Fprintf(s.Conn, "200- Starting zipscript rescan for %s\r\n", opts.Target)
-		if !opts.Quiet {
-			fmt.Fprintf(s.Conn, "200- [1/1] Scanning %s\r\n", opts.Target)
-		}
-		result := s.rescanSingleFile(bridge, opts.Target, opts)
-		writeRescanResult(s, result)
-		fmt.Fprintf(s.Conn, "200 Rescan complete: 1 file checked.\r\n")
+		job := globalRescanJobs.Create(s.User.Name, opts.Target, 1)
+		go s.runRescanJob(job, bridge, []string{opts.Target}, opts, true)
+		fmt.Fprintf(s.Conn, "200- Rescan queued as %s for %s\r\n", job.ID, opts.Target)
+		fmt.Fprintf(s.Conn, "200- Use SITE RESCANSTATUS %s to view progress/output\r\n", job.ID)
+		fmt.Fprintf(s.Conn, "200 Rescan running in background.\r\n")
 		return false
 	}
 
@@ -108,20 +232,79 @@ func (s *Session) HandleSiteRescan(args []string) bool {
 		return false
 	}
 
-	fmt.Fprintf(s.Conn, "200- Starting zipscript rescan for %s\r\n", opts.Target)
-	for i, release := range releases {
-		if !opts.Quiet {
-			fmt.Fprintf(s.Conn, "200- [%d/%d] Scanning %s\r\n", i+1, len(releases), release)
-		}
-		result := s.rescanRelease(bridge, release, opts)
-		writeRescanResult(s, result)
-	}
-	if len(releases) == 1 {
-		fmt.Fprintf(s.Conn, "200 Rescan complete: 1 release checked.\r\n")
-	} else {
-		fmt.Fprintf(s.Conn, "200 Rescan complete: %d releases checked.\r\n", len(releases))
-	}
+	job := globalRescanJobs.Create(s.User.Name, opts.Target, len(releases))
+	go s.runRescanJob(job, bridge, releases, opts, false)
+	fmt.Fprintf(s.Conn, "200- Rescan queued as %s for %s\r\n", job.ID, opts.Target)
+	fmt.Fprintf(s.Conn, "200- Use SITE RESCANSTATUS %s to view progress/output\r\n", job.ID)
+	fmt.Fprintf(s.Conn, "200 Rescan running in background.\r\n")
 	return false
+}
+
+func (s *Session) HandleSiteRescanStatus(args []string) bool {
+	jobID := ""
+	if len(args) > 0 {
+		jobID = strings.TrimSpace(args[0])
+	}
+	job := globalRescanJobs.Find(jobID, s.User.Name)
+	if job == nil {
+		fmt.Fprintf(s.Conn, "550 No matching rescan job.\r\n")
+		return false
+	}
+	status, target, totalItems, completedItems, createdAt, startedAt, completedAt, lines := job.SnapshotUnread(s.User.Name)
+	fmt.Fprintf(s.Conn, "200- RESCAN %s status=%s target=%s progress=%d/%d created=%s\r\n",
+		job.ID, status, target, completedItems, totalItems, formatUnixTime(createdAt.Unix()))
+	if !startedAt.IsZero() {
+		fmt.Fprintf(s.Conn, "200- Started: %s\r\n", formatUnixTime(startedAt.Unix()))
+	}
+	if !completedAt.IsZero() {
+		fmt.Fprintf(s.Conn, "200- Finished: %s\r\n", formatUnixTime(completedAt.Unix()))
+	}
+	if len(lines) == 0 {
+		fmt.Fprintf(s.Conn, "200- No new output.\r\n")
+	} else {
+		for _, line := range lines {
+			fmt.Fprintf(s.Conn, "200- %s\r\n", line)
+		}
+	}
+	fmt.Fprintf(s.Conn, "200 End of RESCANSTATUS\r\n")
+	return false
+}
+
+func (s *Session) runRescanJob(job *rescanJob, bridge MasterBridge, targets []string, opts rescanOptions, singleFile bool) {
+	job.Start()
+	job.Append(fmt.Sprintf("Starting zipscript rescan for %s", job.Target))
+	defer func() {
+		if r := recover(); r != nil {
+			job.Fail(fmt.Errorf("panic: %v", r))
+			return
+		}
+		if job.CurrentStatus() != "failed" {
+			if singleFile {
+				job.Append("Rescan complete: 1 file checked.")
+			} else if len(targets) == 1 {
+				job.Append("Rescan complete: 1 release checked.")
+			} else {
+				job.Append(fmt.Sprintf("Rescan complete: %d releases checked.", len(targets)))
+			}
+			job.Complete()
+		}
+	}()
+
+	for i, target := range targets {
+		if !opts.Quiet {
+			job.Append(fmt.Sprintf("[%d/%d] Scanning %s", i+1, len(targets), target))
+		}
+		var result rescanReleaseResult
+		if singleFile {
+			result = s.rescanSingleFile(bridge, target, opts, job.Append)
+		} else {
+			result = s.rescanRelease(bridge, target, opts, job.Append)
+		}
+		for _, line := range rescanResultLines(result) {
+			job.Append(line)
+		}
+		job.Advance()
+	}
 }
 
 func parseRescanOptions(currentDir string, args []string) (rescanOptions, error) {
@@ -164,7 +347,7 @@ func parseRescanOptions(currentDir string, args []string) (rescanOptions, error)
 	return opts, nil
 }
 
-func (s *Session) rescanSingleFile(bridge MasterBridge, filePath string, opts rescanOptions) rescanReleaseResult {
+func (s *Session) rescanSingleFile(bridge MasterBridge, filePath string, opts rescanOptions, report func(string)) rescanReleaseResult {
 	result := rescanReleaseResult{Path: filePath}
 	releasePath := path.Dir(filePath)
 	fileName := path.Base(filePath)
@@ -198,7 +381,7 @@ func (s *Session) rescanSingleFile(bridge MasterBridge, filePath string, opts re
 		return result
 	}
 
-	reconcile := reconcileSingleSFVEntry(bridge, releasePath, *matched, opts)
+	reconcile := reconcileSingleSFVEntry(bridge, releasePath, *matched, opts, report)
 	result.OK = reconcile.OK
 	result.Missing = reconcile.Missing
 	result.Bad = reconcile.Bad
@@ -229,7 +412,7 @@ func (s *Session) rescanSingleFile(bridge MasterBridge, filePath string, opts re
 	return result
 }
 
-func (s *Session) rescanRelease(bridge MasterBridge, releasePath string, opts rescanOptions) rescanReleaseResult {
+func (s *Session) rescanRelease(bridge MasterBridge, releasePath string, opts rescanOptions, report func(string)) rescanReleaseResult {
 	result := rescanReleaseResult{Path: releasePath}
 	sfvName, ok := findSFV(bridge, releasePath)
 	if ok {
@@ -242,7 +425,7 @@ func (s *Session) rescanRelease(bridge MasterBridge, releasePath string, opts re
 		} else {
 			bridge.CacheSFV(releasePath, sfvName, entries)
 			result.Total = len(entries)
-			reconcile := reconcileReleaseSFVEntries(bridge, releasePath, entries, opts)
+			reconcile := reconcileReleaseSFVEntries(bridge, releasePath, entries, opts, report)
 			result.OK = reconcile.OK
 			result.Missing = reconcile.Missing
 			result.Bad = reconcile.Bad
@@ -278,11 +461,11 @@ func (s *Session) rescanRelease(bridge MasterBridge, releasePath string, opts re
 	return result
 }
 
-func reconcileSingleSFVEntry(bridge MasterBridge, releasePath string, entry SFVEntryInfo, opts rescanOptions) sfvReconcileResult {
-	return reconcileReleaseSFVEntries(bridge, releasePath, []SFVEntryInfo{entry}, opts)
+func reconcileSingleSFVEntry(bridge MasterBridge, releasePath string, entry SFVEntryInfo, opts rescanOptions, report func(string)) sfvReconcileResult {
+	return reconcileReleaseSFVEntries(bridge, releasePath, []SFVEntryInfo{entry}, opts, report)
 }
 
-func reconcileReleaseSFVEntries(bridge MasterBridge, releasePath string, entries []SFVEntryInfo, opts rescanOptions) sfvReconcileResult {
+func reconcileReleaseSFVEntries(bridge MasterBridge, releasePath string, entries []SFVEntryInfo, opts rescanOptions, report func(string)) sfvReconcileResult {
 	result := sfvReconcileResult{}
 	for _, entry := range entries {
 		filePath := path.Join(releasePath, entry.FileName)
@@ -291,6 +474,9 @@ func reconcileReleaseSFVEntries(bridge MasterBridge, releasePath string, entries
 		if bridge.GetFileSize(filePath) < 0 {
 			result.Missing++
 			result.MissingFiles = append(result.MissingFiles, entry.FileName)
+			if report != nil {
+				report("MISSING: " + entry.FileName)
+			}
 			_ = bridge.MarkFileMissing(filePath)
 			if err := bridge.WriteFile(missingPath, []byte{}); err != nil {
 				result.Errors = append(result.Errors, fmt.Sprintf("%s missing marker failed: %v", entry.FileName, err))
@@ -304,14 +490,23 @@ func reconcileReleaseSFVEntries(bridge MasterBridge, releasePath string, entries
 			case isRescanMissingError(err):
 				result.Missing++
 				result.MissingFiles = append(result.MissingFiles, entry.FileName)
+				if report != nil {
+					report("MISSING: " + entry.FileName)
+				}
 				_ = bridge.MarkFileMissing(filePath)
 				if err := bridge.WriteFile(missingPath, []byte{}); err != nil {
 					result.Errors = append(result.Errors, fmt.Sprintf("%s missing marker failed: %v", entry.FileName, err))
 				}
 			case isRescanOfflineError(err):
 				result.OfflineFiles = append(result.OfflineFiles, entry.FileName)
+				if report != nil {
+					report("OFFLINE: " + entry.FileName)
+				}
 			default:
 				result.FailedFiles = append(result.FailedFiles, entry.FileName)
+				if report != nil {
+					report("CHECKSUM FAILED: " + entry.FileName)
+				}
 				if !opts.Quiet {
 					result.Errors = append(result.Errors, fmt.Sprintf("%s (FAILED - failed to checksum file)", entry.FileName))
 				}
@@ -336,6 +531,9 @@ func reconcileReleaseSFVEntries(bridge MasterBridge, releasePath string, entries
 			}
 			result.Bad++
 			result.BadFiles = append(result.BadFiles, entry.FileName)
+			if report != nil {
+				report(fmt.Sprintf("BAD: %s SFV:%08X SLAVE:%08X", entry.FileName, entry.CRC32, checksum))
+			}
 			if opts.DeleteBad || (checksum == 0 && opts.DeleteZeroByte) {
 				if err := bridge.DeleteFile(filePath); err != nil {
 					result.Errors = append(result.Errors, fmt.Sprintf("%s delete failed: %v", entry.FileName, err))
@@ -349,6 +547,9 @@ func reconcileReleaseSFVEntries(bridge MasterBridge, releasePath string, entries
 		}
 
 		result.OK++
+		if report != nil && !opts.Quiet {
+			report(fmt.Sprintf("OK: %s CRC:%08X", entry.FileName, checksum))
+		}
 		_ = bridge.SyncPresentFile(filePath, checksum)
 		if bridge.GetFileSize(missingPath) >= 0 {
 			_ = bridge.DeleteFile(missingPath)
@@ -394,39 +595,39 @@ func isRescanOfflineError(err error) bool {
 	return false
 }
 
-func writeRescanResult(s *Session, result rescanReleaseResult) {
-	fmt.Fprintf(s.Conn, "200- Rescanning %s\r\n", result.Path)
+func rescanResultLines(result rescanReleaseResult) []string {
+	lines := []string{fmt.Sprintf("Rescanning %s", result.Path)}
 	if result.SFV != "" {
-		fmt.Fprintf(s.Conn, "200- SFV: %s (%d files)\r\n", result.SFV, result.Total)
+		lines = append(lines, fmt.Sprintf("SFV: %s (%d files)", result.SFV, result.Total))
 	}
 	for _, errText := range result.Errors {
-		fmt.Fprintf(s.Conn, "200- ERROR: %s\r\n", errText)
+		lines = append(lines, "ERROR: "+errText)
 	}
 	if result.SFV != "" {
-		fmt.Fprintf(s.Conn, "200- OK: %d Missing: %d Bad: %d\r\n", result.OK, result.Missing, result.Bad)
+		lines = append(lines, fmt.Sprintf("OK: %d Missing: %d Bad: %d", result.OK, result.Missing, result.Bad))
 		for _, fileName := range result.MissingFiles {
-			fmt.Fprintf(s.Conn, "200- MISSING: %s\r\n", fileName)
+			lines = append(lines, "MISSING: "+fileName)
 		}
 		for _, fileName := range result.OfflineFiles {
-			fmt.Fprintf(s.Conn, "200- OFFLINE: %s\r\n", fileName)
+			lines = append(lines, "OFFLINE: "+fileName)
 		}
 		for _, fileName := range result.FailedFiles {
-			fmt.Fprintf(s.Conn, "200- CHECKSUM FAILED: %s\r\n", fileName)
+			lines = append(lines, "CHECKSUM FAILED: "+fileName)
 		}
 		for _, fileName := range result.BadFiles {
-			fmt.Fprintf(s.Conn, "200- BAD: %s\r\n", fileName)
+			lines = append(lines, "BAD: "+fileName)
 		}
 	}
 	if result.ZipChecked > 0 || result.ZipBad > 0 || result.DIZRecovered {
-		fmt.Fprintf(s.Conn, "200- ZIP OK: %d Bad: %d\r\n", maxInt(0, result.ZipChecked-result.ZipBad), result.ZipBad)
+		lines = append(lines, fmt.Sprintf("ZIP OK: %d Bad: %d", maxInt(0, result.ZipChecked-result.ZipBad), result.ZipBad))
 		for _, fileName := range result.BadZips {
-			fmt.Fprintf(s.Conn, "200- ZIP BAD: %s\r\n", fileName)
+			lines = append(lines, "ZIP BAD: "+fileName)
 		}
 		if result.DIZRecovered {
-			fmt.Fprintf(s.Conn, "200- ZIP DIZ: recovered file_id.diz\r\n")
+			lines = append(lines, "ZIP DIZ: recovered file_id.diz")
 		}
 	}
-	fmt.Fprintf(s.Conn, "200-  \r\n")
+	return lines
 }
 
 func resolveSitePath(currentDir, target string) string {
@@ -575,22 +776,20 @@ func shouldRefreshRescanMediaInfo(cfg *Config, dirPath string) bool {
 func findAudioRescanCandidate(bridge MasterBridge, dirPath string) (string, bool) {
 	entries := bridge.ListDir(dirPath)
 	audioFiles := make([]string, 0, len(entries))
+	audioExts := map[string]bool{"mp3": true, "flac": true, "m4a": true, "wav": true}
 	for _, entry := range entries {
 		if entry.IsDir || entry.IsSymlink || entry.Size <= 0 || entry.XferTime <= 0 {
 			continue
 		}
-		lower := strings.ToLower(strings.TrimSpace(entry.Name))
-		switch {
-		case strings.HasSuffix(lower, ".mp3"),
-			strings.HasSuffix(lower, ".flac"),
-			strings.HasSuffix(lower, ".m4a"),
-			strings.HasSuffix(lower, ".wav"):
-			candidatePath := path.Join(dirPath, entry.Name)
-			if activeUploadForPathWithBridge(bridge, candidatePath) {
-				continue
-			}
-			audioFiles = append(audioFiles, entry.Name)
+		ext := strings.ToLower(strings.TrimPrefix(path.Ext(strings.TrimSpace(entry.Name)), "."))
+		if !audioExts[ext] {
+			continue
 		}
+		candidatePath := path.Join(dirPath, entry.Name)
+		if activeUploadForPathWithBridge(bridge, candidatePath) {
+			continue
+		}
+		audioFiles = append(audioFiles, entry.Name)
 	}
 	sort.Strings(audioFiles)
 	if len(audioFiles) == 0 {
@@ -605,31 +804,37 @@ func findFirstUsableAudioInfo(bridge MasterBridge, cfg *Config, dirPath string) 
 	}
 	entries := bridge.ListDir(dirPath)
 	audioFiles := make([]string, 0, len(entries))
+	audioExts := make(map[string]bool)
+	for _, ext := range cfg.Zipscript.Audio.Extensions {
+		ext = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(ext, ".")))
+		if ext != "" {
+			audioExts[ext] = true
+		}
+	}
+	if len(audioExts) == 0 {
+		audioExts = map[string]bool{"mp3": true, "flac": true, "m4a": true, "wav": true}
+	}
 	for _, entry := range entries {
 		if entry.IsDir || entry.IsSymlink || entry.Size <= 0 || entry.XferTime <= 0 {
 			continue
 		}
-		lower := strings.ToLower(strings.TrimSpace(entry.Name))
-		switch {
-		case strings.HasSuffix(lower, ".mp3"),
-			strings.HasSuffix(lower, ".flac"),
-			strings.HasSuffix(lower, ".m4a"),
-			strings.HasSuffix(lower, ".wav"):
-			candidatePath := path.Join(dirPath, entry.Name)
-			if activeUploadForPathWithBridge(bridge, candidatePath) {
-				continue
-			}
-			audioFiles = append(audioFiles, entry.Name)
+		ext := strings.ToLower(strings.TrimPrefix(path.Ext(strings.TrimSpace(entry.Name)), "."))
+		if !audioExts[ext] {
+			continue
 		}
+		candidatePath := path.Join(dirPath, entry.Name)
+		if activeUploadForPathWithBridge(bridge, candidatePath) {
+			continue
+		}
+		audioFiles = append(audioFiles, entry.Name)
 	}
 	sort.Strings(audioFiles)
 	if len(audioFiles) == 0 {
 		return "", nil, false
 	}
-	binary, timeoutSeconds := zipscriptMediaInfoSettings(cfg)
 	for _, name := range audioFiles {
 		candidatePath := path.Join(dirPath, name)
-		fields, err := bridge.ProbeMediaInfo(candidatePath, binary, timeoutSeconds)
+		fields, err := bridge.ProbeMediaInfo(candidatePath, "", 0)
 		if err != nil || !zipscript.AudioInfoLooksUsable(fields) {
 			continue
 		}

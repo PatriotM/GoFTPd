@@ -11,294 +11,128 @@ import (
 	"goftpd/internal/user"
 )
 
-func TestEvaluateKicksVerifiedSlowUpload(t *testing.T) {
-	var aborted bool
-	var disconnected bool
-
-	h := New()
-	h.svc = &plugin.Services{
+func testServices() *plugin.Services {
+	return &plugin.Services{
 		Logger: log.New(os.Stderr, "", 0),
 		ListActiveSessions: func() []plugin.ActiveSession {
 			return []plugin.ActiveSession{
-				{
-					ID:                1,
-					User:              "slowpoke",
-					PrimaryGroup:      "USERS",
-					LoggedIn:          true,
-					TransferDirection: "upload",
-					TransferPath:      "/0DAY/2026-04-26/Test.Release-GRP/file.r00",
-					TransferSlaveName: "SLAVE1",
-					TransferSlaveIdx:  42,
-				},
-				{
-					ID:       2,
-					User:     "other",
-					LoggedIn: true,
-				},
+				{ID: 1, User: "tester", LoggedIn: true},
+				{ID: 2, User: "other", LoggedIn: true},
 			}
 		},
-		GetLiveTransferStats: func() []plugin.LiveTransferStat {
-			return []plugin.LiveTransferStat{
-				{
-					SlaveName:     "SLAVE1",
-					TransferIndex: 42,
-					Direction:     "upload",
-					Transferred:   1024,
-					SpeedBytes:    10 * 1024,
-				},
-			}
-		},
-		AbortTransfer: func(slaveName string, transferIndex int32, reason string) bool {
-			aborted = slaveName == "SLAVE1" && transferIndex == 42
-			return true
-		},
-		DisconnectSession: func(id uint64) bool {
-			disconnected = id == 1
-			return true
-		},
-	}
-	h.interval = time.Second
-	h.monitorUploads = true
-	h.monitorDownloads = true
-	h.uploadVerifyDelay = 5 * time.Second
-	h.minUploadSpeedBytes = 25 * 1024
-	h.minUsersOnline = 2
-	h.tempbanAfterKick = true
-	h.tempbanDuration = 15 * time.Second
-	h.excludeUsers = map[string]struct{}{}
-	h.excludeGroups = map[string]struct{}{}
-	h.excludePaths = normalizePaths([]string{"/PRE", "/REQUESTS", "/SPEEDTEST"})
-	h.candidates = map[uint64]candidate{
-		1: {
-			SessionID: 1,
-			User:      "slowpoke",
-			Path:      "/0DAY/2026-04-26/Test.Release-GRP/file.r00",
-			Direction: "upload",
-			FirstSeen: time.Now().Add(-10 * time.Second),
-		},
-	}
-
-	h.evaluate(time.Now())
-
-	if !aborted {
-		t.Fatalf("expected abort callback to be called")
-	}
-	if !disconnected {
-		t.Fatalf("expected disconnect callback to be called")
-	}
-	if _, ok := h.getCandidate(1); ok {
-		t.Fatalf("expected candidate to be removed after kick")
-	}
-	if err := h.ValidateLogin(&user.User{Name: "slowpoke", PrimaryGroup: "USERS"}, "127.0.0.1"); err == nil {
-		t.Fatalf("expected kicked user to be tempbanned")
 	}
 }
 
-func TestEvaluateSkipsExcludedPath(t *testing.T) {
-	var aborted bool
-
+func TestTransferSpeedPolicyUploadUsesConfiguredFloorAndGrace(t *testing.T) {
 	h := New()
-	h.svc = &plugin.Services{
-		Logger: log.New(os.Stderr, "", 0),
-		ListActiveSessions: func() []plugin.ActiveSession {
-			return []plugin.ActiveSession{
-				{
-					ID:                1,
-					User:              "slowpoke",
-					PrimaryGroup:      "USERS",
-					LoggedIn:          true,
-					TransferDirection: "upload",
-					TransferPath:      "/REQUESTS/Test/file.r00",
-					TransferSlaveName: "SLAVE1",
-					TransferSlaveIdx:  42,
-				},
-				{
-					ID:       2,
-					User:     "other",
-					LoggedIn: true,
-				},
-			}
-		},
-		GetLiveTransferStats: func() []plugin.LiveTransferStat {
-			return []plugin.LiveTransferStat{
-				{
-					SlaveName:     "SLAVE1",
-					TransferIndex: 42,
-					Direction:     "upload",
-					Transferred:   1024,
-					SpeedBytes:    10 * 1024,
-				},
-			}
-		},
-		AbortTransfer: func(slaveName string, transferIndex int32, reason string) bool {
-			aborted = true
-			return true
-		},
-		DisconnectSession: func(id uint64) bool { return true },
-	}
+	h.svc = testServices()
 	h.monitorUploads = true
-	h.monitorDownloads = true
-	h.uploadVerifyDelay = 5 * time.Second
-	h.minUploadSpeedBytes = 25 * 1024
 	h.minUsersOnline = 2
-	h.tempbanAfterKick = true
-	h.tempbanDuration = 15 * time.Second
-	h.excludeUsers = map[string]struct{}{}
-	h.excludeGroups = map[string]struct{}{}
-	h.excludePaths = normalizePaths([]string{"/PRE", "/REQUESTS", "/SPEEDTEST"})
-	h.candidates = map[uint64]candidate{}
+	h.minUploadSpeedBytes = 5 * 1024
+	h.uploadGrace = 7 * time.Second
 
-	h.evaluate(time.Now())
-
-	if aborted {
-		t.Fatalf("did not expect excluded path to be kicked")
+	minSpeed, maxSpeed, grace, ok := h.TransferSpeedPolicy("tester", "USERS", "/TV/release/file.r00", "upload")
+	if !ok {
+		t.Fatal("expected upload policy to apply")
 	}
-	if len(h.candidates) != 0 {
-		t.Fatalf("did not expect excluded path to enter candidate tracking")
+	if minSpeed != 5*1024 {
+		t.Fatalf("expected min speed 5120, got %d", minSpeed)
+	}
+	if maxSpeed != 0 {
+		t.Fatalf("expected no max speed, got %d", maxSpeed)
+	}
+	if grace != 7 {
+		t.Fatalf("expected grace 7s, got %d", grace)
 	}
 }
 
-func TestEvaluateSkipsExcludedExtension(t *testing.T) {
-	var aborted bool
-
+func TestTransferSpeedPolicySkipsExcludedExtension(t *testing.T) {
 	h := New()
-	h.svc = &plugin.Services{
-		Logger: log.New(os.Stderr, "", 0),
-		ListActiveSessions: func() []plugin.ActiveSession {
-			return []plugin.ActiveSession{
-				{
-					ID:                1,
-					User:              "slowpoke",
-					PrimaryGroup:      "USERS",
-					LoggedIn:          true,
-					TransferDirection: "upload",
-					TransferPath:      "/XXX-0DAY/0502/Test.Release-GRP/test.release.sfv",
-					TransferSlaveName: "SLAVE1",
-					TransferSlaveIdx:  42,
-				},
-				{
-					ID:       2,
-					User:     "other",
-					LoggedIn: true,
-				},
-			}
-		},
-		GetLiveTransferStats: func() []plugin.LiveTransferStat {
-			return []plugin.LiveTransferStat{
-				{
-					SlaveName:     "SLAVE1",
-					TransferIndex: 42,
-					Direction:     "upload",
-					Transferred:   1024,
-					SpeedBytes:    10 * 1024,
-				},
-			}
-		},
-		AbortTransfer: func(slaveName string, transferIndex int32, reason string) bool {
-			aborted = true
-			return true
-		},
-		DisconnectSession: func(id uint64) bool { return true },
-	}
+	h.svc = testServices()
 	h.monitorUploads = true
-	h.monitorDownloads = true
-	h.uploadVerifyDelay = 5 * time.Second
-	h.minUploadSpeedBytes = 25 * 1024
 	h.minUsersOnline = 2
-	h.tempbanAfterKick = true
-	h.tempbanDuration = 15 * time.Second
-	h.excludeUsers = map[string]struct{}{}
-	h.excludeGroups = map[string]struct{}{}
-	h.excludePaths = normalizePaths([]string{"/PRE", "/REQUESTS", "/SPEEDTEST"})
-	h.excludeExtensions = lowerSet([]string{"sfv"})
-	h.candidates = map[uint64]candidate{}
+	h.minUploadSpeedBytes = 5 * 1024
+	h.excludeExtensions = lowerSet([]string{"sfv", "nfo"})
 
-	h.evaluate(time.Now())
-
-	if aborted {
-		t.Fatalf("did not expect excluded extension to be kicked")
-	}
-	if len(h.candidates) != 0 {
-		t.Fatalf("did not expect excluded extension to enter candidate tracking")
+	if _, _, _, ok := h.TransferSpeedPolicy("tester", "USERS", "/XXX/release/release.nfo", "upload"); ok {
+		t.Fatal("expected excluded extension to skip policy")
 	}
 }
 
-func TestEvaluateKicksVerifiedSlowDownload(t *testing.T) {
-	var aborted bool
-	var disconnected bool
-
+func TestTransferSpeedPolicySkipsWhenUsersBelowMinimum(t *testing.T) {
 	h := New()
 	h.svc = &plugin.Services{
 		Logger: log.New(os.Stderr, "", 0),
 		ListActiveSessions: func() []plugin.ActiveSession {
-			return []plugin.ActiveSession{
-				{
-					ID:                7,
-					User:              "crawler",
-					PrimaryGroup:      "USERS",
-					LoggedIn:          true,
-					TransferDirection: "download",
-					TransferPath:      "/0DAY/2026-04-26/Test.Release-GRP/file.r00",
-					TransferSlaveName: "SLAVE1",
-					TransferSlaveIdx:  99,
-				},
-				{
-					ID:       8,
-					User:     "other",
-					LoggedIn: true,
-				},
-			}
-		},
-		GetLiveTransferStats: func() []plugin.LiveTransferStat {
-			return []plugin.LiveTransferStat{
-				{
-					SlaveName:     "SLAVE1",
-					TransferIndex: 99,
-					Direction:     "download",
-					Transferred:   1024,
-					SpeedBytes:    10 * 1024,
-				},
-			}
-		},
-		AbortTransfer: func(slaveName string, transferIndex int32, reason string) bool {
-			aborted = slaveName == "SLAVE1" && transferIndex == 99
-			return true
-		},
-		DisconnectSession: func(id uint64) bool {
-			disconnected = id == 7
-			return true
+			return []plugin.ActiveSession{{ID: 1, User: "tester", LoggedIn: true}}
 		},
 	}
 	h.monitorUploads = true
-	h.monitorDownloads = true
-	h.downloadVerifyDelay = 5 * time.Second
-	h.minDownloadSpeedBytes = 50 * 1024
 	h.minUsersOnline = 2
+	h.minUploadSpeedBytes = 5 * 1024
+
+	if _, _, _, ok := h.TransferSpeedPolicy("tester", "USERS", "/TV/release/file.r00", "upload"); ok {
+		t.Fatal("expected policy to stay disabled below min users")
+	}
+}
+
+func TestHandleSlowTransferSetsTempBanAndEmitsKick(t *testing.T) {
+	var eventType string
+	var eventPath string
+	var eventData map[string]string
+
+	h := New()
+	h.svc = testServices()
+	h.svc.EmitEvent = func(evtType, evtPath, filename, section string, size int64, speed float64, data map[string]string) {
+		eventType = evtType
+		eventPath = evtPath
+		eventData = data
+	}
+	h.monitorUploads = true
+	h.minUsersOnline = 2
+	h.minUploadSpeedBytes = 5 * 1024
+	h.announceKick = true
 	h.tempbanAfterKick = true
-	h.tempbanDuration = 15 * time.Second
-	h.excludeUsers = map[string]struct{}{}
-	h.excludeGroups = map[string]struct{}{}
-	h.excludePaths = normalizePaths([]string{"/PRE", "/REQUESTS", "/SPEEDTEST"})
-	h.candidates = map[uint64]candidate{
-		7: {
-			SessionID: 7,
-			User:      "crawler",
-			Path:      "/0DAY/2026-04-26/Test.Release-GRP/file.r00",
-			Direction: "download",
-			FirstSeen: time.Now().Add(-10 * time.Second),
-		},
-	}
+	h.tempbanDuration = 5 * time.Second
 
-	h.evaluate(time.Now())
+	h.HandleSlowTransfer("tester", "USERS", "/TV/release/file.r00", "upload", "LOCAL", 42, 1024, 5*1024)
 
-	if !aborted {
-		t.Fatalf("expected download abort callback to be called")
+	if eventType != "SLOWUPLOADKICK" {
+		t.Fatalf("expected SLOWUPLOADKICK event, got %q", eventType)
 	}
-	if !disconnected {
-		t.Fatalf("expected download disconnect callback to be called")
+	if eventPath != "/TV/release/file.r00" {
+		t.Fatalf("expected event path to match transfer path, got %q", eventPath)
 	}
-	if err := h.ValidateLogin(&user.User{Name: "crawler", PrimaryGroup: "USERS"}, "127.0.0.1"); err == nil {
-		t.Fatalf("expected kicked downloader to be tempbanned")
+	if eventData["tempban_seconds"] != "5" {
+		t.Fatalf("expected tempban_seconds=5, got %+v", eventData)
+	}
+	if err := h.ValidateLogin(&user.User{Name: "tester", PrimaryGroup: "USERS"}, "127.0.0.1"); err == nil {
+		t.Fatal("expected kicked user to be tempbanned")
+	}
+}
+
+func TestHandleSlowTransferSkipsExcludedPath(t *testing.T) {
+	var emitted bool
+
+	h := New()
+	h.svc = testServices()
+	h.svc.EmitEvent = func(evtType, evtPath, filename, section string, size int64, speed float64, data map[string]string) {
+		emitted = true
+	}
+	h.monitorUploads = true
+	h.minUsersOnline = 2
+	h.minUploadSpeedBytes = 5 * 1024
+	h.announceKick = true
+	h.tempbanAfterKick = true
+	h.tempbanDuration = 5 * time.Second
+
+	h.HandleSlowTransfer("tester", "USERS", "/REQUESTS/Test/file.r00", "upload", "LOCAL", 42, 1024, 5*1024)
+
+	if emitted {
+		t.Fatal("did not expect event for excluded path")
+	}
+	if err := h.ValidateLogin(&user.User{Name: "tester", PrimaryGroup: "USERS"}, "127.0.0.1"); err != nil {
+		t.Fatalf("did not expect excluded path to tempban user, got %v", err)
 	}
 }
 
@@ -329,202 +163,9 @@ func TestValidateLoginReturnsRemainingSeconds(t *testing.T) {
 
 	err := h.ValidateLogin(&user.User{Name: "slowpoke", PrimaryGroup: "USERS"}, "127.0.0.1")
 	if err == nil {
-		t.Fatalf("expected active tempban to reject login")
+		t.Fatal("expected active tempban to reject login")
 	}
 	if !strings.Contains(err.Error(), "retry in") {
 		t.Fatalf("expected retry hint in error, got %v", err)
-	}
-}
-
-func TestEvaluateSkipsFreshZeroSpeedTransfer(t *testing.T) {
-	var warned bool
-
-	h := New()
-	h.svc = &plugin.Services{
-		Logger: log.New(os.Stderr, "", 0),
-		ListActiveSessions: func() []plugin.ActiveSession {
-			return []plugin.ActiveSession{
-				{
-					ID:                11,
-					User:              "fastguy",
-					PrimaryGroup:      "USERS",
-					LoggedIn:          true,
-					TransferDirection: "upload",
-					TransferPath:      "/TV-1080P/Test.Release-GRP/file.r00",
-					TransferSlaveName: "SLAVE1",
-					TransferSlaveIdx:  88,
-					TransferStartedAt: time.Now().Add(-500 * time.Millisecond),
-				},
-				{
-					ID:       12,
-					User:     "other",
-					LoggedIn: true,
-				},
-			}
-		},
-		GetLiveTransferStats: func() []plugin.LiveTransferStat {
-			return []plugin.LiveTransferStat{
-				{
-					SlaveName:     "SLAVE1",
-					TransferIndex: 88,
-					Direction:     "upload",
-					Transferred:   0,
-					SpeedBytes:    0,
-				},
-			}
-		},
-		EmitEvent: func(eventType, eventPath, filename, user string, size int64, speed float64, data map[string]string) {
-			warned = true
-		},
-		AbortTransfer:     func(slaveName string, transferIndex int32, reason string) bool { return true },
-		DisconnectSession: func(id uint64) bool { return true },
-	}
-	h.interval = 5 * time.Second
-	h.monitorUploads = true
-	h.minUploadSpeedBytes = 25 * 1024
-	h.minUsersOnline = 2
-	h.announceWarn = true
-	h.excludeUsers = map[string]struct{}{}
-	h.excludeGroups = map[string]struct{}{}
-	h.excludePaths = normalizePaths([]string{"/PRE", "/REQUESTS", "/SPEEDTEST"})
-	h.candidates = map[uint64]candidate{}
-
-	h.evaluate(time.Now())
-
-	if warned {
-		t.Fatalf("did not expect a warning for a fresh zero-speed transfer")
-	}
-	if len(h.candidates) != 0 {
-		t.Fatalf("did not expect a fresh transfer to enter candidate tracking")
-	}
-}
-
-func TestEvaluateSkipsZeroSpeedTransferWithoutAnyProgress(t *testing.T) {
-	var warned bool
-
-	h := New()
-	h.svc = &plugin.Services{
-		Logger: log.New(os.Stderr, "", 0),
-		ListActiveSessions: func() []plugin.ActiveSession {
-			return []plugin.ActiveSession{
-				{
-					ID:                21,
-					User:              "stillwaiting",
-					PrimaryGroup:      "USERS",
-					LoggedIn:          true,
-					TransferDirection: "upload",
-					TransferPath:      "/BLURAY-UHD/Test.Release-GRP/file.r75",
-					TransferSlaveName: "SLAVE1",
-					TransferSlaveIdx:  144,
-					TransferStartedAt: time.Now().Add(-30 * time.Second),
-					TransferBytes:     0,
-				},
-				{
-					ID:       22,
-					User:     "other",
-					LoggedIn: true,
-				},
-			}
-		},
-		GetLiveTransferStats: func() []plugin.LiveTransferStat {
-			return []plugin.LiveTransferStat{
-				{
-					SlaveName:     "SLAVE1",
-					TransferIndex: 144,
-					Direction:     "upload",
-					StartedAt:     time.Now().Add(-30 * time.Second),
-					Transferred:   0,
-					SpeedBytes:    0,
-				},
-			}
-		},
-		EmitEvent: func(eventType, eventPath, filename, user string, size int64, speed float64, data map[string]string) {
-			warned = true
-		},
-		AbortTransfer:     func(slaveName string, transferIndex int32, reason string) bool { return true },
-		DisconnectSession: func(id uint64) bool { return true },
-	}
-	h.interval = 5 * time.Second
-	h.monitorUploads = true
-	h.minUploadSpeedBytes = 25 * 1024
-	h.minUsersOnline = 2
-	h.announceWarn = true
-	h.excludeUsers = map[string]struct{}{}
-	h.excludeGroups = map[string]struct{}{}
-	h.excludePaths = normalizePaths([]string{"/PRE", "/REQUESTS", "/SPEEDTEST"})
-	h.candidates = map[uint64]candidate{}
-
-	h.evaluate(time.Now())
-
-	if warned {
-		t.Fatalf("did not expect a warning for a zero-progress transfer")
-	}
-	if len(h.candidates) != 0 {
-		t.Fatalf("did not expect a zero-progress transfer to enter candidate tracking")
-	}
-}
-
-func TestEvaluateWarnsForZeroSpeedTransferAfterProgress(t *testing.T) {
-	var warned bool
-
-	h := New()
-	h.svc = &plugin.Services{
-		Logger: log.New(os.Stderr, "", 0),
-		ListActiveSessions: func() []plugin.ActiveSession {
-			return []plugin.ActiveSession{
-				{
-					ID:                31,
-					User:              "nowstalled",
-					PrimaryGroup:      "USERS",
-					LoggedIn:          true,
-					TransferDirection: "upload",
-					TransferPath:      "/GAMES/Test.Release-GRP/file.r25",
-					TransferSlaveName: "SLAVE1",
-					TransferSlaveIdx:  244,
-					TransferStartedAt: time.Now().Add(-30 * time.Second),
-					TransferBytes:     50 * 1024 * 1024,
-				},
-				{
-					ID:       32,
-					User:     "other",
-					LoggedIn: true,
-				},
-			}
-		},
-		GetLiveTransferStats: func() []plugin.LiveTransferStat {
-			return []plugin.LiveTransferStat{
-				{
-					SlaveName:     "SLAVE1",
-					TransferIndex: 244,
-					Direction:     "upload",
-					StartedAt:     time.Now().Add(-30 * time.Second),
-					Transferred:   50 * 1024 * 1024,
-					SpeedBytes:    0,
-				},
-			}
-		},
-		EmitEvent: func(eventType, eventPath, filename, user string, size int64, speed float64, data map[string]string) {
-			warned = true
-		},
-		AbortTransfer:     func(slaveName string, transferIndex int32, reason string) bool { return true },
-		DisconnectSession: func(id uint64) bool { return true },
-	}
-	h.interval = 5 * time.Second
-	h.monitorUploads = true
-	h.minUploadSpeedBytes = 25 * 1024
-	h.minUsersOnline = 2
-	h.announceWarn = true
-	h.excludeUsers = map[string]struct{}{}
-	h.excludeGroups = map[string]struct{}{}
-	h.excludePaths = normalizePaths([]string{"/PRE", "/REQUESTS", "/SPEEDTEST"})
-	h.candidates = map[uint64]candidate{}
-
-	h.evaluate(time.Now())
-
-	if !warned {
-		t.Fatalf("expected a warning once the transfer has already shown progress and then stalls")
-	}
-	if len(h.candidates) != 1 {
-		t.Fatalf("expected stalled transfer to enter candidate tracking")
 	}
 }

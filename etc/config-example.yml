@@ -284,8 +284,6 @@ nukedir_style:       "[NUKED]-%N"   # Renamed dir pattern (%N = release name)
 #    imdb    — same for movies via imdbapi.dev, writes .imdb
 #    pretime - looks up release pre times from SQLite, MySQL, or HTTP APIs
 #              and emits NEWPRETIME / OLDPRETIME append announces
-#    mediainfo - runs mediainfo on uploaded audio/sample files and emits
-#                AUDIOINFO / MEDIAINFO events for the sitebot
 #    pre     - handles SITE PRE for affil staging dirs and PREBW announces
 #    request - handles SITE REQUEST/REQUESTS/REQFILL/REQDEL/REQWIPE
 #    speedtest - creates /SPEEDTEST/100MB, 500MB, 1000MB and
@@ -503,6 +501,8 @@ zipscript:
 
   audio:
     enabled: true               # enforce audio policy on MP3 / FLAC uploads
+    sections: ["MP3", "FLAC"]   # sections where built-in audio probing/checks apply
+    extensions: ["flac", "mp3", "m4a", "wav"] # audio payload extensions handled by the built-in probe
     cwd_mp3_info: true          # show MP3 info on CWD
     stor_mp3_info: true         # show MP3 info after STOR
     cwd_flac_info: true         # show FLAC info on CWD
@@ -530,6 +530,15 @@ zipscript:
       group: false              # create <group_path>/<Group>/<Release> symlinks
       separate_by_section: true # keep MP3 and FLAC in their own sort buckets, e.g. <genre_path>/MP3/<Genre>/...
 
+  media:
+    enabled: true               # enable built-in sample/video probing
+    # Match against the logical section name from the release path.
+    # For nested FOREIGN/PRE/ARCHiVE paths use the child section name, e.g.
+    # TV-NO or X265-FOREIGN instead of FOREIGN/TV-NO.
+    sections: ["BLURAY", "DVDR", "TV-1080P", "TV-720P", "TV-BLURAY", "X264-HD-1080P", "X264-HD-720P", "X264-SD", "X265", "TV-NO", "X265-FOREIGN"]
+    sample_only: true           # only probe files under Sample/Samples or *.sample.*
+    video_extensions: ["mkv", "mp4", "avi", "m2ts", "ts"]
+
 plugins:
   # `enabled` here controls whether the daemon loads the plugin at all.
   # The referenced plugin config files only carry plugin-specific settings.
@@ -551,9 +560,6 @@ plugins:
     # SQLite, MySQL, and HTTP/JSON providers are configured in the plugin
     # dist file without touching the main daemon config.
     config_file: "plugins/pretime/config.yml"
-  mediainfo:
-    enabled: true
-    config_file: "plugins/mediainfo/config.yml"
   speedtest:
     enabled: true
     config_file: "plugins/speedtest/config.yml"
@@ -585,6 +591,11 @@ plugins:
     config_file: "plugins/request/config.yml"
   releaseguard:
     enabled: false
+    # Blocks bad MKD release names before the directory is created.
+    # Example use: only allow TV-style names in /TV-FR with:
+    #   allow_dirs:
+    #     - path: "/TV-FR/*"
+    #       pattern: "\\.S[0-9]{2}E[0-9]{2}\\."
     config_file: "plugins/releaseguard/config.yml"
   pre:
     enabled: true

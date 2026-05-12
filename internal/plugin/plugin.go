@@ -141,7 +141,7 @@ type LoginValidator interface {
 }
 
 type TransferSpeedPolicyProvider interface {
-	TransferSpeedPolicy(username, primaryGroup, transferPath, direction string) (minSpeedBytes int64, maxSpeedBytes int64, ok bool)
+	TransferSpeedPolicy(username, primaryGroup, transferPath, direction string) (minSpeedBytes int64, maxSpeedBytes int64, graceSeconds int64, ok bool)
 }
 
 type SlowTransferHandler interface {

@@ -26,12 +26,13 @@ import (
 type Bridge struct {
 	sm     *SlaveManager
 	raceDB *RaceDB
+	nukeDB *core.NukeHistoryDB
 
 	cacheMu                sync.Mutex
 	readFileCache          map[string]cachedReadFileResult
 	liveTransferStatsCache []core.LiveTransferStat
 	liveTransferStatsAt    time.Time
-	transferSpeedPolicy    func(username, primaryGroup, transferPath, direction string) (int64, int64)
+	transferSpeedPolicy    func(username, primaryGroup, transferPath, direction string) (int64, int64, int64)
 }
 
 func configureBridgeDataSocket(conn net.Conn) {
@@ -63,6 +64,12 @@ func NewBridge(sm *SlaveManager) *Bridge {
 		sm:            sm,
 		readFileCache: make(map[string]cachedReadFileResult),
 	}
+	ndb, err := core.GetNukeHistoryDB(false)
+	if err != nil {
+		log.Printf("[Bridge] Nuke DB disabled: %v", err)
+	} else {
+		b.nukeDB = ndb
+	}
 	rdb, err := NewRaceDB("userdata/race.db")
 	if err != nil {
 		log.Printf("[Bridge] Race DB disabled: %v", err)
@@ -72,19 +79,24 @@ func NewBridge(sm *SlaveManager) *Bridge {
 	if err := b.raceDB.Reconcile(sm.GetVFS()); err != nil {
 		log.Printf("[Bridge] Race DB reconcile failed: %v", err)
 	}
+	if hydrated, err := b.raceDB.HydrateVFS(sm.GetVFS()); err != nil {
+		log.Printf("[Bridge] Race DB VFS hydrate failed: %v", err)
+	} else if hydrated > 0 {
+		log.Printf("[Bridge] Hydrated %d persisted race file entries into VFS", hydrated)
+	}
 	return b
 }
 
-func (b *Bridge) SetTransferSpeedPolicy(fn func(username, primaryGroup, transferPath, direction string) (int64, int64)) {
+func (b *Bridge) SetTransferSpeedPolicy(fn func(username, primaryGroup, transferPath, direction string) (int64, int64, int64)) {
 	if b == nil {
 		return
 	}
 	b.transferSpeedPolicy = fn
 }
 
-func (b *Bridge) transferSpeedLimits(username, primaryGroup, transferPath, direction string) (int64, int64) {
+func (b *Bridge) transferSpeedLimits(username, primaryGroup, transferPath, direction string) (int64, int64, int64) {
 	if b == nil || b.transferSpeedPolicy == nil {
-		return 0, 0
+		return 0, 0, 0
 	}
 	return b.transferSpeedPolicy(username, primaryGroup, transferPath, direction)
 }
@@ -294,7 +306,7 @@ var _ plugin.MasterBridge = (*Bridge)(nil)
 // ListDir returns directory entries from the master's VFS.
 func (b *Bridge) ListDir(dirPath string) []core.MasterFileEntry {
 	vfsFiles := b.sm.GetVFS().ListDirectory(dirPath)
-	entries := make([]core.MasterFileEntry, 0, len(vfsFiles))
+	entries := make([]core.MasterFileEntry, 0, len(vfsFiles)+3)
 	for _, f := range vfsFiles {
 		entries = append(entries, core.MasterFileEntry{
 			Name:       filepath.Base(f.Path),
@@ -310,7 +322,96 @@ func (b *Bridge) ListDir(dirPath string) []core.MasterFileEntry {
 			XferTime:   f.XferTime,
 		})
 	}
+	entries = append(entries, b.virtualNukeEntries(dirPath)...)
+	sort.SliceStable(entries, func(i, j int) bool {
+		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
+	})
 	return entries
+}
+
+func (b *Bridge) virtualNukeEntries(dirPath string) []core.MasterFileEntry {
+	if b == nil || b.nukeDB == nil {
+		return nil
+	}
+	cleanDirPath := path.Clean(dirPath)
+	if !strings.HasPrefix(strings.ToUpper(path.Base(cleanDirPath)), "[NUKED]-") {
+		return nil
+	}
+	entry, err := b.nukeDB.FindActiveByPath(cleanDirPath)
+	if err != nil || entry == nil {
+		return nil
+	}
+	return nukeVirtualEntriesFromHistory(entry)
+}
+
+func nukeVirtualEntriesFromHistory(entry *core.NukeHistoryEntry) []core.MasterFileEntry {
+	if entry == nil {
+		return nil
+	}
+	now := entry.NukedAt
+	if now <= 0 {
+		now = time.Now().Unix()
+	}
+	owner := strings.TrimSpace(entry.NukedBy)
+	if owner == "" {
+		owner = "goftpd"
+	}
+	group := "NUKED"
+	multiplier := entry.Multiplier
+	if multiplier <= 0 {
+		multiplier = 1
+	}
+	out := make([]core.MasterFileEntry, 0, 3)
+	if name := nukeVirtualEntryName("!NUKE", fmt.Sprintf("x%d", multiplier), entry.Reason); name != "" {
+		out = append(out, core.MasterFileEntry{
+			Name:    name,
+			IsDir:   true,
+			ModTime: now,
+			Owner:   owner,
+			Group:   group,
+		})
+	}
+	if nukees := strings.TrimSpace(entry.Nukees); nukees != "" {
+		if name := nukeVirtualEntryName("!NUKEES", nukees); name != "" {
+			out = append(out, core.MasterFileEntry{
+				Name:    name,
+				IsDir:   true,
+				ModTime: now,
+				Owner:   owner,
+				Group:   group,
+			})
+		}
+	}
+	if name := nukeVirtualEntryName("!NUKER", owner); name != "" {
+		out = append(out, core.MasterFileEntry{
+			Name:    name,
+			IsDir:   true,
+			ModTime: now,
+			Owner:   owner,
+			Group:   group,
+		})
+	}
+	return out
+}
+
+func nukeVirtualEntryName(parts ...string) string {
+	cleaned := make([]string, 0, len(parts))
+	replacer := strings.NewReplacer("/", "-", "\\", "-", ":", "-", "\x00", "", "\r", " ", "\n", " ")
+	for _, part := range parts {
+		part = strings.TrimSpace(replacer.Replace(part))
+		part = strings.Join(strings.Fields(part), " ")
+		if part != "" {
+			cleaned = append(cleaned, part)
+		}
+	}
+	if len(cleaned) == 0 {
+		return ""
+	}
+	name := strings.Join(cleaned, " - ")
+	if len(name) > 200 {
+		name = strings.TrimSpace(name[:200])
+	}
+	return name
 }
 
 func (b *Bridge) PluginListDir(dirPath string) []plugin.FileEntry {
@@ -389,9 +490,9 @@ func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group s
 	configureBridgeDataSocket(slaveConn)
 
 	// Tell slave to receive the file
-	minSpeed, maxSpeed := b.transferSpeedLimits(owner, group, filePath, "upload")
+	minSpeed, maxSpeed, graceSeconds := b.transferSpeedLimits(owner, group, filePath, "upload")
 	recvIdx, err := IssueReceive(slave, filePath, transferType, position, "master",
-		transferResp.Info.TransferIndex, minSpeed, maxSpeed)
+		transferResp.Info.TransferIndex, minSpeed, maxSpeed, graceSeconds)
 	if err != nil {
 		slaveConn.Close()
 		return 0, 0, fmt.Errorf("issue receive: %w", err)
@@ -504,9 +605,9 @@ func (b *Bridge) DownloadFile(filePath string, clientData net.Conn, username, pr
 	configureBridgeDataSocket(slaveConn)
 
 	// Tell slave to send the file
-	minSpeed, maxSpeed := b.transferSpeedLimits(username, primaryGroup, filePath, "download")
+	minSpeed, maxSpeed, graceSeconds := b.transferSpeedLimits(username, primaryGroup, filePath, "download")
 	sendIdx, err := IssueSend(slave, filePath, transferType, position, "master",
-		transferResp.Info.TransferIndex, minSpeed, maxSpeed)
+		transferResp.Info.TransferIndex, minSpeed, maxSpeed, graceSeconds)
 	if err != nil {
 		slaveConn.Close()
 		return 0, fmt.Errorf("issue send: %w", err)
@@ -883,13 +984,13 @@ func (b *Bridge) copyFileBetweenSlaves(sourceSlave, destSlave *RemoteSlave, from
 		return fmt.Errorf("unexpected destination connect response for %s: %T", toPath, connectResp)
 	}
 
-	sendIdx, err := IssueSend(sourceSlave, fromPath, 'I', 0, remoteAddr, transferResp.Info.TransferIndex, 0, 0)
+	sendIdx, err := IssueSend(sourceSlave, fromPath, 'I', 0, remoteAddr, transferResp.Info.TransferIndex, 0, 0, 0)
 	if err != nil {
 		IssueAbort(sourceSlave, transferResp.Info.TransferIndex, "archive send setup failed")
 		IssueAbort(destSlave, destTransferResp.Info.TransferIndex, "archive send setup failed")
 		return fmt.Errorf("source send failed for %s: %w", fromPath, err)
 	}
-	recvIdx, err := IssueReceive(destSlave, toPath, 'I', 0, remoteAddr, destTransferResp.Info.TransferIndex, 0, 0)
+	recvIdx, err := IssueReceive(destSlave, toPath, 'I', 0, remoteAddr, destTransferResp.Info.TransferIndex, 0, 0, 0)
 	if err != nil {
 		IssueAbort(sourceSlave, transferResp.Info.TransferIndex, "archive receive setup failed")
 		IssueAbort(destSlave, destTransferResp.Info.TransferIndex, "archive receive setup failed")
@@ -1179,9 +1280,6 @@ func (b *Bridge) CheckZipIntegrity(archivePath string) (bool, error) {
 }
 
 func (b *Bridge) ProbeMediaInfo(filePath, binary string, timeoutSeconds int) (map[string]string, error) {
-	if strings.TrimSpace(binary) == "" {
-		binary = "mediainfo"
-	}
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = 20
 	}
@@ -1193,7 +1291,7 @@ func (b *Bridge) ProbeMediaInfo(filePath, binary string, timeoutSeconds int) (ma
 	for _, slave := range candidates {
 		index, err := IssueMediaInfo(slave, filePath, binary, timeoutSeconds)
 		if err != nil {
-			lastErr = fmt.Errorf("issue mediainfo to %s: %w", slave.Name(), err)
+			lastErr = fmt.Errorf("issue media probe to %s: %w", slave.Name(), err)
 			continue
 		}
 		resp, err := slave.FetchResponse(index, time.Duration(timeoutSeconds+5)*time.Second)
@@ -1618,7 +1716,7 @@ func (b *Bridge) CacheMediaInfo(dirPath string, fields map[string]string) {
 	b.sm.SetReleaseMediaInfo(cleanDirPath, fields)
 	if b.raceDB != nil {
 		if err := b.raceDB.SaveMediaInfo(cleanDirPath, fields); err != nil {
-			log.Printf("[Bridge] Race DB mediainfo sync failed for %s: %v", cleanDirPath, err)
+			log.Printf("[Bridge] Race DB media probe sync failed for %s: %v", cleanDirPath, err)
 		}
 	}
 }
@@ -1703,6 +1801,9 @@ func (b *Bridge) GetImmediateReleaseProgress(dirPath string) map[string]core.Rel
 		return nil
 	}
 	cleanDirPath := filepath.Clean(dirPath)
+	if out := b.sm.GetImmediateReleaseProgress(cleanDirPath); len(out) > 0 {
+		return out
+	}
 	return b.sm.GetVFS().GetImmediateChildDirProgress(cleanDirPath)
 }
 
@@ -1960,8 +2061,8 @@ func (b *Bridge) SlaveReceivePassthrough(filePath string, transferIdx int32, sla
 	slave.IncActiveTransfers()
 	defer slave.DecActiveTransfers()
 
-	minSpeed, maxSpeed := b.transferSpeedLimits(owner, group, filePath, "upload")
-	recvIdx, err := IssueReceive(slave, filePath, transferType, position, "master", transferIdx, minSpeed, maxSpeed)
+	minSpeed, maxSpeed, graceSeconds := b.transferSpeedLimits(owner, group, filePath, "upload")
+	recvIdx, err := IssueReceive(slave, filePath, transferType, position, "master", transferIdx, minSpeed, maxSpeed, graceSeconds)
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("issue receive: %w", err)
 	}
@@ -2017,8 +2118,8 @@ func (b *Bridge) SlaveSendPassthrough(filePath string, transferIdx int32, slaveN
 		return 0, 0, fmt.Errorf("slave %s not found", slaveName)
 	}
 
-	minSpeed, maxSpeed := b.transferSpeedLimits(username, primaryGroup, filePath, "download")
-	sendIdx, err := IssueSend(slave, filePath, transferType, position, "master", transferIdx, minSpeed, maxSpeed)
+	minSpeed, maxSpeed, graceSeconds := b.transferSpeedLimits(username, primaryGroup, filePath, "download")
+	sendIdx, err := IssueSend(slave, filePath, transferType, position, "master", transferIdx, minSpeed, maxSpeed, graceSeconds)
 	if err != nil {
 		return 0, 0, fmt.Errorf("issue send: %w", err)
 	}
@@ -2087,9 +2188,9 @@ func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group strin
 	}
 
 	// Tell slave to receive the file on this connection
-	minSpeed, maxSpeed := b.transferSpeedLimits(owner, group, filePath, "upload")
+	minSpeed, maxSpeed, graceSeconds := b.transferSpeedLimits(owner, group, filePath, "upload")
 	recvIdx, err := IssueReceive(slave, filePath, transferType, position, remoteAddr,
-		transferResp.Info.TransferIndex, minSpeed, maxSpeed)
+		transferResp.Info.TransferIndex, minSpeed, maxSpeed, graceSeconds)
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("issue receive: %w", err)
 	}
@@ -2173,8 +2274,8 @@ func (b *Bridge) SlaveConnectAndSend(filePath, remoteAddr, username, primaryGrou
 		return 0, 0, fmt.Errorf("unexpected response from slave")
 	}
 
-	minSpeed, maxSpeed := b.transferSpeedLimits(username, primaryGroup, filePath, "download")
-	sendIdx, err := IssueSend(slave, filePath, transferType, position, remoteAddr, transferResp.Info.TransferIndex, minSpeed, maxSpeed)
+	minSpeed, maxSpeed, graceSeconds := b.transferSpeedLimits(username, primaryGroup, filePath, "download")
+	sendIdx, err := IssueSend(slave, filePath, transferType, position, remoteAddr, transferResp.Info.TransferIndex, minSpeed, maxSpeed, graceSeconds)
 	if err != nil {
 		IssueAbort(slave, transferResp.Info.TransferIndex, "download send setup failed")
 		return 0, 0, fmt.Errorf("issue send: %w", err)

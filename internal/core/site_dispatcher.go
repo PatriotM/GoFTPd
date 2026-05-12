@@ -151,6 +151,8 @@ func (s *Session) DispatchSiteCommand(args []string) bool {
 		return s.HandleSiteSearch(remainingArgs)
 	case "RESCAN":
 		return s.HandleSiteRescan(remainingArgs)
+	case "RESCANSTATUS":
+		return s.HandleSiteRescanStatus(remainingArgs)
 	case "CHMOD":
 		return s.HandleSiteChmod(remainingArgs)
 	case "XDUPE":
@@ -222,6 +224,7 @@ func requiredSiteCommandFlags(command string) string {
 		"WIPE",
 		"KICK",
 		"CHMOD",
+		"RESCANSTATUS",
 		"REHASH",
 		"REMERGE",
 		"SLAVEBANS",
