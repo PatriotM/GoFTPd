@@ -1708,6 +1708,9 @@ func (b *Bridge) GetImmediateReleaseProgress(dirPath string) map[string]core.Rel
 		return nil
 	}
 	cleanDirPath := filepath.Clean(dirPath)
+	if out := b.sm.GetImmediateReleaseProgress(cleanDirPath); len(out) > 0 {
+		return out
+	}
 	return b.sm.GetVFS().GetImmediateChildDirProgress(cleanDirPath)
 }
 

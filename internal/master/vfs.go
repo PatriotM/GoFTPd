@@ -1288,7 +1288,7 @@ type RaceGroupStat struct {
 	Name    string
 	Files   int
 	Bytes   int64
-	Speed   float64 // bytes/sec average of this group's per-file speeds (pzs-ng style)
+	Speed   float64 // bytes/sec sum of user speeds in this group (gl/pzs-style grouptop feel)
 	Percent int
 }
 
@@ -1554,14 +1554,11 @@ func (vfs *VirtualFileSystem) computeRaceStateFilteredLocked(dirPath string, exc
 		if cache.Total > 0 {
 			gs.Percent = (gs.Files * 100) / cache.Total
 		}
-		if gs.Files > 0 {
-			for _, us := range cache.Users {
-				if us.Group != gs.Name {
-					continue
-				}
-				gs.Speed += us.Speed * float64(us.Files)
+		for _, us := range cache.Users {
+			if us.Group != gs.Name {
+				continue
 			}
-			gs.Speed = gs.Speed / float64(gs.Files)
+			gs.Speed += us.Speed
 		}
 		cache.Groups = append(cache.Groups, *gs)
 	}

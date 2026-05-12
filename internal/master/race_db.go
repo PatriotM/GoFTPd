@@ -655,12 +655,7 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
         SELECT
             p.grp,
             COUNT(*),
-            COALESCE(SUM(p.size_bytes),0),
-            COALESCE(SUM(p.duration_ms),0),
-            COALESCE(AVG(CASE
-                WHEN p.duration_ms > 0 THEN (CAST(p.size_bytes AS REAL) / CAST(p.duration_ms AS REAL)) * 1000.0
-                ELSE NULL
-            END), 0)
+            COALESCE(SUM(p.size_bytes),0)
         FROM release_files p
         JOIN release_files e
           ON e.release_id = p.release_id
@@ -681,14 +676,16 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 	var groups []core.VFSRaceGroup
 	for groupRows.Next() {
 		var g core.VFSRaceGroup
-		var durationMs int64
-		var averageSpeed float64
-		if err := groupRows.Scan(&g.Name, &g.Files, &g.Bytes, &durationMs, &averageSpeed); err != nil {
+		if err := groupRows.Scan(&g.Name, &g.Files, &g.Bytes); err != nil {
 			log.Printf("[RaceDB] group row scan failed for %s: %v", dirPath, err)
 			return nil, nil, 0, 0, 0
 		}
-		_ = durationMs
-		g.Speed = averageSpeed
+		for _, u := range users {
+			if u.Group != g.Name {
+				continue
+			}
+			g.Speed += u.Speed
+		}
 		if total > 0 {
 			g.Percent = (g.Files * 100) / total
 			if g.Percent > 100 {

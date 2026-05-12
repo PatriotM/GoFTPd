@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"goftpd/internal/core"
 	pluginpkg "goftpd/internal/plugin"
 )
 
@@ -171,16 +172,12 @@ func (h *Handler) Stop() error {
 
 func (h *Handler) loop() {
 	defer h.wg.Done()
-	initial := time.NewTimer(5 * time.Second)
-	defer initial.Stop()
 	ticker := time.NewTicker(time.Duration(h.cfg.ScanIntervalSeconds) * time.Second)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-h.stopCh:
 			return
-		case <-initial.C:
-			h.runOnce()
 		case <-ticker.C:
 			h.runOnce()
 		}
@@ -263,12 +260,12 @@ func (h *Handler) expandPattern(pattern string) []releaseCandidate {
 		base := strings.TrimSuffix(pattern, "/*/*")
 		out := []releaseCandidate{}
 		for _, parent := range h.svc.Bridge.PluginListDir(base) {
-			if !parent.IsDir || strings.HasPrefix(parent.Name, ".") {
+			if !parent.IsDir || parent.IsSymlink || strings.HasPrefix(parent.Name, ".") {
 				continue
 			}
 			parentPath := path.Join(base, parent.Name)
 			for _, rel := range h.svc.Bridge.PluginListDir(parentPath) {
-				if !rel.IsDir || strings.HasPrefix(rel.Name, ".") {
+				if !rel.IsDir || rel.IsSymlink || strings.HasPrefix(rel.Name, ".") {
 					continue
 				}
 				out = append(out, releaseCandidate{
@@ -286,13 +283,13 @@ func (h *Handler) expandPattern(pattern string) []releaseCandidate {
 		base := strings.TrimSuffix(pattern, "/*")
 		out := []releaseCandidate{}
 		for _, rel := range h.svc.Bridge.PluginListDir(base) {
-			if !rel.IsDir || strings.HasPrefix(rel.Name, ".") {
+			if !rel.IsDir || rel.IsSymlink || strings.HasPrefix(rel.Name, ".") {
 				continue
 			}
 			if isDatedBucketName(rel.Name) {
 				parentPath := path.Join(base, rel.Name)
 				for _, child := range h.svc.Bridge.PluginListDir(parentPath) {
-					if !child.IsDir || strings.HasPrefix(child.Name, ".") {
+					if !child.IsDir || child.IsSymlink || strings.HasPrefix(child.Name, ".") {
 						continue
 					}
 					out = append(out, releaseCandidate{
@@ -545,10 +542,7 @@ func (h *Handler) cleanupOldNukes() {
 			if !strings.HasPrefix(entry.Name, h.cfg.NukedPrefix) {
 				continue
 			}
-			age := 0
-			if entry.ModTime > 0 {
-				age = int(time.Since(time.Unix(entry.ModTime, 0)).Minutes())
-			}
+			age := h.nukedAgeMinutes(path.Join(base, entry.Name), entry.ModTime)
 			if age < limitMinutes {
 				continue
 			}
@@ -574,6 +568,18 @@ func (h *Handler) cleanupOldNukes() {
 			}, fmt.Sprintf("deleted after %s", formatMinutes(limitMinutes)), "")
 		}
 	}
+}
+
+func (h *Handler) nukedAgeMinutes(nukedPath string, fallbackModTime int64) int {
+	if db, err := core.GetNukeHistoryDB(false); err == nil && db != nil {
+		if entry, err := db.FindActiveByPath(nukedPath); err == nil && entry != nil && entry.NukedAt > 0 {
+			return int(time.Since(time.Unix(entry.NukedAt, 0)).Minutes())
+		}
+	}
+	if fallbackModTime > 0 {
+		return int(time.Since(time.Unix(fallbackModTime, 0)).Minutes())
+	}
+	return 0
 }
 
 func (h *Handler) excludeTokens() []string {
