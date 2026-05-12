@@ -43,10 +43,12 @@ type AnnouncePlugin struct {
 	slowDnKickChans     []string
 	pretimeMode         string
 	pretimeInlineWait   time.Duration
+	loginFailCooldown   time.Duration
 	asyncEmit           func(outType, text, section, relpath string)
 	mu                  sync.Mutex
 	state               map[string]*releaseState
 	pendingPretime      map[string]*pendingPretime
+	lastLoginFail       map[string]time.Time
 }
 
 func New() *AnnouncePlugin {
@@ -54,13 +56,20 @@ func New() *AnnouncePlugin {
 		state:             map[string]*releaseState{},
 		pretimeMode:       "newline",
 		pretimeInlineWait: 1500 * time.Millisecond,
+		loginFailCooldown: 10 * time.Second,
 		pendingPretime:    map[string]*pendingPretime{},
+		lastLoginFail:     map[string]time.Time{},
 	}
 }
 func (p *AnnouncePlugin) Name() string { return "Announce" }
 func (p *AnnouncePlugin) Initialize(config map[string]interface{}) error {
 	if debug, ok := config["debug"].(bool); ok {
 		p.debug = debug
+	}
+	if secs, ok := config["loginfail_cooldown_seconds"]; ok {
+		if v := configInt(secs, 10); v > 0 {
+			p.loginFailCooldown = time.Duration(v) * time.Second
+		}
 	}
 	p.slowUploadWarnChans = p.routeTargets(config, "SLOWUPLOADWARN", "SLOWKICK", "SLAVEAUTH", "LOGIN")
 	p.slowUploadKickChans = p.routeTargets(config, "SLOWUPLOADKICK", "SLOWKICK", "SLAVEAUTH", "LOGIN")
@@ -497,6 +506,27 @@ func (p *AnnouncePlugin) emitInlinePretime(evt *event.Event, section, rel string
 	return true
 }
 
+func loginFailKey(vars map[string]string) string {
+	username := strings.ToLower(strings.TrimSpace(vars["username"]))
+	reason := strings.ToLower(strings.TrimSpace(vars["reason"]))
+	ip := strings.ToLower(strings.TrimSpace(vars["remote_ip"]))
+	mask := strings.ToLower(strings.TrimSpace(vars["remote_mask"]))
+	return username + "|" + reason + "|" + ip + "|" + mask
+}
+
+func configInt(raw interface{}, fallback int) int {
+	switch v := raw.(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	default:
+		return fallback
+	}
+}
+
 func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -763,6 +793,13 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 	case event.EventUnnuke:
 		outs = append(outs, plugin.Output{Type: "UNNUKE", Text: p.render("UNNUKE", vars, fmt.Sprintf("UNNUKE: [%s] %s by %s", section, rel, evt.User))})
 	case event.EventLoginFail:
+		key := loginFailKey(vars)
+		if key != "|||" && p.loginFailCooldown > 0 {
+			if last, ok := p.lastLoginFail[key]; ok && time.Since(last) < p.loginFailCooldown {
+				return nil, nil
+			}
+			p.lastLoginFail[key] = time.Now()
+		}
 		message := strings.TrimSpace(vars["message"])
 		if message == "" {
 			mask := strings.TrimSpace(vars["remote_mask"])
