@@ -407,6 +407,11 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			if err := applyWeeklyAllotmentIfDue(s.User, time.Now()); err != nil && s.Config.Debug {
 				log.Printf("[WEEKLYALLOTMENT] apply failed for %s: %v", s.User.Name, err)
 			}
+			if s.User.ResetTransferStatPeriodsIfDue(time.Now()) {
+				if err := s.User.Save(); err != nil {
+					log.Printf("[USER] failed to persist period rollover for %s: %v", s.User.Name, err)
+				}
+			}
 
 			s.IsLogged = true
 			s.PendingUser = ""
