@@ -1263,6 +1263,10 @@ func (s *Slave) handleMediaInfo(ac *protocol.AsyncCommand) interface{} {
 			deriveMediaInfoFields(fields)
 			return &protocol.AsyncResponseMediaInfo{Index: ac.Index, Fields: fields}
 		}
+		if fields, handled, probeErr := probeFastVideoMetadata(fullPath); handled && probeErr == nil {
+			deriveMediaInfoFields(fields)
+			return &protocol.AsyncResponseMediaInfo{Index: ac.Index, Fields: fields}
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		cmd := exec.CommandContext(ctx, binary, "--Output=JSON", fullPath)
 		out, err := cmd.Output()
