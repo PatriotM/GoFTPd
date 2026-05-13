@@ -712,6 +712,9 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 		if line := strings.TrimSpace(p.render("STATS_SPEEDS", vars, fmt.Sprintf("STATS: Slowest: %s at %s - Fastest: %s at %s.", vars["u_slowest_name"], vars["u_slowest_speed"], vars["u_fastest_name"], vars["u_fastest_speed"]))); line != "" {
 			appendRaceStatsLine(st, line)
 		}
+		if line := strings.TrimSpace(p.render("STATS_USER_HEADER", vars, "UserTop")); line != "" {
+			appendRaceStatsLine(st, line)
+		}
 	case event.EventRaceUser:
 		if skipReleaseAnnounce {
 			return nil, nil

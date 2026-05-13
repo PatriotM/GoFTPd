@@ -355,6 +355,8 @@ announce.STATS_HOF = "%b%c01{STATS:}%b ▂▃▅▇█▓▒░۩۞۩  %c%sec_c2
 
 announce.STATS_SPEEDS = "%b%c01{STATS:}%b %c14{Slowest:} %c%sec_c2{%u_slowest_name} %c14{at} %b%c14{%u_slowest_speed}%b %c14{-} %c14{Fastest:} %c%sec_c2{%u_fastest_name} %c14{at} %b%c14{%u_fastest_speed}%b%c14{.}"
 
+announce.STATS_USER_HEADER = "%b%c01{STATS:}%b %c14{[ }%c%sec_c2{UserTop} %c14{]}"
+
 announce.STATS_USER = "%b%c01{STATS:}%b %c14{[}%c03{%{u_rank}}%c14{]} %c%sec_c2{%{u_name}} %c01{/} %c07{%{u_group}} %c14{-} %b%c14{%{u_files}f}%b %c14{-} %b%c14{%{u_mb}MB}%b %c14{-} %b%c14{%{u_pct}%}%b %c14{-} %b%c14{%{u_speed}}%b %c14{[ }%c14{ALLUP} %c03{#%{u_alup}} %c14{] [ }%c14{WKUP} %c03{#%{u_wkup}} %c14{]}"
 
 announce.STATS_GROUP_HEADER = "%b%c01{STATS:}%b %c14{[ }%c%sec_c2{GroupTop} %c14{]}"

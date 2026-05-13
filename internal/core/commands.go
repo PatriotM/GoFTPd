@@ -3866,18 +3866,30 @@ func emitOrPrimeReleaseAudioInfo(s *Session, bridge MasterBridge, dirPath string
 
 func probeSTORSitebotMediaInfo(s *Session, bridge MasterBridge, dirPath, filePath, fileName string, hadMediaInfo bool) map[string]string {
 	if hadMediaInfo || s == nil || bridge == nil || s.Config == nil {
+		if s != nil && s.Config != nil && s.Config.Debug && hadMediaInfo {
+			log.Printf("[MASTER-ZS] stor media probe skipped for %s: release already has cached media info", filePath)
+		}
 		return nil
 	}
 	sections, sampleOnly, videoExts := mediaInfoPluginSettings(s.Config)
 	section := sectionFromPathWithConfig(s.Config, dirPath)
 	if len(sections) > 0 && !mediaInfoSectionMatch(section, sections) {
+		if s.Config.Debug {
+			log.Printf("[MASTER-ZS] stor media probe skipped for %s: section %q not enabled", filePath, section)
+		}
 		return nil
 	}
 	ext := strings.ToLower(strings.TrimPrefix(path.Ext(fileName), "."))
 	if !videoExts[ext] {
+		if s.Config.Debug {
+			log.Printf("[MASTER-ZS] stor media probe skipped for %s: extension %q not enabled", filePath, ext)
+		}
 		return nil
 	}
 	if sampleOnly && !isSampleMediaPath(filePath) {
+		if s.Config.Debug {
+			log.Printf("[MASTER-ZS] stor media probe skipped for %s: sample_only enabled and path is not a sample path", filePath)
+		}
 		return nil
 	}
 	fields, err := bridge.ProbeMediaInfo(filePath, "", 0)
@@ -3889,7 +3901,13 @@ func probeSTORSitebotMediaInfo(s *Session, bridge MasterBridge, dirPath, filePat
 	}
 	normalizeReleaseMediaInfoFields(fields)
 	if !releaseMediaInfoLooksUsable(fields) {
+		if s.Config.Debug {
+			log.Printf("[MASTER-ZS] stor media probe skipped for %s: parser returned unusable metadata", filePath)
+		}
 		return nil
+	}
+	if s.Config.Debug {
+		log.Printf("[MASTER-ZS] stor media probe emitted for %s: video=%q audio=%q width=%q height=%q duration=%q", filePath, strings.TrimSpace(fields["video_format"]), strings.TrimSpace(fields["audio_format"]), strings.TrimSpace(fields["width"]), strings.TrimSpace(fields["height"]), strings.TrimSpace(fields["duration"]))
 	}
 	bridge.CacheMediaInfo(dirPath, fields)
 	return fields
