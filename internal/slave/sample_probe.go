@@ -1312,14 +1312,14 @@ func parseMP4MovieHeader(r io.ReadSeeker, start, end int64) (float64, error) {
 }
 
 func parseMP4TrackHeader(r io.ReadSeeker, start, end int64) (int, int, error) {
-	buf, err := readBoxPayload(r, start, end, 92)
+	buf, err := readBoxPayload(r, start, end, 84)
 	if err != nil {
 		return 0, 0, err
 	}
 	version := buf[0]
 	var widthOff, heightOff int
 	if version == 1 {
-		if len(buf) < 104 {
+		if len(buf) < 96 {
 			return 0, 0, fmt.Errorf("tkhd: short version 1")
 		}
 		widthOff = 88

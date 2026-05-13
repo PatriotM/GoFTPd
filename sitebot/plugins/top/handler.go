@@ -219,7 +219,7 @@ func (p *Plugin) loadDayUploadStats() ([]uploaderStat, int64, int64, error) {
 		if name == "" || strings.HasPrefix(name, ".") || entry.IsDir() {
 			continue
 		}
-		files, bytes, err := parseDayUp(filepath.Join(p.usersDir, name))
+		files, bytes, err := parseCurrentDayUp(filepath.Join(p.usersDir, name), time.Now())
 		if err != nil {
 			if p.debug {
 				log.Printf("[Top] skipping %s: %v", filepath.Join(p.usersDir, name), err)
@@ -249,32 +249,55 @@ func (p *Plugin) loadDayUploadStats() ([]uploaderStat, int64, int64, error) {
 	return stats, totalFiles, totalBytes, nil
 }
 
-func parseDayUp(path string) (int64, int64, error) {
+func parseCurrentDayUp(path string, now time.Time) (int64, int64, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return 0, 0, err
 	}
 	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	var (
+		foundDayUp bool
+		files      int64
+		bytes      int64
+		lastLogin  int64
+	)
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "DAYUP ") {
-			continue
+		switch {
+		case strings.HasPrefix(line, "DAYUP "):
+			fields := strings.Fields(line)
+			if len(fields) < 3 {
+				return 0, 0, fmt.Errorf("short DAYUP line")
+			}
+			var err error
+			files, err = strconv.ParseInt(fields[1], 10, 64)
+			if err != nil {
+				return 0, 0, err
+			}
+			bytes, err = strconv.ParseInt(fields[2], 10, 64)
+			if err != nil {
+				return 0, 0, err
+			}
+			foundDayUp = true
+		case strings.HasPrefix(line, "TIME "):
+			fields := strings.Fields(line)
+			if len(fields) >= 3 {
+				if ts, err := strconv.ParseInt(fields[2], 10, 64); err == nil {
+					lastLogin = ts
+				}
+			}
 		}
-		fields := strings.Fields(line)
-		if len(fields) < 3 {
-			return 0, 0, fmt.Errorf("short DAYUP line")
-		}
-		files, err := strconv.ParseInt(fields[1], 10, 64)
-		if err != nil {
-			return 0, 0, err
-		}
-		bytes, err := strconv.ParseInt(fields[2], 10, 64)
-		if err != nil {
-			return 0, 0, err
-		}
-		return files, bytes, nil
 	}
-	return 0, 0, fmt.Errorf("no DAYUP line")
+	if !foundDayUp {
+		return 0, 0, fmt.Errorf("no DAYUP line")
+	}
+	if lastLogin > 0 {
+		prev := time.Unix(lastLogin, 0).In(now.Location())
+		if prev.Year() != now.Year() || prev.YearDay() != now.YearDay() {
+			return 0, 0, nil
+		}
+	}
+	return files, bytes, nil
 }
 
 func (p *Plugin) startAutoAnnounce() {
