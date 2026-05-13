@@ -194,7 +194,7 @@ func (p *Plugin) buildLines(limit int, includeEmptyMessage bool) ([]string, erro
 			"files":    strconv.FormatInt(stat.Files, 10),
 			"size":     formatBytes(stat.Bytes),
 			"response": stat.User,
-		}, fmt.Sprintf("[ %02d ] %s - (%d Files) - (%s)", idx+1, stat.User, stat.Files, formatBytes(stat.Bytes))))
+		}, fmt.Sprintf("[%02d] %s - (%d Files) - (%s)", idx+1, stat.User, stat.Files, formatBytes(stat.Bytes))))
 	}
 
 	lines = append(lines, p.render("TOPCMD_TOTAL", map[string]string{

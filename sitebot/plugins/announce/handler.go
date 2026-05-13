@@ -664,7 +664,11 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 			// NEW LEADER: announce when the leading user changes (skip single-user races)
 			if leader := vars["leader_name"]; leader != "" && leader != st.CurrentLeader && len(st.Users) > 1 {
 				if st.CurrentLeader != "" {
-					outs = append(outs, plugin.Output{Type: "RACE", Text: p.render("NEWLEADER", vars, fmt.Sprintf("NEW LEADER: [%s] %s%s - %s takes the lead - %sMB/%sF/%s%%/%s", section, vars["subdir_prefix"], rel, leader, vars["leader_mb"], vars["leader_files"], vars["leader_pct"], vars["leader_speed"]))})
+					leftText := strings.TrimSpace(vars["t_filesleft"])
+					if leftText != "" {
+						leftText = " - " + leftText + " files left."
+					}
+					outs = append(outs, plugin.Output{Type: "RACE", Text: p.render("NEWLEADER", vars, fmt.Sprintf("NEW LEADER: [%s] %s%s - %s takes the lead - %sMB/%sF/%s%%/%s%s", section, vars["subdir_prefix"], rel, leader, vars["leader_mb"], vars["leader_files"], vars["leader_pct"], vars["leader_speed"], leftText))})
 				}
 				st.CurrentLeader = leader
 			}
