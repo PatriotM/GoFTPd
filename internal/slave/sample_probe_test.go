@@ -35,6 +35,22 @@ func TestParseMP4SampleDescriptionReturnsVisualDimensions(t *testing.T) {
 	}
 }
 
+func TestParseMP4TrackHeaderVersion0ReturnsDimensions(t *testing.T) {
+	buf := make([]byte, 84)
+	buf[76] = 0x07
+	buf[77] = 0x80
+	buf[80] = 0x04
+	buf[81] = 0x38
+
+	width, height, err := parseMP4TrackHeader(newReadSeeker(buf), 0, int64(len(buf)))
+	if err != nil {
+		t.Fatalf("parseMP4TrackHeader failed: %v", err)
+	}
+	if width != 1920 || height != 1080 {
+		t.Fatalf("dimensions = %dx%d, want 1920x1080", width, height)
+	}
+}
+
 func TestFindMPEG2SequenceDimensions(t *testing.T) {
 	data := []byte{
 		0x00, 0x00, 0x01, 0xB3,
