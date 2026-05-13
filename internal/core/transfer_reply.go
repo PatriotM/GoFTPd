@@ -33,21 +33,23 @@ func describeTransferFailure(err error) string {
 	case strings.Contains(lower, "transfer was aborted -"):
 		return "transfer was aborted because the live transfer speed stayed below the configured minimum"
 	case strings.Contains(lower, "tls server handshake failed") && strings.Contains(lower, "i/o timeout"):
-		return "remote peer accepted the data connection but did not finish the TLS handshake in time"
+		return "remote peer accepted the FXP data connection but did not finish the TLS handshake in time"
 	case strings.Contains(lower, "tls client handshake failed") && strings.Contains(lower, "i/o timeout"):
-		return "remote peer did not complete the client-side TLS handshake in time"
+		return "remote peer did not complete the client-side FXP TLS handshake in time"
 	case strings.Contains(lower, "tls server handshake failed") && strings.Contains(lower, "connection reset by peer"):
-		return "remote peer reset the connection during the TLS handshake"
+		return "remote peer reset the FXP connection during the TLS handshake"
 	case strings.Contains(lower, "tls client handshake failed") && strings.Contains(lower, "connection reset by peer"):
-		return "remote peer reset the connection during the client-side TLS handshake"
+		return "remote peer reset the client-side FXP connection during the TLS handshake"
 	case strings.Contains(lower, "connect failed") && strings.Contains(lower, "connection refused"):
-		return "remote peer advertised a data port but nothing was listening on it"
+		return "remote peer advertised an FXP data port but nothing was listening on it"
 	case strings.Contains(lower, "connect failed") && strings.Contains(lower, "i/o timeout"):
-		return "remote peer advertised a data port but never accepted the connection"
+		return "remote peer advertised an FXP data port but never accepted the connection"
 	case strings.Contains(lower, "read error") && strings.Contains(lower, "connection reset by peer"):
-		return "remote peer reset the data connection during transfer"
+		return "remote peer reset the FXP data connection during transfer"
 	case strings.Contains(lower, "write error") && strings.Contains(lower, "connection reset by peer"):
-		return "remote peer closed the data connection while we were sending data"
+		return "remote peer closed the FXP data connection while we were sending data"
+	case strings.Contains(lower, "write error") && strings.Contains(lower, "broken pipe"):
+		return "remote peer closed the FXP data connection while we were sending data"
 	case strings.Contains(raw, "The IP that connected to the socket was not the one that was expected."):
 		return "a different host than the announced data peer connected to the prepared socket"
 	case strings.Contains(lower, "unexpected response from slave"):
