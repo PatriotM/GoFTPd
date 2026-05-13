@@ -405,7 +405,7 @@ announce.RULESCMD_LINE = "%c01{RULES:} %c05{%line}"
 
 announce.RULESCMD_ERROR = "%c01{RULES:} %c04{%response}"
 announce.QUOTACMD_QUOTA_HEADER = "%c02{QUOTA:} %c05{WEEKLY QUOTA} %c14{[ }%c06{%count} %c01{Users - (Min }%c06{%quota_gb}%c01{) ]}"
-announce.QUOTACMD_QUOTA_ENTRY = "%c14{[}%b%c03{%rank}%b%c14{]} %user%c01{/}%c06{%group} %c01{( }%c06{%size} %c01{Up ) is currently }%status_colored%c01{.}"
+announce.QUOTACMD_QUOTA_ENTRY = "%c14{[}%b%c03{%rank}%b%c14{]} %user%c01{/}%c07{%group} %c01{( }%c06{%size} %c01{Up ) is currently }%status_colored%c01{.}"
 announce.QUOTACMD_TRIAL_HEADER = "%c02{QUOTA:} %c05{TRIAL QUOTA} %c01{[ Trial List - }%c06{%count} %c01{Trialing - (Min }%c06{%quota_gb}%c01{) ]}"
 announce.QUOTACMD_TRIAL_ENTRY = "%c14{[}%b%c03{%rank}%b%c14{]} %user%c01{/trial ( }%c06{%size} %c01{Up ) is currently }%status_colored%c01{. (}%c06{%days_remaining}%c01{ days left)}"
 announce.QUOTACMD_EMPTY = "%c02{QUOTA:} %c04{No trial or quota users tracked.}"
