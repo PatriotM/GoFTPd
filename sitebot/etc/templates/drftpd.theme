@@ -330,7 +330,7 @@ announce.MEDIAINFO = "[SAMPLE] %c14{%relname}%b %c01{::} %video_format%b %c01{: 
 
 announce.SPEEDTEST = "%b%c01{SPEEDTEST:}%b %c04{%nick} %c01{%action} %c01{a} %c05{%{size_mb}MB} %c01{file with} %c06{%speed_mbs}"
 
-announce.SFV_RAR = "%b%c01{RACE:}%b %c14{[}%section_colored%c14{]} %c01{Got SFV for }%c14{%relname} %c01{uploaded by }%c14{%u_name}%c01{. Now expecting }%c14{%t_filecount} %c01{%t_file_label.}"
+announce.SFV_RAR = "%b%c01{RACE:}%b %c14{[}%section_colored%c14{]} %c01{Got SFV for }%c14{%relname} %c01{uploaded by }%c14{%u_name}%c01{. Now expecting }%b%c14{%t_filecount}%b %c01{%t_file_label.}"
 
 announce.UPDATE_RAR = "%c01{FIRST} %c01{in }%section_colored%c01{: -> }%c14{%relname} %c01{by }%user%b %c01{at }%speed%b%c01{. Expecting }%size%b %c01{in }%files%b %c01{files.}"
 
