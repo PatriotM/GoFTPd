@@ -327,6 +327,12 @@ announce.NEWDAY = "%b%c01{NEW DAY:}%b %c01{-}%section_colored%c01{- A new day ha
 announce.AUDIOINFO = "%c01{FLAC} %c01{-> }%c14{%relname}%b %c14{[}%genre%b %c01{from }%year%b %c01{at sample rate }%sample_rate%b %c01{Hz, channels }%channels%b%c14{]}"
 
 announce.MEDIAINFO = "[SAMPLE] %c14{%relname}%b %c01{::} %video_format%b %c01{: }%c05{%{width}}%c01{x}%c05{%{height}} %c01{: }%audio_format%b %c01{: }%channels%b %c01{: }%duration%b"
+announce.CUSTOM = "%message"
+announce.SPACEARCHIVE = "%c14{[SPACE]:} %c09{[ARCHiViNG]} %c14{::} %c14{%relname} %c14{::} %c06{[}%c14{%size_mb} MB%c06{]} %c14{to} %c07{[}%c14{%destination_label}%c07{]}"
+announce.SPACEOFFSITE = "%c14{[SPACE]:} %c13{[OFFSiTE]} %c14{::} %c14{%relname} %c14{::} %c06{[}%c14{%size_mb} MB%c06{]} %c14{to} %c07{[}%c14{%destination_label}%c07{]}"
+announce.SPACEDELETE = "%c14{[SPACE]:} %c04{[DELETiNG]} %c14{::} %c14{%relname} %c14{::} %c06{[}%c14{%size_mb} MB%c06{]} %c14{from} %c07{[}%c14{%destination_label}%c07{]}"
+announce.ARCHIVEINFO = "%c15{ARCHIVE} %c01{[}%c%sec_c2{%orig_section}%c01{] -> }%relname%b %c01{:: }%target_path%b %c01{:: }%size_mb%b%c01{MB :: }%incoming_free_gb%b%c01{GB in :: }%archive_free_gb%b%c01{GB arc}"
+announce.ARCHIVEOFFSITE = "%c15{ARCHIVE} %c01{[}%c%sec_c2{%orig_section}%c01{] -> }%relname%b %c01{:: }%target_path%b %c01{:: }%size_mb%b%c01{MB :: offsite}"
 
 announce.SPEEDTEST = "%b%c01{SPEEDTEST:}%b %c04{%nick} %c01{%action} %c01{a} %c05{%{size_mb}MB} %c01{file with} %c06{%speed_mbs}"
 

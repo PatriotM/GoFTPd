@@ -566,6 +566,20 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 		fallback := fmt.Sprintf("SAMPLE-INFO: [%s] %s - Video: %s - Audio: %s - Subs: %s - Duration: %s",
 			section, rel, formatSampleVideoLabel(vars), formatSampleAudioLabel(vars), formatSampleSubtitleLabel(vars), formatSampleDurationLabel(vars))
 		outs = append(outs, plugin.Output{Type: "MEDIAINFO", Text: p.render("MEDIAINFO", vars, fallback)})
+	case event.EventCustom:
+		message := strings.TrimSpace(vars["message"])
+		if message == "" {
+			message = fmt.Sprintf("CUSTOM: [%s] %s", section, rel)
+		}
+		outType := strings.ToUpper(strings.TrimSpace(vars["announce_type"]))
+		if outType == "" {
+			outType = "CUSTOM"
+		}
+		templateKey := strings.ToUpper(strings.TrimSpace(vars["template"]))
+		if templateKey == "" {
+			templateKey = outType
+		}
+		outs = append(outs, plugin.Output{Type: outType, Text: p.render(templateKey, vars, p.render("CUSTOM", vars, message))})
 	case event.EventSpeedtest:
 		nick := vars["nick"]
 		if nick == "" {

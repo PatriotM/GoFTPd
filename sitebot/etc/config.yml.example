@@ -93,6 +93,13 @@ announce:
   # Pretime inline/newline mode lives in plugins/announce/config.yml:
   #   pretime:
   #     mode: "inline"
+  # External scripts can also write JSON-line CUSTOM events directly to
+  # event_fifo. Give them an announce_type like SPACEARCHIVE / SPACEOFFSITE /
+  # SPACEDELETE and route those in plugins/announce/config.yml:
+  #   type_routes:
+  #     SPACEARCHIVE: ["#goftpd-archive"]
+  #     SPACEOFFSITE: ["#goftpd-archive"]
+  #     SPACEDELETE: ["#goftpd-archive"]
 
 help:
   channels: *chan_chat

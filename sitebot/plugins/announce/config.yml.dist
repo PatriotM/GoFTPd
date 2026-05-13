@@ -25,6 +25,11 @@ type_routes:
   SLOWUPLOADKICK: ["#goftpd-staff"]
   SLOWDOWNLOADWARN: ["#goftpd-staff"]
   SLOWDOWNLOADKICK: ["#goftpd-staff"]
+  # External scripts can write CUSTOM JSON events to the sitebot FIFO and set
+  # data.announce_type to one of these values for explicit routing.
+  # SPACEARCHIVE: ["#goftpd-archive"]
+  # SPACEOFFSITE: ["#goftpd-archive"]
+  # SPACEDELETE: ["#goftpd-archive"]
 
 # Pretime rendering mode:
 #   newline = emit a second PRETiME line with OK/BAD

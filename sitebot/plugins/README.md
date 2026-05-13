@@ -178,6 +178,7 @@ func (p *MyPlugin) SetAsyncEmitter(fn func(outType, text, section, relpath strin
 | `EventNewDay`         | Dated dir rollover announcement                         |
 | `EventAudioInfo`      | Audio metadata announce                                 |
 | `EventMediaInfo`      | Video/sample metadata announce                          |
+| `EventCustom`         | Custom JSON FIFO event from an external script          |
 | `EventSpeedtest`      | Speedtest upload/download result                        |
 | `EventPre`            | SITE PRE                                                |
 | `EventPreBW`          | Bandwidth summary at end of PRE                         |
@@ -199,6 +200,99 @@ type Event struct {
     Path      string             // full virtual path
     Data      map[string]string  // free-form extras (template vars, etc.)
 }
+```
+
+### Custom FIFO events from external scripts
+
+The sitebot also accepts direct JSON-line events written to the configured
+`event_fifo`. This lets external scripts announce to IRC directly.
+
+Use event type `CUSTOM` and put your final IRC line in `data.message`.
+Optionally set:
+
+- `data.announce_type` for routing via `announce.type_routes`
+- `data.template` to force a specific announce theme key
+
+If `data.template` is empty, the announce plugin first tries a theme key with
+the same name as `data.announce_type`, then falls back to `CUSTOM`.
+
+For archive-style helpers, a common pattern is:
+
+- `SPACEARCHIVE`
+- `SPACEOFFSITE`
+- `SPACEDELETE`
+
+Those can be routed in `sitebot/plugins/announce/config.yml` like:
+
+```yaml
+type_routes:
+  SPACEARCHIVE: ["#goftpd-archive"]
+  SPACEOFFSITE: ["#goftpd-archive"]
+  SPACEDELETE: ["#goftpd-archive"]
+```
+
+Example JSON line:
+
+```json
+{
+  "type": "CUSTOM",
+  "timestamp": "2026-05-13T18:00:00Z",
+  "user": "external-script",
+  "group": "automation",
+  "section": "ARCHIVE",
+  "filename": "Example.Release-GRP",
+  "path": "/ARCHiVE/TV-1080P/Example.Release-GRP",
+  "size": 0,
+  "speed": 0,
+  "data": {
+    "message": "[SPACE]: [ARCHiViNG] :: Example.Release-GRP :: [1432 MB] to [ARCHIVE-TV-1080P]",
+    "announce_type": "SPACEARCHIVE",
+    "template": "SPACEARCHIVE",
+    "orig_section": "TV-1080P",
+    "destination_label": "ARCHIVE-TV-1080P",
+    "size_mb": "1432"
+  }
+}
+```
+
+Example Python:
+
+```python
+import json
+from datetime import datetime, timezone
+
+fifo_path = "/GoFTPd_master/etc/goftpd.sitebot.fifo"
+
+evt = {
+    "type": "CUSTOM",
+    "timestamp": datetime.now(timezone.utc).isoformat(),
+    "user": "external-script",
+    "group": "automation",
+    "section": "ARCHIVE",
+    "filename": "Example.Release-GRP",
+    "path": "/ARCHiVE/TV-1080P/Example.Release-GRP",
+    "size": 0,
+    "speed": 0,
+    "data": {
+        "message": "[SPACE]: [ARCHiViNG] :: Example.Release-GRP :: [1432 MB] to [ARCHIVE-TV-1080P]",
+        "announce_type": "SPACEARCHIVE",
+        "template": "SPACEARCHIVE",
+        "orig_section": "TV-1080P",
+        "destination_label": "ARCHIVE-TV-1080P",
+        "size_mb": "1432"
+    }
+}
+
+with open(fifo_path, "w") as fifo:
+    fifo.write(json.dumps(evt) + "\n")
+```
+
+Matching theme keys can live in `sitebot/etc/templates/*.theme`, for example:
+
+```text
+announce.SPACEARCHIVE = "%c14{[SPACE]:} %c09{[ARCHiViNG]} %c14{::} %c14{%relname} %c14{::} %c06{[}%c14{%size_mb} MB%c06{]} %c14{to} %c07{[}%c14{%destination_label}%c07{]}"
+announce.SPACEOFFSITE = "%c14{[SPACE]:} %c13{[OFFSiTE]} %c14{::} %c14{%relname} %c14{::} %c06{[}%c14{%size_mb} MB%c06{]} %c14{to} %c07{[}%c14{%destination_label}%c07{]}"
+announce.SPACEDELETE = "%c14{[SPACE]:} %c04{[DELETiNG]} %c14{::} %c14{%relname} %c14{::} %c06{[}%c14{%size_mb} MB%c06{]} %c14{from} %c07{[}%c14{%destination_label}%c07{]}"
 ```
 
 ## Rules

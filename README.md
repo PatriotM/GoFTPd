@@ -119,6 +119,8 @@ In `mode: slave`, the slave-specific runtime comes from the `slave:` block.
 
 Edit `sitebot/etc/config.yml` before starting the sitebot. The daemon and
 sitebot must use the same `event_fifo` path.
+External scripts can also write JSON-line `CUSTOM` events to that FIFO for
+direct IRC announces; see `sitebot/plugins/README.md` for examples.
 
 The example user is `goftpd` / `goftpd`. Change that before exposing the
 daemon.
@@ -486,6 +488,16 @@ Account command notes:
 The sitebot reads daemon events from the configured FIFO and posts to IRC. It
 supports channel routing, per-channel Blowfish keys, themed output, command
 plugins, and SIGHUP reload.
+
+External scripts can also write JSON-line events directly to the same
+`event_fifo`. The built-in announce plugin supports a generic `CUSTOM` event:
+
+- set `type` to `CUSTOM`
+- put the final IRC text in `data.message`
+- optionally set `data.announce_type` for `announce.type_routes`
+- set `path` and `section` if you want normal section/path-based channel routing
+
+See `sitebot/plugins/README.md` for a full JSON and Python example.
 
 Built-in sitebot plugins:
 
