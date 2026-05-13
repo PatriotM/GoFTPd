@@ -108,6 +108,23 @@ func TestParseMP4TrackHeaderVersion0ReturnsDimensions(t *testing.T) {
 	}
 }
 
+func TestBestVideoTrackPrefersTrackWithDimensions(t *testing.T) {
+	state := mp4ProbeState{
+		tracks: []mp4Track{
+			{handler: "vide", codec: "avc1", durationSeconds: 64},
+			{handler: "vide", codec: "avc1", width: 3840, height: 2160, durationSeconds: 64},
+		},
+	}
+
+	track := state.bestVideoTrack()
+	if track == nil {
+		t.Fatalf("bestVideoTrack returned nil")
+	}
+	if track.width != 3840 || track.height != 2160 {
+		t.Fatalf("picked dimensions = %dx%d, want 3840x2160", track.width, track.height)
+	}
+}
+
 func TestFindMPEG2SequenceDimensions(t *testing.T) {
 	data := []byte{
 		0x00, 0x00, 0x01, 0xB3,
