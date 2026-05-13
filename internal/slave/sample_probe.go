@@ -1506,6 +1506,10 @@ func parseMKVElements(r io.ReadSeeker, fileSize int64, state *mkvProbeState) err
 			payloadEnd = fileSize
 		}
 		switch id {
+		case 0x18538067:
+			if err := parseMKVElements(r, payloadEnd, state); err != nil {
+				return err
+			}
 		case 0x1549A966:
 			if err := parseMKVInfo(r, payloadEnd, state); err != nil {
 				return err
