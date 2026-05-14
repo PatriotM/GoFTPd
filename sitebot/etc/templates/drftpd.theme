@@ -395,7 +395,7 @@ announce.BANNEDCMD_ERROR = "%c01{BANNED:} %c04{%response}"
 
 announce.TOPCMD_HEADER = "%c03{TOP UPLOADERS FOR THE DAY:} %c14{[ }%c01{%count} %c01{Users ]}"
 
-announce.TOPCMD_ENTRY = "%c14{[}%c03{%rank}%c14{]} %c11{%user}%c01{/}%c07{%group} %c01{- (}%c01{%files} %c01{Files) - (}%c01{%size}%c01{)}"
+announce.TOPCMD_ENTRY = "%c14{[}%c03{%rank}%c14{]} %c06{%user}%c01{/}%c07{%group} %c01{- (}%c03{%files} %c01{Files) - (}%c05{%size}%c01{)}"
 
 announce.TOPCMD_TOTAL = "%c03{TOTAL UPLOADS FOR THE DAY:} %c01{( }%c01{%files} %c01{Files ) - ( }%c01{%size}%c01{)}"
 

@@ -17,24 +17,28 @@ type testBridge struct {
 func (b *testBridge) PluginListDir(path string) []plugin.FileEntry {
 	return append([]plugin.FileEntry(nil), b.entries[path]...)
 }
-func (b *testBridge) MakeDir(path, owner, group string) error { return nil }
+func (b *testBridge) MakeDir(path, owner, group string) error   { return nil }
 func (b *testBridge) Symlink(linkPath, targetPath string) error { return nil }
-func (b *testBridge) Chmod(path string, mode uint32) error { return nil }
-func (b *testBridge) CreateSparseFile(path string, size int64, owner, group string) error { return nil }
-func (b *testBridge) DeleteFile(path string) error { return nil }
-func (b *testBridge) RenameFile(from, toDir, toName string) error { return nil }
+func (b *testBridge) Chmod(path string, mode uint32) error      { return nil }
+func (b *testBridge) CreateSparseFile(path string, size int64, owner, group string) error {
+	return nil
+}
+func (b *testBridge) DeleteFile(path string) error                  { return nil }
+func (b *testBridge) RenameFile(from, toDir, toName string) error   { return nil }
 func (b *testBridge) RelocatePath(from, toDir, toName string) error { return nil }
-func (b *testBridge) RelocatePathToSlave(from, toDir, toName, targetSlave string) error { return nil }
+func (b *testBridge) RelocatePathToSlave(from, toDir, toName, targetSlave string) error {
+	return nil
+}
 func (b *testBridge) WriteFile(path string, content []byte) error { return nil }
-func (b *testBridge) ReadFile(path string) ([]byte, error) { return nil, nil }
+func (b *testBridge) ReadFile(path string) ([]byte, error)        { return nil, nil }
 func (b *testBridge) ProbeMediaInfo(path, binary string, timeoutSeconds int) (map[string]string, error) {
 	return nil, nil
 }
 func (b *testBridge) CacheMediaInfo(path string, fields map[string]string) {}
-func (b *testBridge) FileExists(path string) bool { return false }
-func (b *testBridge) GetFileSize(path string) int64 { return -1 }
-func (b *testBridge) GetSFVData(dirPath string) map[string]uint32 { return nil }
-func (b *testBridge) GetDirMediaInfo(dirPath string) map[string]string { return nil }
+func (b *testBridge) FileExists(path string) bool                          { return false }
+func (b *testBridge) GetFileSize(path string) int64                        { return -1 }
+func (b *testBridge) GetSFVData(dirPath string) map[string]uint32          { return nil }
+func (b *testBridge) GetDirMediaInfo(dirPath string) map[string]string     { return nil }
 func (b *testBridge) PluginGetVFSRaceStats(dirPath string) (users []plugin.RaceUser, groups []plugin.RaceGroup, totalBytes int64, present int, total int) {
 	return nil, nil, 0, 0, 0
 }
@@ -178,5 +182,24 @@ func TestExpandPatternSkipsSymlinkCandidates(t *testing.T) {
 	}
 	if got[0].Path != "/MP3/0512/Real.Release-2026-GRP" {
 		t.Fatalf("unexpected release candidate: %+v", got[0])
+	}
+}
+
+func TestTimedNukeReason(t *testing.T) {
+	tests := []struct {
+		name    string
+		base    string
+		minutes int
+		want    string
+	}{
+		{name: "empty with minutes", base: "Empty", minutes: 240, want: "Empty after 240 minutes"},
+		{name: "singular minute", base: "Incomplete", minutes: 1, want: "Incomplete after 1 minute"},
+		{name: "no minutes", base: "Half-Empty", minutes: 0, want: "Half-Empty"},
+		{name: "blank base", base: "", minutes: 60, want: "Autonuke after 60 minutes"},
+	}
+	for _, tt := range tests {
+		if got := timedNukeReason(tt.base, tt.minutes); got != tt.want {
+			t.Fatalf("%s: timedNukeReason(%q, %d) = %q, want %q", tt.name, tt.base, tt.minutes, got, tt.want)
+		}
 	}
 }

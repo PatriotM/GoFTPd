@@ -503,7 +503,7 @@ func (sm *SlaveManager) handleSlaveConnection(conn net.Conn) {
 
 	// Start remerge ()
 	rs.remerging.Store(true)
-	go sm.initializeSlaveAfterConnect(rs)
+	go sm.initializeSlaveAfterConnect(rs, false)
 
 	// Start the main read loop (())
 	rs.Run(sm)
@@ -1189,9 +1189,9 @@ func (sm *SlaveManager) loadReleaseSnapshotFromDisk(filePath string) error {
 // Uses "instant online" approach : slave is marked available
 // immediately and remerge runs in the background. Files appear in LIST
 // as they are indexed.
-func (sm *SlaveManager) initializeSlaveAfterConnect(rs *RemoteSlave) {
+func (sm *SlaveManager) initializeSlaveAfterConnect(rs *RemoteSlave, forceInstantOnline bool) {
 	mode := sm.GetRemergeMode()
-	instantOnline := mode == "instant"
+	instantOnline := forceInstantOnline || mode == "instant"
 	if _, useCachedVFS := sm.startupCachedSlaves.LoadAndDelete(rs.name); useCachedVFS {
 		log.Printf("[SlaveManager] Reusing cached VFS for slave %s on startup; skipping initial remerge", rs.name)
 		rs.remerging.Store(false)
@@ -1455,7 +1455,7 @@ func (sm *SlaveManager) StartRemerge(name string) error {
 	if !rs.remerging.CompareAndSwap(false, true) {
 		return fmt.Errorf("slave %s is already remerging", rs.Name())
 	}
-	go sm.initializeSlaveAfterConnect(rs)
+	go sm.initializeSlaveAfterConnect(rs, true)
 	return nil
 }
 
