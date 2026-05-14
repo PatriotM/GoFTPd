@@ -75,6 +75,8 @@ type SlaveManager struct {
 	releaseFacts         map[string]*vfsReleaseSnapshot
 	releaseFactsByParent map[string]map[string]*vfsReleaseSnapshot
 	releaseRaceWindows   map[string]*releaseRaceWindow
+	statusMarkerMu       sync.RWMutex
+	statusMarkerCfg      statusMarkerConfig
 
 	remergeMode       atomic.Value
 	manualRemergeMode atomic.Value
@@ -1289,21 +1291,22 @@ func (sm *SlaveManager) ProcessRemerge(rs *RemoteSlave, resp *protocol.AsyncResp
 	log.Printf("[SlaveManager] Remerge from %s: dir=%s files=%d", rs.name, resp.Path, len(resp.Files))
 
 	sfvPaths := make([]string, 0, 1)
+	touchedDirs := make(map[string]struct{}, 8)
 	for _, inode := range resp.Files {
-		path := resp.Path
-		if path == "/" {
-			path = "/" + inode.Name
+		fullPath := resp.Path
+		if fullPath == "/" {
+			fullPath = "/" + inode.Name
 		} else {
-			path = resp.Path + "/" + inode.Name
+			fullPath = resp.Path + "/" + inode.Name
 		}
-		if sm.vfs.IsExcludedPath(path) {
+		if sm.vfs.IsExcludedPath(fullPath) {
 			continue
 		}
 
 		// Keep trusted FTP owner/group metadata instead of replacing it with OS ownership.
 		owner := inode.Owner
 		group := inode.Group
-		if existingFile := sm.vfs.GetFile(path); existingFile != nil {
+		if existingFile := sm.vfs.GetFile(fullPath); existingFile != nil {
 			// ALWAYS trust the Master's VFS owner over the Slave's physical OS owner.
 			// This prevents the Slave OS (GoFTPd/ftp) from wiping out real FTP users (N0pe) on restart.
 			if existingFile.Owner != "" && existingFile.Owner != "GoFTPd" && existingFile.Owner != "ftp" {
@@ -1312,8 +1315,8 @@ func (sm *SlaveManager) ProcessRemerge(rs *RemoteSlave, resp *protocol.AsyncResp
 			}
 		}
 
-		sm.vfs.AddFile(path, VFSFile{
-			Path:         path,
+		sm.vfs.AddFile(fullPath, VFSFile{
+			Path:         fullPath,
 			Size:         inode.Size,
 			IsDir:        inode.IsDir,
 			IsSymlink:    inode.IsSymlink,
@@ -1324,11 +1327,15 @@ func (sm *SlaveManager) ProcessRemerge(rs *RemoteSlave, resp *protocol.AsyncResp
 			Group:        group,
 			Seen:         true,
 		})
-		if !inode.IsDir && strings.HasSuffix(strings.ToLower(inode.Name), ".sfv") {
-			sfvPaths = append(sfvPaths, path)
+		touchedDirs[path.Dir(fullPath)] = struct{}{}
+		if inode.IsDir {
+			touchedDirs[fullPath] = struct{}{}
 		}
-		if sm.shouldRefreshRemergeChecksum(path, inode) {
-			sm.scheduleRemergeChecksumRefresh(rs, path)
+		if !inode.IsDir && strings.HasSuffix(strings.ToLower(inode.Name), ".sfv") {
+			sfvPaths = append(sfvPaths, fullPath)
+		}
+		if sm.shouldRefreshRemergeChecksum(fullPath, inode) {
+			sm.scheduleRemergeChecksumRefresh(rs, fullPath)
 		}
 	}
 	for _, sfvPath := range sfvPaths {
@@ -1339,6 +1346,9 @@ func (sm *SlaveManager) ProcessRemerge(rs *RemoteSlave, resp *protocol.AsyncResp
 	// stale unseen children in that directory so clients do not try to download
 	// ghost files while the rest of the slave remerge is still running.
 	sm.vfs.PurgeUnseenChildren(rs.name, resp.Path)
+	for dirPath := range touchedDirs {
+		sm.syncStatusMarkersForDir(dirPath)
+	}
 }
 
 func (sm *SlaveManager) shouldRefreshRemergeChecksum(filePath string, inode protocol.LightRemoteInode) bool {
@@ -1430,6 +1440,7 @@ func (sm *SlaveManager) scheduleRemergeSFVParse(rs *RemoteSlave, sfvPath string)
 			sfvMap[strings.ToLower(path.Base(entry.FileName))] = entry.CRC32
 		}
 		sm.vfs.SetSFVData(dirPath, sfvName, sfvMap)
+		sm.syncStatusMarkersForDir(dirPath)
 
 		for _, child := range sm.vfs.ListDirectory(dirPath) {
 			if child == nil || child.IsDir || child.Size <= 0 {

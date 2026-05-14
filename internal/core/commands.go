@@ -2538,23 +2538,11 @@ func mlsdSymlinkType(e MasterFileEntry) string {
 }
 
 func incompleteMarkerName(pattern, relname string) string {
-	pattern = strings.TrimSpace(pattern)
-	relname = strings.TrimSpace(relname)
-	if pattern == "" || relname == "" {
-		return ""
-	}
-	if strings.Contains(pattern, "%0") {
-		return path.Base(strings.ReplaceAll(pattern, "%0", relname))
-	}
-	return path.Base(pattern)
+	return zipscript.StatusMarkerName(pattern, relname)
 }
 
 func incompleteMarkerName2(pattern, relname, child string) string {
-	pattern = incompleteMarkerName(pattern, relname)
-	if strings.Contains(pattern, "%1") {
-		pattern = strings.ReplaceAll(pattern, "%1", strings.TrimSpace(child))
-	}
-	return pattern
+	return zipscript.StatusMarkerNameForChild(pattern, relname, child)
 }
 
 func markerLinkTarget(dirPath, relName string) string {
@@ -2562,15 +2550,19 @@ func markerLinkTarget(dirPath, relName string) string {
 }
 
 func isIncompleteMarkerName(pattern, name string) bool {
-	pattern = strings.TrimSpace(pattern)
-	if pattern == "" {
+	if strings.TrimSpace(pattern) == "" {
 		return strings.HasPrefix(strings.ToLower(name), "[incomplete]")
 	}
-	if strings.Contains(pattern, "%0") {
-		prefix := path.Base(strings.SplitN(pattern, "%0", 2)[0])
-		return prefix != "" && strings.HasPrefix(name, prefix)
-	}
-	return name == path.Base(pattern)
+	return zipscript.IsStatusMarkerName(zipscript.Config{
+		Enabled: true,
+		Incomplete: zipscript.IncompleteConfig{
+			Enabled:        true,
+			Indicator:      pattern,
+			NoSFVIndicator: pattern,
+			NFOIndicator:   pattern,
+			CDIndicator:    pattern,
+		},
+	}, name)
 }
 
 func incompleteMarkerEntries(bridge MasterBridge, cfg *Config, pattern, dirPath string, entries []MasterFileEntry) []MasterFileEntry {
@@ -2586,17 +2578,13 @@ func incompleteMarkerEntriesWithOptions(bridge MasterBridge, cfg *Config, patter
 	if cleanDirPath == "/" {
 		return nil
 	}
-	noSFVPattern := zipscript.NoSFVIndicator(cfg.Zipscript)
-	nfoPattern := zipscript.NFOIndicator(cfg.Zipscript)
-	cdPattern := zipscript.CDIndicator(cfg.Zipscript)
-	markEmptyDirs := zipscript.MarkEmptyDirsOnRescan(cfg.Zipscript)
 	bulkProgress := bridge.GetImmediateReleaseProgress(dirPath)
 	childFacts := bridge.GetImmediateReleaseChildFacts(dirPath)
 	existing := make(map[string]bool, len(entries))
 	for _, e := range entries {
 		existing[e.Name] = true
 	}
-	out := []MasterFileEntry{}
+	releases := make([]zipscript.StatusMarkerRelease, 0, len(entries))
 	for _, e := range entries {
 		if !e.IsDir || e.IsSymlink || strings.HasPrefix(e.Name, ".") || isIncompleteMarkerName(pattern, e.Name) {
 			continue
@@ -2608,95 +2596,42 @@ func incompleteMarkerEntriesWithOptions(bridge MasterBridge, cfg *Config, patter
 		if zipscript.IsIgnoredReleaseSubdir(cfg.Zipscript, releasePath) {
 			continue
 		}
-		present, total := 0, 0
 		progress, hasProgress := bulkProgress[releasePath]
 		facts, hasFacts := childFacts[releasePath]
-		if hasProgress {
-			present, total = progress.Present, progress.Total
-		} else {
+		if !hasProgress {
 			continue
 		}
-
-		hasSFV := hasProgress && progress.HasSFV
-		if !hasSFV && hasFacts {
-			hasSFV = facts.HasSFV
+		release := zipscript.StatusMarkerRelease{
+			Name:    e.Name,
+			Path:    releasePath,
+			ModTime: e.ModTime,
+			Present: progress.Present,
+			Total:   progress.Total,
+			HasSFV:  progress.HasSFV,
 		}
-		if noSFVPattern != "" && !hasSFV {
-			marker := incompleteMarkerName(noSFVPattern, e.Name)
-			if marker != "" && !existing[marker] {
-				out = append(out, MasterFileEntry{
-					Name:       marker,
-					IsSymlink:  true,
-					LinkTarget: releasePath,
-					ModTime:    e.ModTime,
-					Owner:      "GoFTPd",
-					Group:      "GoFTPd",
-				})
-				existing[marker] = true
-			}
-		}
-		hasNFO := false
 		if hasFacts {
-			hasNFO = facts.HasNFO
-		}
-		if nfoPattern != "" && !hasNFO {
-			marker := incompleteMarkerName(nfoPattern, e.Name)
-			if marker != "" && !existing[marker] {
-				out = append(out, MasterFileEntry{
-					Name:       marker,
-					IsSymlink:  true,
-					LinkTarget: releasePath,
-					ModTime:    e.ModTime,
-					Owner:      "GoFTPd",
-					Group:      "GoFTPd",
-				})
-				existing[marker] = true
+			release.VisibleCount = facts.VisibleCount
+			release.HasNFO = facts.HasNFO
+			if !release.HasSFV {
+				release.HasSFV = facts.HasSFV
 			}
 		}
-
-		emptyDir := false
-		if total <= 0 {
-			if markEmptyDirs {
-				if hasFacts {
-					emptyDir = facts.VisibleCount == 0
-				} else {
-					continue
-				}
-			}
-			if !emptyDir {
-				continue
-			}
+		releases = append(releases, release)
+	}
+	out := make([]MasterFileEntry, 0, len(releases))
+	for _, marker := range zipscript.BuildStatusMarkerEntries(cfg.Zipscript, cleanDirPath, releases) {
+		if existing[marker.Name] {
+			continue
 		}
-		if total > 0 && present < total {
-			marker := incompleteMarkerName(pattern, e.Name)
-			if marker != "" && !existing[marker] {
-				out = append(out, MasterFileEntry{
-					Name:       marker,
-					IsSymlink:  true,
-					LinkTarget: releasePath,
-					ModTime:    e.ModTime,
-					Owner:      "GoFTPd",
-					Group:      "GoFTPd",
-				})
-				existing[marker] = true
-			}
-		}
-		if cdPattern != "" && isDiscDirName(e.Name) {
-			if total > 0 && present < total {
-				marker := incompleteMarkerName2(cdPattern, path.Base(dirPath), e.Name)
-				if marker != "" && !existing[marker] {
-					out = append(out, MasterFileEntry{
-						Name:       marker,
-						IsSymlink:  true,
-						LinkTarget: releasePath,
-						ModTime:    e.ModTime,
-						Owner:      "GoFTPd",
-						Group:      "GoFTPd",
-					})
-					existing[marker] = true
-				}
-			}
-		}
+		out = append(out, MasterFileEntry{
+			Name:       marker.Name,
+			IsSymlink:  true,
+			LinkTarget: marker.LinkTarget,
+			ModTime:    marker.ModTime,
+			Owner:      "GoFTPd",
+			Group:      "GoFTPd",
+		})
+		existing[marker.Name] = true
 	}
 	return out
 }
@@ -2770,12 +2705,6 @@ func hasSFVEntry(entries []MasterFileEntry) bool {
 		}
 	}
 	return false
-}
-
-func isDiscDirName(name string) bool {
-	lower := strings.ToLower(strings.TrimSpace(name))
-	ok, _ := regexp.MatchString(`^(cd|disc|disk|dvd)\d+$`, lower)
-	return ok
 }
 
 func progressBar(present, total, width int) string {
