@@ -550,10 +550,10 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
             COUNT(*),
             COALESCE(SUM(p.size_bytes),0),
             COALESCE(SUM(p.duration_ms),0),
-            COALESCE(AVG(CASE
+            COALESCE(SUM(CASE
                 WHEN p.duration_ms > 0 THEN (CAST(p.size_bytes AS REAL) / CAST(p.duration_ms AS REAL)) * 1000.0
-                ELSE NULL
-            END), 0)
+                ELSE 0
+              END), 0)
         FROM release_files p
         JOIN release_files e
           ON e.release_id = p.release_id
@@ -573,18 +573,18 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 
 	var users []core.VFSRaceUser
 	var userDurations []int64
-	var userAverageSpeeds []float64
+	var userAggregateSpeeds []float64
 	for userRows.Next() {
 		var u core.VFSRaceUser
 		var durationMs int64
-		var averageSpeed float64
-		if err := userRows.Scan(&u.Name, &u.Group, &u.Files, &u.Bytes, &durationMs, &averageSpeed); err != nil {
+		var aggregateSpeed float64
+		if err := userRows.Scan(&u.Name, &u.Group, &u.Files, &u.Bytes, &durationMs, &aggregateSpeed); err != nil {
 			log.Printf("[RaceDB] user row scan failed for %s: %v", dirPath, err)
 			return nil, nil, 0, 0, 0
 		}
 		users = append(users, u)
 		userDurations = append(userDurations, durationMs)
-		userAverageSpeeds = append(userAverageSpeeds, averageSpeed)
+		userAggregateSpeeds = append(userAggregateSpeeds, aggregateSpeed)
 	}
 	if err := userRows.Err(); err != nil {
 		log.Printf("[RaceDB] user rows iteration failed for %s: %v", dirPath, err)
@@ -596,7 +596,7 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 		u := &users[i]
 		durationMs := userDurations[i]
 		u.DurationMs = durationMs
-		u.Speed = userAverageSpeeds[i]
+		u.Speed = userAggregateSpeeds[i]
 		var peakBytes, peakMs sql.NullInt64
 		err := r.db.QueryRow(`
             SELECT size_bytes, duration_ms FROM release_files

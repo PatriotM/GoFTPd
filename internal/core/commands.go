@@ -2759,6 +2759,16 @@ func currentRaceSpeedMB(dirPath string, totalBytes int64, bridge MasterBridge) f
 	return (float64(totalBytes) / 1024.0 / 1024.0) / (float64(ms) / 1000.0)
 }
 
+func aggregateRaceSpeedMB(users []VFSRaceUser) float64 {
+	total := 0.0
+	for _, u := range users {
+		if u.Speed > 0 {
+			total += u.Speed
+		}
+	}
+	return total / 1024.0 / 1024.0
+}
+
 func maxUserRaceDurationMs(users []VFSRaceUser) int64 {
 	var maxMs int64
 	for _, u := range users {
@@ -4625,13 +4635,12 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 		}
 		if total > 0 {
 			raceDurationMs := bridge.GetRaceWallClockMilliseconds(dirPath)
-			displayDurationMs := raceDurationMs
-			if userDurationMs := maxUserRaceDurationMs(users); userDurationMs > displayDurationMs {
-				displayDurationMs = userDurationMs
-			}
-			avgSpeedMB := raceSpeedMBForDuration(totalBytes, displayDurationMs)
+			avgSpeedMB := aggregateRaceSpeedMB(users)
 			if avgSpeedMB <= 0 {
 				avgSpeedMB = currentRaceSpeedMB(dirPath, totalBytes, bridge)
+			}
+			if avgSpeedMB <= 0 {
+				avgSpeedMB = raceSpeedMBForDuration(totalBytes, raceDurationMs)
 			}
 			totalFiles := total
 			if expected > 0 {
@@ -4684,13 +4693,12 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 		}
 		raceDurationMs = bridge.GetRaceWallClockMilliseconds(dirPath)
 		if total > 0 {
-			displayDurationMs := raceDurationMs
-			if userDurationMs := maxUserRaceDurationMs(users); userDurationMs > displayDurationMs {
-				displayDurationMs = userDurationMs
-			}
-			avgSpeedMB := raceSpeedMBForDuration(totalBytes, displayDurationMs)
+			avgSpeedMB := aggregateRaceSpeedMB(users)
 			if avgSpeedMB <= 0 {
 				avgSpeedMB = currentRaceSpeedMB(dirPath, totalBytes, bridge)
+			}
+			if avgSpeedMB <= 0 {
+				avgSpeedMB = raceSpeedMBForDuration(totalBytes, raceDurationMs)
 			}
 			data["relname"] = path.Base(dirPath)
 			data["t_files"] = fmt.Sprintf("%d", total)

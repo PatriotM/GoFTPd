@@ -1074,15 +1074,18 @@ func (vfs *VirtualFileSystem) SaveToDisk(filePath string) error {
 
 	dir := filepath.Dir(filePath)
 	if dir != "" && dir != "." {
-		os.MkdirAll(dir, 0755)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("create vfs dir: %w", err)
+		}
 	}
 
-	// Write to temp file first, then rename (atomic)
-	tmpPath := filePath + ".tmp"
-	f, err := os.Create(tmpPath)
+	// Write to a unique temp file in the same directory, then rename atomically.
+	tmpPattern := filepath.Base(filePath) + ".*.tmp"
+	f, err := os.CreateTemp(dir, tmpPattern)
 	if err != nil {
 		return fmt.Errorf("create vfs file: %w", err)
 	}
+	tmpPath := f.Name()
 
 	enc := gob.NewEncoder(f)
 	if err := enc.Encode(snapshot); err != nil {
@@ -1535,9 +1538,6 @@ func (vfs *VirtualFileSystem) computeRaceStateFilteredLocked(dirPath string, exc
 	for _, us := range userMap {
 		if cache.Total > 0 {
 			us.Percent = (us.Files * 100) / cache.Total
-		}
-		if us.Files > 0 {
-			us.Speed = us.Speed / float64(us.Files)
 		}
 		cache.Users = append(cache.Users, *us)
 	}

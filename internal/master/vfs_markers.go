@@ -59,11 +59,18 @@ func (sm *SlaveManager) syncStatusMarkersForDir(dirPath string) {
 	}
 
 	entries := sm.vfs.ListDirectory(dirPath)
-	childFacts := sm.vfs.GetImmediateChildDirFacts(dirPath)
-	progress := sm.vfs.GetImmediateChildDirProgress(dirPath)
+	childFacts := sm.GetImmediateReleaseChildFacts(dirPath)
+	if len(childFacts) == 0 {
+		childFacts = sm.vfs.GetImmediateChildDirFacts(dirPath)
+	}
+	progress := sm.GetImmediateReleaseProgress(dirPath)
+	if len(progress) == 0 {
+		progress = sm.vfs.GetImmediateChildDirProgress(dirPath)
+	}
 
 	desired := make(map[string]string)
 	existingMarkers := make(map[string]string)
+	evaluatedTargets := make(map[string]struct{}, len(entries))
 	releases := make([]zipscript.StatusMarkerRelease, 0, len(entries))
 	for _, entry := range entries {
 		if entry == nil {
@@ -83,19 +90,23 @@ func (sm *SlaveManager) syncStatusMarkersForDir(dirPath string) {
 		if !zipscript.UsesReleaseCheckEntry(cfg, releasePath) || zipscript.IsIgnoredReleaseSubdir(cfg, releasePath) {
 			continue
 		}
+		facts, hasFacts := childFacts[releasePath]
 		stat, ok := progress[releasePath]
-		if !ok {
+		if !ok && !hasFacts {
 			continue
 		}
+		evaluatedTargets[releasePath] = struct{}{}
 		release := zipscript.StatusMarkerRelease{
 			Name:    name,
 			Path:    releasePath,
 			ModTime: entry.LastModified,
-			Present: stat.Present,
-			Total:   stat.Total,
-			HasSFV:  stat.HasSFV,
 		}
-		if facts, ok := childFacts[releasePath]; ok {
+		if ok {
+			release.Present = stat.Present
+			release.Total = stat.Total
+			release.HasSFV = stat.HasSFV
+		}
+		if hasFacts {
 			release.VisibleCount = facts.VisibleCount
 			release.HasNFO = facts.HasNFO
 			if !release.HasSFV {
@@ -114,6 +125,10 @@ func (sm *SlaveManager) syncStatusMarkersForDir(dirPath string) {
 
 	for markerPath := range existingMarkers {
 		if _, ok := desired[markerPath]; ok {
+			continue
+		}
+		targetPath := path.Clean(existingMarkers[markerPath])
+		if _, ok := evaluatedTargets[targetPath]; !ok {
 			continue
 		}
 		sm.vfs.DeleteFile(markerPath)

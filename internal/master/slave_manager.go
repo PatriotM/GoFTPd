@@ -1161,14 +1161,17 @@ func (sm *SlaveManager) saveReleaseSnapshotToDisk(filePath string) error {
 
 	dir := filepath.Dir(filePath)
 	if dir != "" && dir != "." {
-		os.MkdirAll(dir, 0755)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("create release snapshot dir: %w", err)
+		}
 	}
 
-	tmpPath := filePath + ".tmp"
-	f, err := os.Create(tmpPath)
+	tmpPattern := filepath.Base(filePath) + ".*.tmp"
+	f, err := os.CreateTemp(dir, tmpPattern)
 	if err != nil {
 		return fmt.Errorf("create release snapshot file: %w", err)
 	}
+	tmpPath := f.Name()
 	enc := gob.NewEncoder(f)
 	if err := enc.Encode(snapshotFile); err != nil {
 		f.Close()
