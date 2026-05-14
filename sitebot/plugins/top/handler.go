@@ -260,6 +260,7 @@ func parseCurrentDayUp(path string, now time.Time) (int64, int64, error) {
 		files      int64
 		bytes      int64
 		lastLogin  int64
+		periodAnchor int64
 	)
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -286,13 +287,22 @@ func parseCurrentDayUp(path string, now time.Time) (int64, int64, error) {
 					lastLogin = ts
 				}
 			}
+			if len(fields) >= 6 {
+				if ts, err := strconv.ParseInt(fields[5], 10, 64); err == nil {
+					periodAnchor = ts
+				}
+			}
 		}
 	}
 	if !foundDayUp {
 		return 0, 0, fmt.Errorf("no DAYUP line")
 	}
-	if lastLogin > 0 {
-		prev := time.Unix(lastLogin, 0).In(now.Location())
+	anchor := periodAnchor
+	if anchor <= 0 {
+		anchor = lastLogin
+	}
+	if anchor > 0 {
+		prev := time.Unix(anchor, 0).In(now.Location())
 		if prev.Year() != now.Year() || prev.YearDay() != now.YearDay() {
 			return 0, 0, nil
 		}

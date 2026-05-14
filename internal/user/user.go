@@ -30,6 +30,7 @@ type User struct {
 	CurrentDir   string         `yaml:"current_dir"` // Runtime: current FTP dir
 	Added        int64          `yaml:"added"`
 	LastLogin    int64          `yaml:"last_login"`
+	PeriodAnchor int64          `yaml:"-"`
 	Expires      int64          `yaml:"expires"`
 	Credits      int64          `yaml:"credits"`
 	Ratio        int            `yaml:"ratio"`
@@ -230,6 +231,11 @@ func loadUserFile(name, path string, groupMap map[string]int) (*User, error) {
 				var lastOn int64
 				fmt.Sscanf(parts[2], "%d", &lastOn)
 				u.LastLogin = lastOn
+			}
+			if len(parts) >= 6 {
+				var periodAnchor int64
+				fmt.Sscanf(parts[5], "%d", &periodAnchor)
+				u.PeriodAnchor = periodAnchor
 			}
 		case "ADDED":
 			if len(parts) > 1 {
@@ -474,7 +480,7 @@ func (u *User) Save() error {
 	writeStatLine(file, "MONTHUP", u.MonthUp, u.StatExtras["MONTHUP"])
 	writeStatLine(file, "MONTHDN", u.MonthDn, u.StatExtras["MONTHDN"])
 	writeNukeLine(file, u.NukeStat, u.StatExtras["NUKE"])
-	writeTimeLine(file, u.TimeFields, u.LastLogin)
+	writeTimeLine(file, u.TimeFields, u.LastLogin, u.PeriodAnchor)
 
 	if u.PrimaryGroup != "" {
 		fmt.Fprintf(file, "PRIMARY_GROUP %s\n", u.PrimaryGroup)
@@ -524,10 +530,17 @@ func sameISOWeek(a, b time.Time) bool {
 // ResetTransferStatPeriodsIfDue resets day/week/month transfer stats when the
 // persisted LastLogin anchor belongs to an older period than now.
 func (u *User) ResetTransferStatPeriodsIfDue(now time.Time) bool {
-	if u == nil || u.LastLogin <= 0 {
+	if u == nil {
 		return false
 	}
-	prev := time.Unix(u.LastLogin, 0).In(now.Location())
+	anchor := u.PeriodAnchor
+	if anchor <= 0 {
+		anchor = u.LastLogin
+	}
+	if anchor <= 0 {
+		return false
+	}
+	prev := time.Unix(anchor, 0).In(now.Location())
 	changed := false
 	if !sameLocalDay(prev, now) {
 		u.DayUp = StatLine{}
@@ -543,6 +556,9 @@ func (u *User) ResetTransferStatPeriodsIfDue(now time.Time) bool {
 		u.MonthUp = StatLine{}
 		u.MonthDn = StatLine{}
 		changed = true
+	}
+	if changed {
+		u.PeriodAnchor = now.Unix()
 	}
 	return changed
 }
@@ -633,8 +649,12 @@ func writeStatLine(file *os.File, key string, stat StatLine, extra string) {
 	fmt.Fprintf(file, "%s %d %d %d\n", key, stat.Files, stat.Bytes, stat.Meta)
 }
 
-func writeTimeLine(file *os.File, fields []string, lastLogin int64) {
+func writeTimeLine(file *os.File, fields []string, lastLogin int64, periodAnchor int64) {
 	if len(fields) == 0 {
+		if periodAnchor > 0 {
+			fmt.Fprintf(file, "TIME %d %d 0 0 %d\n", 0, lastLogin, periodAnchor)
+			return
+		}
 		fmt.Fprintf(file, "TIME %d %d 0 0\n", 0, lastLogin)
 		return
 	}
@@ -643,6 +663,12 @@ func writeTimeLine(file *os.File, fields []string, lastLogin int64) {
 		copied = append(copied, "0")
 	}
 	copied[1] = fmt.Sprintf("%d", lastLogin)
+	if periodAnchor > 0 {
+		for len(copied) < 5 {
+			copied = append(copied, "0")
+		}
+		copied[4] = fmt.Sprintf("%d", periodAnchor)
+	}
 	fmt.Fprintf(file, "TIME %s\n", strings.Join(copied, " "))
 }
 
