@@ -172,6 +172,7 @@ func main() {
 		sm.SetHiddenPaths(cfg.HiddenVFSPaths)
 		sm.SetExcludePaths(cfg.ExcludeVFSPaths)
 		sm.SetRemergeMode(stringFromCfg(cfg.Master, "remerge_mode", "off"))
+		sm.SetManualRemergeMode(stringFromCfg(cfg.Master, "manual_remerge_mode", "instant"))
 		sm.SetEnableRemergeChecksums(boolFromCfg(cfg.Master, "remerge_checksums", false))
 		sm.SetRemergeFlowControl(
 			intFromCfg(cfg.Master, "remerge_pause_threshold", 250),
@@ -216,6 +217,7 @@ func main() {
 			sm.SetHiddenPaths(c.HiddenVFSPaths)
 			sm.SetExcludePaths(c.ExcludeVFSPaths)
 			sm.SetRemergeMode(stringFromCfg(c.Master, "remerge_mode", "off"))
+			sm.SetManualRemergeMode(stringFromCfg(c.Master, "manual_remerge_mode", "instant"))
 			sm.SetEnableRemergeChecksums(boolFromCfg(c.Master, "remerge_checksums", false))
 			sm.SetRemergeFlowControl(
 				intFromCfg(c.Master, "remerge_pause_threshold", 250),

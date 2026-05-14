@@ -58,6 +58,9 @@ master:
                                 # slave becomes available. "instant" brings the
                                 # slave online immediately and fills the VFS in
                                 # the background.
+  manual_remerge_mode: "instant" # Controls SITE REMERGE only. Default keeps
+                                  # hand-triggered remerges online even when
+                                  # startup remerge_mode stays "off".
   remerge_checksums: false      # If true, ask slaves for CRCs during remerge only for
                                 # files missing a stored checksum in the VFS.
                                 # Leave this off for imported/legacy trees unless you

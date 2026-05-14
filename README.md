@@ -213,6 +213,14 @@ entries now reuses that cached tree instead of immediately forcing a full
 startup remerge. Later reconnects in the same runtime still use normal remerge
 behavior.
 
+`master.remerge_mode` controls startup reconnect behavior:
+
+- `off`: keep the slave unavailable until startup remerge finishes
+- `instant`: keep the slave online while the VFS fills in
+
+`master.manual_remerge_mode` controls `SITE REMERGE` separately and defaults to
+`instant`, so large hand-triggered remerges do not take the site offline.
+
 If `master.remerge_checksums: true`, remerge only asks slaves for CRCs when the
 current VFS entry does not already have a stored checksum. Unchanged files with
 preserved checksum state should not be re-CRC'd just because the master was
@@ -603,7 +611,8 @@ flags, IP restrictions, limits, show_diz map, nuke style, and debug.
 
 `SITE RESCAN <path|path/*>` checks release files against SFV data. `SITE
 REMERGE <slave|*>` asks connected slave(s) to rescan their filesystem roots and
-refresh the master's VFS index.
+refresh the master's VFS index. Its online/offline behavior is controlled by
+`master.manual_remerge_mode`.
 
 The sitebot also supports SIGHUP reload for channels, encryption keys, theme,
 sections, plugin config, and announce routing without dropping the IRC

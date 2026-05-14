@@ -76,7 +76,8 @@ type SlaveManager struct {
 	releaseFactsByParent map[string]map[string]*vfsReleaseSnapshot
 	releaseRaceWindows   map[string]*releaseRaceWindow
 
-	remergeMode atomic.Value
+	remergeMode       atomic.Value
+	manualRemergeMode atomic.Value
 
 	listener        net.Listener
 	running         atomic.Bool
@@ -143,6 +144,7 @@ func NewSlaveManager(host string, port int, tlsEnabled bool, tlsCert, tlsKey str
 		remergeCRCSem:        make(chan struct{}, 16),
 	}
 	sm.remergeMode.Store("off")
+	sm.manualRemergeMode.Store("instant")
 	sm.remergePauseAt.Store(250)
 	sm.remergeResumeAt.Store(50)
 	return sm
@@ -302,6 +304,16 @@ func (sm *SlaveManager) SetRemergeMode(mode string) {
 	}
 }
 
+func (sm *SlaveManager) SetManualRemergeMode(mode string) {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	switch mode {
+	case "off":
+		sm.manualRemergeMode.Store("off")
+	default:
+		sm.manualRemergeMode.Store("instant")
+	}
+}
+
 func (sm *SlaveManager) GetRemergeFlowControl() (pauseThreshold, resumeThreshold int) {
 	pauseThreshold = int(sm.remergePauseAt.Load())
 	resumeThreshold = int(sm.remergeResumeAt.Load())
@@ -321,6 +333,15 @@ func (sm *SlaveManager) GetRemergeMode() string {
 		}
 	}
 	return "off"
+}
+
+func (sm *SlaveManager) GetManualRemergeMode() string {
+	if raw := sm.manualRemergeMode.Load(); raw != nil {
+		if mode, ok := raw.(string); ok && strings.TrimSpace(mode) != "" {
+			return mode
+		}
+	}
+	return "instant"
 }
 
 func (sm *SlaveManager) getExcludePaths() []string {
@@ -503,7 +524,7 @@ func (sm *SlaveManager) handleSlaveConnection(conn net.Conn) {
 
 	// Start remerge ()
 	rs.remerging.Store(true)
-	go sm.initializeSlaveAfterConnect(rs, true)
+	go sm.initializeSlaveAfterConnect(rs, false)
 
 	// Start the main read loop (())
 	rs.Run(sm)
@@ -1455,7 +1476,7 @@ func (sm *SlaveManager) StartRemerge(name string) error {
 	if !rs.remerging.CompareAndSwap(false, true) {
 		return fmt.Errorf("slave %s is already remerging", rs.Name())
 	}
-	go sm.initializeSlaveAfterConnect(rs, true)
+	go sm.initializeSlaveAfterConnect(rs, sm.GetManualRemergeMode() == "instant")
 	return nil
 }
 
