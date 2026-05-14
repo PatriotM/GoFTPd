@@ -254,6 +254,10 @@ func parseCurrentDayUp(path string, now time.Time) (int64, int64, error) {
 	if err != nil {
 		return 0, 0, err
 	}
+	var fileModTime int64
+	if st, err := os.Stat(path); err == nil {
+		fileModTime = st.ModTime().Unix()
+	}
 	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
 	var (
 		foundDayUp bool
@@ -298,6 +302,9 @@ func parseCurrentDayUp(path string, now time.Time) (int64, int64, error) {
 		return 0, 0, fmt.Errorf("no DAYUP line")
 	}
 	anchor := periodAnchor
+	if anchor <= 0 {
+		anchor = fileModTime
+	}
 	if anchor <= 0 {
 		anchor = lastLogin
 	}

@@ -31,6 +31,7 @@ type User struct {
 	Added        int64          `yaml:"added"`
 	LastLogin    int64          `yaml:"last_login"`
 	PeriodAnchor int64          `yaml:"-"`
+	FileModTime  int64          `yaml:"-"`
 	Expires      int64          `yaml:"expires"`
 	Credits      int64          `yaml:"credits"`
 	Ratio        int            `yaml:"ratio"`
@@ -105,6 +106,9 @@ func loadUserFile(name, path string, groupMap map[string]int) (*User, error) {
 		UID:        1000, // default
 		GID:        300,  // default
 		StatExtras: make(map[string]string),
+	}
+	if st, err := os.Stat(path); err == nil {
+		u.FileModTime = st.ModTime().Unix()
 	}
 
 	// Load UID/GID from passwd file
@@ -528,12 +532,15 @@ func sameISOWeek(a, b time.Time) bool {
 }
 
 // ResetTransferStatPeriodsIfDue resets day/week/month transfer stats when the
-// persisted LastLogin anchor belongs to an older period than now.
+// persisted stat anchor belongs to an older period than now.
 func (u *User) ResetTransferStatPeriodsIfDue(now time.Time) bool {
 	if u == nil {
 		return false
 	}
 	anchor := u.PeriodAnchor
+	if anchor <= 0 {
+		anchor = u.FileModTime
+	}
 	if anchor <= 0 {
 		anchor = u.LastLogin
 	}
@@ -567,7 +574,11 @@ func (u *User) ResetTransferStatPeriodsIfDue(now time.Time) bool {
 // ratio credits. Free sections such as speedtest still count traffic, but do
 // not add upload credits or charge download credits.
 func (u *User) UpdateStatsWithCredits(bytes int64, isUpload bool, applyCredits bool) {
-	u.ResetTransferStatPeriodsIfDue(time.Now())
+	now := time.Now()
+	u.ResetTransferStatPeriodsIfDue(now)
+	if u.PeriodAnchor <= 0 {
+		u.PeriodAnchor = now.Unix()
+	}
 	if isUpload {
 		u.AllUp.Files++
 		u.AllUp.Bytes += bytes
@@ -600,6 +611,8 @@ func (u *User) UpdateStatsWithCredits(bytes int64, isUpload bool, applyCredits b
 	}
 	if err := u.Save(); err != nil {
 		log.Printf("[USER] failed to persist stats for %s: %v", u.Name, err)
+	} else {
+		u.FileModTime = now.Unix()
 	}
 }
 
