@@ -31,7 +31,7 @@ COLOR_FOREIGN_4 = "10"
 COLOR_FOREIGN_5 = "07"
 
 COLOR_PRE_1 = "14"
-COLOR_PRE_2 = "11"
+COLOR_PRE_2 = "12"
 COLOR_PRE_3 = "14"
 COLOR_PRE_4 = "02"
 COLOR_PRE_5 = "07"
@@ -74,7 +74,7 @@ COLOR_TV-ES_4 = "05"
 COLOR_TV-ES_5 = "07"
 
 COLOR_TV-FI_1 = "14"
-COLOR_TV-FI_2 = "11"
+COLOR_TV-FI_2 = "02"
 COLOR_TV-FI_3 = "14"
 COLOR_TV-FI_4 = "02"
 COLOR_TV-FI_5 = "07"
@@ -154,7 +154,7 @@ COLOR_APPS_4 = "02"
 COLOR_APPS_5 = "07"
 
 COLOR_EBOOKS_1 = "14"
-COLOR_EBOOKS_2 = "11"
+COLOR_EBOOKS_2 = "06"
 COLOR_EBOOKS_3 = "14"
 COLOR_EBOOKS_4 = "02"
 COLOR_EBOOKS_5 = "07"
@@ -179,7 +179,7 @@ COLOR_MDVDR_4 = "06"
 COLOR_MDVDR_5 = "07"
 
 COLOR_MP3_1 = "14"
-COLOR_MP3_2 = "11"
+COLOR_MP3_2 = "10"
 COLOR_MP3_3 = "14"
 COLOR_MP3_4 = "06"
 COLOR_MP3_5 = "07"
@@ -217,7 +217,7 @@ COLOR_TV-BLURAY_4 = "03"
 COLOR_TV-BLURAY_5 = "07"
 
 COLOR_TV-2160P_1 = "14"
-COLOR_TV-2160P_2 = "11"
+COLOR_TV-2160P_2 = "12"
 COLOR_TV-2160P_3 = "14"
 COLOR_TV-2160P_4 = "03"
 COLOR_TV-2160P_5 = "07"
@@ -395,7 +395,7 @@ announce.BANNEDCMD_ERROR = "%c01{BANNED:} %c04{%response}"
 
 announce.TOPCMD_HEADER = "%c03{TOP UPLOADERS FOR THE DAY:} %c14{[ }%c01{%count} %c01{Users ]}"
 
-announce.TOPCMD_ENTRY = "%c14{[}%b%c03{%rank}%b%c14{]} %user %c01{- (}%c01{%files} %c01{Files) - (}%c01{%size}%c01{)}"
+announce.TOPCMD_ENTRY = "%c14{[}%c03{%rank}%c14{]} %c11{%user}%c01{/}%c07{%group} %c01{- (}%c01{%files} %c01{Files) - (}%c01{%size}%c01{)}"
 
 announce.TOPCMD_TOTAL = "%c03{TOTAL UPLOADS FOR THE DAY:} %c01{( }%c01{%files} %c01{Files ) - ( }%c01{%size}%c01{)}"
 
@@ -461,7 +461,7 @@ announce.OLDPRETIME = "%c04{PRETiME:} %c14{[}%section_colored%c14{]} %c%sec_c3{%
 announce.NEWPRETIMEINLINE = "%c01{NEW:} %c14{[}%section_colored%c14{]} %c%sec_c3{%relname} %c01{by} %c%sec_c2{%u_name} %c01{:: released} %c09{%preage}%c01{ ago}"
 announce.OLDPRETIMEINLINE = "%c01{NEW:} %c14{[}%section_colored%c14{]} %c%sec_c3{%relname} %c01{by} %c%sec_c2{%u_name} %c01{:: released} %c04{%preage}%c01{ ago}"
 
-announce.DF_SLAVE = "%c02{DF:} %c06{%slave} %c01{-} %c03{%free} %c01{free /} %c05{%total} %c01{total (}%c03{%{free_pct}%}%c01{ free) [}%c04{%state}%c14{]}"
+announce.DF_SLAVE = "%c02{DF:} %c06{%slave} %c01{-} %c03{%free} %c01{free /} %c05{%total} %c01{total (}%c03{%{free_pct}%}%c01{ free) [}%state_colored%c14{]}"
 
 announce.DF_TOTAL = "%c02{DF:} %c06{TOTAL} %c01{-} %c03{%free} %c01{free /} %c05{%total} %c01{total (}%c03{%{free_pct}%}%c01{ free)}"
 

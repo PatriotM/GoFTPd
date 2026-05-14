@@ -7,10 +7,10 @@ import (
 	"time"
 )
 
-func TestParseCurrentDayUpFallsBackToFileModTime(t *testing.T) {
+func TestParseDayUploadSnapshotFallsBackToFileModTime(t *testing.T) {
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "Tester")
-	content := "DAYUP 12 3456 0 0 0 0\nTIME 0 1715600000 0 0\n"
+	content := "DAYUP 12 3456 0 0 0 0\nTIME 0 1715600000 0 0\nPRIMARY_GROUP iND\n"
 	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
@@ -21,11 +21,11 @@ func TestParseCurrentDayUpFallsBackToFileModTime(t *testing.T) {
 		t.Fatalf("Chtimes() error = %v", err)
 	}
 
-	files, bytes, err := parseCurrentDayUp(path, now)
+	stat, err := parseDayUploadSnapshot(path, "Tester", now)
 	if err != nil {
-		t.Fatalf("parseCurrentDayUp() error = %v", err)
+		t.Fatalf("parseDayUploadSnapshot() error = %v", err)
 	}
-	if files != 12 || bytes != 3456 {
-		t.Fatalf("parseCurrentDayUp() = (%d, %d), want (12, 3456)", files, bytes)
+	if stat.User != "Tester" || stat.Group != "iND" || stat.Files != 12 || stat.Bytes != 3456 {
+		t.Fatalf("parseDayUploadSnapshot() = %+v", stat)
 	}
 }
