@@ -1102,6 +1102,13 @@ func (b *Bridge) VFSSymlink(linkPath, targetPath string) error {
 	return nil
 }
 
+func (b *Bridge) SyncStatusMarkersForPath(filePath string, isDir bool) {
+	if b == nil || b.sm == nil {
+		return
+	}
+	b.sm.SyncStatusMarkersForPath(filePath, isDir)
+}
+
 func (b *Bridge) Chmod(path string, mode uint32) error {
 	path = filepath.ToSlash(filepath.Clean(path))
 	slave, file, err := b.resolveOwningSlave(path)
