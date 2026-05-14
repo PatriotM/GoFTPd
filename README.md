@@ -179,6 +179,46 @@ For an archive server, point a slave root at the existing archive tree and set
 `readonly: true`. Use `sections` or `paths` only if you want to limit which
 paths that archive slave serves.
 
+Slave `roots` also support mapped virtual mount paths. This is useful when one
+slave should expose normal site paths from one local tree and archive content
+from other disks under a shared virtual prefix such as `/ARCHiVE`, without
+putting mergerfs in front of GoFTPd itself. This is especially useful when your
+archive disks are already mounted individually over NFS and you want GoFTPd to
+talk to those real paths directly instead of scanning one big merged mount.
+Example:
+
+```yml
+slave:
+  roots:
+    - "/goftpd/site"
+    - path: "/goftpd/DISK1"
+      mount_path: "/ARCHiVE"
+    - path: "/goftpd/DISK2"
+      mount_path: "/ARCHiVE"
+    - path: "/goftpd/DISK3"
+      mount_path: "/ARCHiVE"
+    - path: "/goftpd/DISK4"
+      mount_path: "/ARCHiVE"
+    - path: "/goftpd/DISK5"
+      mount_path: "/ARCHiVE"
+    - path: "/goftpd/DISK6"
+      mount_path: "/ARCHiVE"
+    - path: "/goftpd/DISK7"
+      mount_path: "/ARCHiVE"
+    - path: "/goftpd/DISK8"
+      mount_path: "/ARCHiVE"
+    - path: "/goftpd/DISK9"
+      mount_path: "/ARCHiVE"
+    - path: "/goftpd/DISK10"
+      mount_path: "/ARCHiVE"
+```
+
+With that setup, `/X265/...` resolves under `/goftpd/site`, while
+`/ARCHiVE/EBOOKS/...` resolves directly against `/goftpd/DISK1`,
+`/goftpd/DISK2`, `/goftpd/DISK3`, and so on. That keeps archive access on the
+real per-disk mounts, which is usually much faster and more predictable than a
+large mergerfs pool layered over NFS.
+
 On a slave host, the role-specific settings you normally care about are:
 
 - `mode: slave`
@@ -397,6 +437,10 @@ all. The two sides can be switched independently with
 `enable_freespace_actions` and `enable_archive_actions`, and both skip active
 transfers and incomplete releases by default. Dated bucket directories such as
 `0426`, `20260426`, and `2026-04-26` are skipped as cleanup/archive targets.
+Archive rules can also create dated destination buckets under the configured
+destination by enabling `destination_dated` and setting
+`destination_date_format` (same tokens as the `dateddirs` plugin, such as
+`MMDD`, `YYYYMMDD`, or `YYYY-WW`).
 Archive jobs run in the background. If the destination path routes to another
 slave, spacekeeper performs a real cross-slave copy and only removes the
 source after the destination copy completes successfully. If the destination
@@ -427,6 +471,8 @@ Example archive rule:
   slave: "SLAVE1"
   action: "archive_oldest"
   destination: "/ARCHiVE/0DAY"
+  destination_dated: true
+  destination_date_format: "MMDD"
   target_slaves: ["ARCHIVE1", "ARCHIVE2"]
   paths:
     - "/0DAY/*/*"

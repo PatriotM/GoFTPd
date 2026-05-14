@@ -500,16 +500,7 @@ func startSlave(cfg *core.Config) {
 	masterHost, _ := slaveCfg["master_host"].(string)
 	masterPort := intFromCfg(slaveCfg, "master_port", 1099)
 
-	var roots []string
-	if rootsRaw, ok := slaveCfg["roots"]; ok {
-		if rootsList, ok := rootsRaw.([]interface{}); ok {
-			for _, r := range rootsList {
-				if s, ok := r.(string); ok {
-					roots = append(roots, s)
-				}
-			}
-		}
-	}
+	roots, mountedRoots := parseSlaveRoots(slaveCfg)
 	pasvMin := intFromCfg(slaveCfg, "pasv_port_min", 0)
 	pasvMax := intFromCfg(slaveCfg, "pasv_port_max", 0)
 	bindIP, _ := slaveCfg["bind_ip"].(string)
@@ -517,14 +508,15 @@ func startSlave(cfg *core.Config) {
 	ignorePartialRemerge := boolFromCfg(slaveCfg, "ignore_partial_remerge", false)
 	transferBufferSize := intFromCfg(slaveCfg, "transfer_buffer_size", 0)
 
-	log.Printf("[STARTUP] Slave mode [name=%s] [master=%s:%d] [roots=%v] [bind_ip=%s] [pasv=%d-%d]",
-		name, masterHost, masterPort, roots, bindIP, pasvMin, pasvMax)
+	log.Printf("[STARTUP] Slave mode [name=%s] [master=%s:%d] [roots=%v] [mounted_roots=%v] [bind_ip=%s] [pasv=%d-%d]",
+		name, masterHost, masterPort, roots, mountedRoots, bindIP, pasvMin, pasvMax)
 
 	s := slave.NewSlave(slave.SlaveConfig{
 		Name:                 name,
 		MasterHost:           masterHost,
 		MasterPort:           masterPort,
 		Roots:                roots,
+		MountedRoots:         mountedRoots,
 		PasvPortMin:          pasvMin,
 		PasvPortMax:          pasvMax,
 		TLSEnabled:           cfg.TLSEnabled,
@@ -577,6 +569,38 @@ func boolFromCfg(m map[string]interface{}, key string, def bool) bool {
 		return def
 	}
 	return b
+}
+
+func parseSlaveRoots(slaveCfg map[string]interface{}) ([]string, []slave.MountedRoot) {
+	var roots []string
+	var mounted []slave.MountedRoot
+	rootsRaw, ok := slaveCfg["roots"]
+	if !ok {
+		return roots, mounted
+	}
+	rootsList, ok := rootsRaw.([]interface{})
+	if !ok {
+		return roots, mounted
+	}
+	for _, item := range rootsList {
+		switch v := item.(type) {
+		case string:
+			if strings.TrimSpace(v) != "" {
+				roots = append(roots, strings.TrimSpace(v))
+			}
+		case map[string]interface{}:
+			pathValue, _ := v["path"].(string)
+			mountValue, _ := v["mount_path"].(string)
+			if strings.TrimSpace(pathValue) == "" {
+				continue
+			}
+			mounted = append(mounted, slave.MountedRoot{
+				Path:      strings.TrimSpace(pathValue),
+				MountPath: strings.TrimSpace(mountValue),
+			})
+		}
+	}
+	return roots, mounted
 }
 
 func stringSliceFromCfg(m map[string]interface{}, key string) []string {

@@ -38,7 +38,7 @@ type Slave struct {
 	name                 string
 	masterHost           string
 	masterPort           int
-	roots                []string // local filesystem roots (1, slave.root.2)
+	roots                []MountedRoot
 	pasvPortMin          int
 	pasvPortMax          int
 	pasvNext             uint32
@@ -76,20 +76,26 @@ func (s *Slave) writeObject(obj interface{}) error {
 
 // SlaveConfig holds slave configuration loaded from YAML
 type SlaveConfig struct {
-	Name                 string   `yaml:"name"`
-	MasterHost           string   `yaml:"master_host"`
-	MasterPort           int      `yaml:"master_port"`
-	Roots                []string `yaml:"roots"` // e.g. ["/data/site", "/data2/site"]
-	PasvPortMin          int      `yaml:"pasv_port_min"`
-	PasvPortMax          int      `yaml:"pasv_port_max"`
-	TLSEnabled           bool     `yaml:"tls_enabled"`
-	TLSCert              string   `yaml:"tls_cert"`
-	TLSKey               string   `yaml:"tls_key"`
-	BindIP               string   `yaml:"bind_ip"`
-	Timeout              int      `yaml:"timeout"` // seconds, default 60
-	IgnorePartialRemerge bool     `yaml:"ignore_partial_remerge"`
-	TransferBufferSize   int      `yaml:"transfer_buffer_size"`
+	Name                 string        `yaml:"name"`
+	MasterHost           string        `yaml:"master_host"`
+	MasterPort           int           `yaml:"master_port"`
+	Roots                []string      `yaml:"roots"` // e.g. ["/data/site", "/data2/site"]
+	MountedRoots         []MountedRoot `yaml:"mounted_roots"`
+	PasvPortMin          int           `yaml:"pasv_port_min"`
+	PasvPortMax          int           `yaml:"pasv_port_max"`
+	TLSEnabled           bool          `yaml:"tls_enabled"`
+	TLSCert              string        `yaml:"tls_cert"`
+	TLSKey               string        `yaml:"tls_key"`
+	BindIP               string        `yaml:"bind_ip"`
+	Timeout              int           `yaml:"timeout"` // seconds, default 60
+	IgnorePartialRemerge bool          `yaml:"ignore_partial_remerge"`
+	TransferBufferSize   int           `yaml:"transfer_buffer_size"`
 	Debug                bool
+}
+
+type MountedRoot struct {
+	Path      string `yaml:"path"`
+	MountPath string `yaml:"mount_path"`
 }
 
 func NewSlave(cfg SlaveConfig) *Slave {
@@ -97,8 +103,9 @@ func NewSlave(cfg SlaveConfig) *Slave {
 	if cfg.Timeout > 0 {
 		timeout = time.Duration(cfg.Timeout) * time.Second
 	}
-	if len(cfg.Roots) == 0 {
-		cfg.Roots = []string{"./site"}
+	roots := normalizeMountedRoots(cfg.MountedRoots, cfg.Roots)
+	if len(roots) == 0 {
+		roots = []MountedRoot{{Path: "./site", MountPath: "/"}}
 	}
 	bufferSize := cfg.TransferBufferSize
 	if bufferSize <= 0 {
@@ -111,7 +118,7 @@ func NewSlave(cfg SlaveConfig) *Slave {
 		name:                 cfg.Name,
 		masterHost:           cfg.MasterHost,
 		masterPort:           cfg.MasterPort,
-		roots:                cfg.Roots,
+		roots:                roots,
 		pasvPortMin:          cfg.PasvPortMin,
 		pasvPortMax:          cfg.PasvPortMax,
 		tlsEnabled:           cfg.TLSEnabled,
@@ -123,6 +130,122 @@ func NewSlave(cfg SlaveConfig) *Slave {
 		transferBufferSize:   bufferSize,
 		debug:                cfg.Debug,
 	}
+}
+
+func normalizeMountedRoots(configured []MountedRoot, legacy []string) []MountedRoot {
+	out := make([]MountedRoot, 0, len(configured)+len(legacy))
+	for _, root := range configured {
+		pathValue := strings.TrimSpace(root.Path)
+		if pathValue == "" {
+			continue
+		}
+		mountPath := cleanVirtualPath(root.MountPath)
+		if mountPath == "" {
+			mountPath = "/"
+		}
+		out = append(out, MountedRoot{
+			Path:      filepath.Clean(pathValue),
+			MountPath: mountPath,
+		})
+	}
+	for _, root := range legacy {
+		root = strings.TrimSpace(root)
+		if root == "" {
+			continue
+		}
+		out = append(out, MountedRoot{
+			Path:      filepath.Clean(root),
+			MountPath: "/",
+		})
+	}
+	return out
+}
+
+func cleanVirtualPath(p string) string {
+	cleaned := path.Clean("/" + strings.TrimSpace(filepath.ToSlash(p)))
+	if cleaned == "." || cleaned == "" {
+		return "/"
+	}
+	return cleaned
+}
+
+func mountPathMatches(mountPath, virtualPath string) bool {
+	mountPath = cleanVirtualPath(mountPath)
+	virtualPath = cleanVirtualPath(virtualPath)
+	return mountPath == "/" || virtualPath == mountPath || strings.HasPrefix(virtualPath, mountPath+"/")
+}
+
+func stripMountPath(mountPath, virtualPath string) string {
+	mountPath = cleanVirtualPath(mountPath)
+	virtualPath = cleanVirtualPath(virtualPath)
+	if mountPath == "/" {
+		return strings.TrimPrefix(virtualPath, "/")
+	}
+	if virtualPath == mountPath {
+		return ""
+	}
+	return strings.TrimPrefix(strings.TrimPrefix(virtualPath, mountPath), "/")
+}
+
+func (r MountedRoot) fullPath(virtualPath string) string {
+	rel := stripMountPath(r.MountPath, virtualPath)
+	if rel == "" {
+		return r.Path
+	}
+	return filepath.Join(r.Path, filepath.FromSlash(rel))
+}
+
+func (s *Slave) rootsForVirtualPath(virtualPath string) []MountedRoot {
+	virtualPath = cleanVirtualPath(virtualPath)
+	matches := make([]MountedRoot, 0, len(s.roots))
+	for _, root := range s.roots {
+		if mountPathMatches(root.MountPath, virtualPath) {
+			matches = append(matches, root)
+		}
+	}
+	sort.SliceStable(matches, func(i, j int) bool {
+		return len(matches[i].MountPath) > len(matches[j].MountPath)
+	})
+	return matches
+}
+
+type scanTarget struct {
+	root        MountedRoot
+	scanRoot    string
+	virtualBase string
+}
+
+func (s *Slave) scanTargetsForBase(basePath string) []scanTarget {
+	basePath = cleanVirtualPath(basePath)
+	targets := make([]scanTarget, 0, len(s.roots))
+	for _, root := range s.roots {
+		mountPath := cleanVirtualPath(root.MountPath)
+		switch {
+		case basePath == "/":
+			targets = append(targets, scanTarget{root: root, scanRoot: root.Path, virtualBase: mountPath})
+		case mountPathMatches(mountPath, basePath):
+			targets = append(targets, scanTarget{root: root, scanRoot: root.fullPath(basePath), virtualBase: basePath})
+		case strings.HasPrefix(mountPath, basePath+"/"):
+			targets = append(targets, scanTarget{root: root, scanRoot: root.Path, virtualBase: mountPath})
+		}
+	}
+	sort.SliceStable(targets, func(i, j int) bool {
+		return len(targets[i].root.MountPath) > len(targets[j].root.MountPath)
+	})
+	return targets
+}
+
+func (s *Slave) physicalRoots() []string {
+	out := make([]string, 0, len(s.roots))
+	seen := make(map[string]struct{}, len(s.roots))
+	for _, root := range s.roots {
+		if _, ok := seen[root.Path]; ok {
+			continue
+		}
+		seen[root.Path] = struct{}{}
+		out = append(out, root.Path)
+	}
+	return out
 }
 
 func (s *Slave) getTransferBufferSize() int {
@@ -357,8 +480,8 @@ func (s *Slave) handleDelete(ac *protocol.AsyncCommand) interface{} {
 	path := ac.Args[0]
 	deletedAny := false
 
-	for _, root := range s.roots {
-		fullPath := filepath.Join(root, path)
+	for _, root := range s.rootsForVirtualPath(path) {
+		fullPath := root.fullPath(path)
 		if info, err := os.Stat(fullPath); err == nil {
 			if info.IsDir() {
 				if err := os.RemoveAll(fullPath); err != nil {
@@ -371,7 +494,7 @@ func (s *Slave) handleDelete(ac *protocol.AsyncCommand) interface{} {
 			}
 			deletedAny = true
 			// Clean up empty parent dirs ()
-			s.cleanEmptyParents(fullPath, root)
+			s.cleanEmptyParents(fullPath, root.Path)
 		}
 	}
 	if !deletedAny {
@@ -394,19 +517,25 @@ func (s *Slave) handleRename(ac *protocol.AsyncCommand) interface{} {
 	toDir := ac.Args[1]
 	toName := ac.Args[2]
 
-	for _, root := range s.roots {
-		fromPath := filepath.Join(root, from)
-		if _, err := os.Stat(fromPath); err != nil {
-			continue
-		}
-		toDirPath := filepath.Join(root, toDir)
-		toPath := filepath.Join(toDirPath, toName)
+	sourcePath, sourceRoot, err := s.getFileFromRootsWithRoot(from)
+	if err != nil {
+		return &protocol.AsyncResponseError{Index: ac.Index, Message: fmt.Sprintf("rename failed: %v", err)}
+	}
+	destRoots := s.rootsForVirtualPath(toDir)
+	if len(destRoots) == 0 {
+		return &protocol.AsyncResponseError{Index: ac.Index, Message: "rename failed: destination root not found"}
+	}
+	destRoot := destRoots[0]
+	if destRoot.Path != sourceRoot.Path {
+		return &protocol.AsyncResponseError{Index: ac.Index, Message: "rename failed: destination is on a different root; use relocate"}
+	}
+	toDirPath := destRoot.fullPath(toDir)
+	toPath := filepath.Join(toDirPath, toName)
 
-		os.MkdirAll(toDirPath, 0755)
+	os.MkdirAll(toDirPath, 0755)
 
-		if err := os.Rename(fromPath, toPath); err != nil {
-			return &protocol.AsyncResponseError{Index: ac.Index, Message: fmt.Sprintf("rename failed: %v", err)}
-		}
+	if err := os.Rename(sourcePath, toPath); err != nil {
+		return &protocol.AsyncResponseError{Index: ac.Index, Message: fmt.Sprintf("rename failed: %v", err)}
 	}
 
 	return &protocol.AsyncResponse{Index: ac.Index}
@@ -428,7 +557,7 @@ func (s *Slave) handleRelocate(ac *protocol.AsyncCommand) interface{} {
 		return &protocol.AsyncResponseError{Index: ac.Index, Message: "relocate: source is busy with an active transfer"}
 	}
 
-	destRoot, err := s.selectRootForRelocate(sourceRoot)
+	destRoot, err := s.selectRootForRelocate(sourceRoot, toDir)
 	if err != nil {
 		return &protocol.AsyncResponseError{Index: ac.Index, Message: fmt.Sprintf("relocate: %v", err)}
 	}
@@ -437,7 +566,7 @@ func (s *Slave) handleRelocate(ac *protocol.AsyncCommand) interface{} {
 		return &protocol.AsyncResponseError{Index: ac.Index, Message: "relocate: destination is busy with an active transfer"}
 	}
 
-	toDirPath := filepath.Join(destRoot, toDir)
+	toDirPath := destRoot.fullPath(toDir)
 	toPath := filepath.Join(toDirPath, toName)
 	if err := os.MkdirAll(toDirPath, 0755); err != nil {
 		return &protocol.AsyncResponseError{Index: ac.Index, Message: fmt.Sprintf("relocate mkdir failed: %v", err)}
@@ -446,7 +575,7 @@ func (s *Slave) handleRelocate(ac *protocol.AsyncCommand) interface{} {
 		return &protocol.AsyncResponseError{Index: ac.Index, Message: "relocate failed: destination already exists"}
 	}
 
-	if destRoot == sourceRoot {
+	if destRoot.Path == sourceRoot.Path {
 		if err := os.Rename(sourcePath, toPath); err != nil {
 			return &protocol.AsyncResponseError{Index: ac.Index, Message: fmt.Sprintf("relocate rename failed: %v", err)}
 		}
@@ -461,7 +590,7 @@ func (s *Slave) handleRelocate(ac *protocol.AsyncCommand) interface{} {
 		}
 	}
 
-	s.cleanEmptyParents(sourcePath, sourceRoot)
+	s.cleanEmptyParents(sourcePath, sourceRoot.Path)
 	ds := s.getDiskStatus()
 	s.writeObject(&protocol.AsyncResponseDiskStatus{Status: ds})
 	return &protocol.AsyncResponse{Index: ac.Index}
@@ -476,8 +605,8 @@ func (s *Slave) handleChmod(ac *protocol.AsyncCommand) interface{} {
 		return &protocol.AsyncResponseError{Index: ac.Index, Message: "chmod: invalid mode"}
 	}
 	changed := false
-	for _, root := range s.roots {
-		fullPath := filepath.Join(root, ac.Args[0])
+	for _, root := range s.rootsForVirtualPath(ac.Args[0]) {
+		fullPath := root.fullPath(ac.Args[0])
 		if _, err := os.Lstat(fullPath); err != nil {
 			continue
 		}
@@ -498,9 +627,9 @@ func (s *Slave) handleSymlink(ac *protocol.AsyncCommand) interface{} {
 	}
 	linkPath := ac.Args[0]
 	targetPath := ac.Args[1]
-	for _, root := range s.roots {
-		fullLink := filepath.Join(root, linkPath)
-		fullTarget := filepath.Join(root, targetPath)
+	for _, root := range s.rootsForVirtualPath(targetPath) {
+		fullLink := root.fullPath(linkPath)
+		fullTarget := root.fullPath(targetPath)
 		if _, err := os.Stat(fullTarget); err != nil {
 			continue
 		}
@@ -528,17 +657,18 @@ func (s *Slave) handleMakeDir(ac *protocol.AsyncCommand) interface{} {
 	dirPath := ac.Args[0]
 	createOnAllRoots := len(ac.Args) > 1 && strings.EqualFold(strings.TrimSpace(ac.Args[1]), "all-roots")
 
-	if len(s.roots) == 0 {
+	roots := s.rootsForVirtualPath(dirPath)
+	if len(roots) == 0 {
 		return &protocol.AsyncResponseError{Index: ac.Index, Message: "no roots available"}
 	}
-
-	roots := s.roots[:1]
 	if createOnAllRoots {
-		roots = s.roots
+		// keep matched roots
+	} else {
+		roots = roots[:1]
 	}
 
 	for _, root := range roots {
-		fullPath := filepath.Join(root, dirPath)
+		fullPath := root.fullPath(dirPath)
 		if err := os.MkdirAll(fullPath, 0755); err != nil {
 			return &protocol.AsyncResponseError{Index: ac.Index, Message: fmt.Sprintf("makedir failed: %v", err)}
 		}
@@ -556,8 +686,8 @@ func (s *Slave) handleChecksum(ac *protocol.AsyncCommand) interface{} {
 	}
 	path := ac.Args[0]
 
-	for _, root := range s.roots {
-		fullPath := filepath.Join(root, path)
+	for _, root := range s.rootsForVirtualPath(path) {
+		fullPath := root.fullPath(path)
 		f, err := os.Open(fullPath)
 		if err != nil {
 			continue
@@ -826,16 +956,17 @@ func (s *Slave) handleRunCommand(ac *protocol.AsyncCommand) interface{} {
 
 func (s *Slave) resolveLocalPath(dirPath string) string {
 	cleaned := strings.TrimLeft(filepath.Clean(dirPath), `/\`)
-	for _, root := range s.roots {
-		candidate := filepath.Join(root, cleaned)
+	for _, root := range s.rootsForVirtualPath(dirPath) {
+		candidate := root.fullPath(cleaned)
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate
 		}
 	}
-	if len(s.roots) == 0 {
+	roots := s.rootsForVirtualPath(dirPath)
+	if len(roots) == 0 {
 		return ""
 	}
-	return filepath.Join(s.roots[0], cleaned)
+	return roots[0].fullPath(cleaned)
 }
 
 func flattenEnvMap(env map[string]string) []string {
@@ -877,14 +1008,15 @@ func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
 	}
 	excludePaths := normalizeExcludeVFSPaths(ac.Args[5:])
 
-	log.Printf("[Slave] Starting remerge from %s across %d roots", basePath, len(s.roots))
+	scanTargets := s.scanTargetsForBase(basePath)
+	log.Printf("[Slave] Starting remerge from %s across %d roots", basePath, len(scanTargets))
 
 	totalFiles := 0
 	totalDirs := 0
 	sentDirs := 0
 
-	for _, root := range s.roots {
-		scanRoot := filepath.Join(root, basePath)
+	for _, target := range scanTargets {
+		scanRoot := target.scanRoot
 
 		// Check if scanRoot exists
 		if _, err := os.Stat(scanRoot); err != nil {
@@ -929,8 +1061,8 @@ func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
 			}
 
 			// Get VFS-relative path
-			relPath, _ := filepath.Rel(root, fullPath)
-			relPath = "/" + filepath.ToSlash(relPath)
+			relPath, _ := filepath.Rel(target.root.Path, fullPath)
+			relPath = cleanVirtualPath(path.Join(target.root.MountPath, filepath.ToSlash(relPath)))
 			if isExcludedVFSPath(relPath, excludePaths) {
 				if info.IsDir() {
 					return filepath.SkipDir
@@ -978,7 +1110,7 @@ func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
 		// Send last directory
 		sendCurrentDir()
 
-		log.Printf("[Slave] Remerge root %s done: sent %d directories", root, sentDirs)
+		log.Printf("[Slave] Remerge root %s done: sent %d directories", target.root.Path, sentDirs)
 	}
 
 	log.Printf("[Slave] Remerge complete: %d files, %d dirs across %d sent directories", totalFiles, totalDirs, sentDirs)
@@ -1023,8 +1155,8 @@ func (s *Slave) handleSFVFile(ac *protocol.AsyncCommand) interface{} {
 	}
 	sfvPath := ac.Args[0]
 
-	for _, root := range s.roots {
-		fullPath := filepath.Join(root, sfvPath)
+	for _, root := range s.rootsForVirtualPath(sfvPath) {
+		fullPath := root.fullPath(sfvPath)
 		data, err := os.ReadFile(fullPath)
 		if err != nil {
 			continue
@@ -1110,8 +1242,8 @@ func (s *Slave) handleReadFile(ac *protocol.AsyncCommand) interface{} {
 	}
 	filePath := ac.Args[0]
 
-	for _, root := range s.roots {
-		fullPath := filepath.Join(root, filePath)
+	for _, root := range s.rootsForVirtualPath(filePath) {
+		fullPath := root.fullPath(filePath)
 		info, err := os.Stat(fullPath)
 		if err != nil {
 			continue
@@ -1143,8 +1275,8 @@ func (s *Slave) handleReadZipEntry(ac *protocol.AsyncCommand) interface{} {
 		return &protocol.AsyncResponseError{Index: ac.Index, Message: "readZipEntry: empty entry name"}
 	}
 
-	for _, root := range s.roots {
-		fullPath := filepath.Join(root, archivePath)
+	for _, root := range s.rootsForVirtualPath(archivePath) {
+		fullPath := root.fullPath(archivePath)
 		info, err := os.Stat(fullPath)
 		if err != nil || info.IsDir() {
 			continue
@@ -1189,8 +1321,8 @@ func (s *Slave) handleZipIntegrity(ac *protocol.AsyncCommand) interface{} {
 	}
 	archivePath := ac.Args[0]
 
-	for _, root := range s.roots {
-		fullPath := filepath.Join(root, archivePath)
+	for _, root := range s.rootsForVirtualPath(archivePath) {
+		fullPath := root.fullPath(archivePath)
 		info, err := os.Stat(fullPath)
 		if err != nil || info.IsDir() {
 			continue
@@ -1243,8 +1375,8 @@ func (s *Slave) handleMediaInfo(ac *protocol.AsyncCommand) interface{} {
 	}
 	filePath := ac.Args[0]
 
-	for _, root := range s.roots {
-		fullPath := filepath.Join(root, filePath)
+	for _, root := range s.rootsForVirtualPath(filePath) {
+		fullPath := root.fullPath(filePath)
 		info, err := os.Stat(fullPath)
 		if err != nil || info.IsDir() {
 			continue
@@ -1387,11 +1519,10 @@ func (s *Slave) handleWriteFile(ac *protocol.AsyncCommand) interface{} {
 	}
 
 	// Write to first root
-	if len(s.roots) == 0 {
+	fullPath, err := s.getDirForUpload(filePath)
+	if err != nil {
 		return &protocol.AsyncResponseError{Index: ac.Index, Message: "no roots"}
 	}
-
-	fullPath := filepath.Join(s.roots[0], filePath)
 	os.MkdirAll(filepath.Dir(fullPath), 0755)
 
 	if err := os.WriteFile(fullPath, content, 0644); err != nil {
@@ -1411,11 +1542,10 @@ func (s *Slave) handleCreateSparseFile(ac *protocol.AsyncCommand) interface{} {
 	if err != nil || size < 0 {
 		return &protocol.AsyncResponseError{Index: ac.Index, Message: "createSparseFile: invalid size"}
 	}
-	if len(s.roots) == 0 {
+	fullPath, err := s.getDirForUpload(filePath)
+	if err != nil {
 		return &protocol.AsyncResponseError{Index: ac.Index, Message: "no roots"}
 	}
-
-	fullPath := filepath.Join(s.roots[0], filePath)
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
 		return &protocol.AsyncResponseError{Index: ac.Index, Message: fmt.Sprintf("mkdir error: %v", err)}
 	}
@@ -1441,7 +1571,7 @@ func (s *Slave) handleCreateSparseFile(ac *protocol.AsyncCommand) interface{} {
 
 func (s *Slave) getDiskStatus() protocol.DiskStatus {
 	var totalAvail, totalCap int64
-	for _, root := range s.roots {
+	for _, root := range s.physicalRoots() {
 		avail, cap := getDiskSpace(root)
 		totalAvail += avail
 		totalCap += cap
@@ -1454,8 +1584,8 @@ func (s *Slave) getDiskStatus() protocol.DiskStatus {
 
 // getFileFromRoots finds a file across all roots, returns the full filesystem path.
 func (s *Slave) getFileFromRoots(relPath string) (string, error) {
-	for _, root := range s.roots {
-		fullPath := filepath.Join(root, relPath)
+	for _, root := range s.rootsForVirtualPath(relPath) {
+		fullPath := root.fullPath(relPath)
 		if _, err := os.Stat(fullPath); err == nil {
 			return fullPath, nil
 		}
@@ -1463,60 +1593,62 @@ func (s *Slave) getFileFromRoots(relPath string) (string, error) {
 	return "", fmt.Errorf("file not found: %s", relPath)
 }
 
-func (s *Slave) getFileFromRootsWithRoot(relPath string) (string, string, error) {
-	for _, root := range s.roots {
-		fullPath := filepath.Join(root, relPath)
+func (s *Slave) getFileFromRootsWithRoot(relPath string) (string, MountedRoot, error) {
+	for _, root := range s.rootsForVirtualPath(relPath) {
+		fullPath := root.fullPath(relPath)
 		if _, err := os.Stat(fullPath); err == nil {
 			return fullPath, root, nil
 		}
 	}
-	return "", "", fmt.Errorf("file not found: %s", relPath)
+	return "", MountedRoot{}, fmt.Errorf("file not found: %s", relPath)
 }
 
 // getDirForUpload selects a root for a new upload (picks root with most free space).
 func (s *Slave) getDirForUpload(relPath string) (string, error) {
 	cleanRel := filepath.Clean(relPath)
 	dirPart := filepath.Dir(cleanRel)
-	for _, root := range s.roots {
-		existingDir := filepath.Join(root, dirPart)
+	roots := s.rootsForVirtualPath(relPath)
+	for _, root := range roots {
+		existingDir := root.fullPath(dirPart)
 		if info, err := os.Stat(existingDir); err == nil && info.IsDir() {
 			if err := os.MkdirAll(existingDir, 0755); err != nil {
 				return "", err
 			}
-			return filepath.Join(root, cleanRel), nil
+			return root.fullPath(cleanRel), nil
 		}
 	}
 
-	var bestRoot string
+	var bestRoot MountedRoot
 	var bestAvail int64
 
-	for _, root := range s.roots {
-		avail, _ := getDiskSpace(root)
+	for _, root := range roots {
+		avail, _ := getDiskSpace(root.Path)
 		if avail > bestAvail {
 			bestAvail = avail
 			bestRoot = root
 		}
 	}
 
-	if bestRoot == "" {
+	if bestRoot.Path == "" {
 		return "", fmt.Errorf("no root available")
 	}
 
-	fullDir := filepath.Join(bestRoot, dirPart)
+	fullDir := bestRoot.fullPath(dirPart)
 	os.MkdirAll(fullDir, 0755)
 
-	return filepath.Join(bestRoot, cleanRel), nil
+	return bestRoot.fullPath(cleanRel), nil
 }
 
-func (s *Slave) selectRootForRelocate(sourceRoot string) (string, error) {
-	if len(s.roots) == 0 {
-		return "", fmt.Errorf("no roots available")
+func (s *Slave) selectRootForRelocate(sourceRoot MountedRoot, toDir string) (MountedRoot, error) {
+	destRoots := s.rootsForVirtualPath(toDir)
+	if len(destRoots) == 0 {
+		return MountedRoot{}, fmt.Errorf("no roots available")
 	}
-	var bestOther string
+	var bestOther MountedRoot
 	var bestOtherAvail int64 = -1
-	for _, root := range s.roots {
-		avail, _ := getDiskSpace(root)
-		if root == sourceRoot {
+	for _, root := range destRoots {
+		avail, _ := getDiskSpace(root.Path)
+		if root.Path == sourceRoot.Path {
 			continue
 		}
 		if avail > bestOtherAvail {
@@ -1524,10 +1656,15 @@ func (s *Slave) selectRootForRelocate(sourceRoot string) (string, error) {
 			bestOther = root
 		}
 	}
-	if bestOther != "" {
+	if bestOther.Path != "" {
 		return bestOther, nil
 	}
-	return "", fmt.Errorf("no alternate destination root available")
+	for _, root := range destRoots {
+		if root.Path == sourceRoot.Path {
+			return root, nil
+		}
+	}
+	return MountedRoot{}, fmt.Errorf("no alternate destination root available")
 }
 
 func copyPath(src, dst string) error {
@@ -1642,7 +1779,7 @@ func (s *Slave) shutdown() {
 }
 
 func (s *Slave) GetRoots() []string {
-	return s.roots
+	return s.physicalRoots()
 }
 
 func (s *Slave) GetStream() *protocol.ObjectStream {

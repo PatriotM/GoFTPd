@@ -80,8 +80,22 @@ slave:
   name:          ""             # Unique slave identifier — MUST match an entry in `slaves:` below
   master_host:   ""             # IP or hostname of the master
   master_port:   1099           # Must match master's control_port
-  roots:         []             # REQUIRED in slave mode. List of root dirs this slave serves.
-                                # Example: ["/slave1/site"]
+  roots:         []             # REQUIRED in slave mode. Supports:
+                                #   - simple roots: ["/goftpd/site"]
+                                #   - mapped roots with a virtual mount path:
+                                #       - "/goftpd/site"
+                                #       - path: "/goftpd/DISK1"
+                                #         mount_path: "/ARCHiVE"
+                                #       - path: "/goftpd/DISK2"
+                                #         mount_path: "/ARCHiVE"
+                                #       - path: "/goftpd/DISK3"
+                                #         mount_path: "/ARCHiVE"
+                                #       - path: "/goftpd/DISK4"
+                                #         mount_path: "/ARCHiVE"
+                                #   This is handy when archive disks are already
+                                #   mounted separately (for example over NFS)
+                                #   and you want to expose them under one
+                                #   virtual /ARCHiVE tree without mergerfs.
   pasv_port_min: 30000          # Passive-port range for client→slave data transfers
   pasv_port_max: 35000
   bind_ip:       ""             # Public IP advertised in PASV responses from this slave.
