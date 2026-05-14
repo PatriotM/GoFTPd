@@ -549,7 +549,9 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
             p.grp,
             COUNT(*),
             COALESCE(SUM(p.size_bytes),0),
-            COALESCE(SUM(p.duration_ms),0)
+            COALESCE(SUM(p.duration_ms),0),
+            COALESCE(MIN((p.updated_at * 1000) - p.duration_ms), 0),
+            COALESCE(MAX(p.updated_at * 1000), 0)
         FROM release_files p
         JOIN release_files e
           ON e.release_id = p.release_id
@@ -569,15 +571,21 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 
 	var users []core.VFSRaceUser
 	var userDurations []int64
+	var userStartMs []int64
+	var userEndMs []int64
 	for userRows.Next() {
 		var u core.VFSRaceUser
 		var durationMs int64
-		if err := userRows.Scan(&u.Name, &u.Group, &u.Files, &u.Bytes, &durationMs); err != nil {
+		var startMs int64
+		var endMs int64
+		if err := userRows.Scan(&u.Name, &u.Group, &u.Files, &u.Bytes, &durationMs, &startMs, &endMs); err != nil {
 			log.Printf("[RaceDB] user row scan failed for %s: %v", dirPath, err)
 			return nil, nil, 0, 0, 0
 		}
 		users = append(users, u)
 		userDurations = append(userDurations, durationMs)
+		userStartMs = append(userStartMs, startMs)
+		userEndMs = append(userEndMs, endMs)
 	}
 	if err := userRows.Err(); err != nil {
 		log.Printf("[RaceDB] user rows iteration failed for %s: %v", dirPath, err)
@@ -589,7 +597,9 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 		u := &users[i]
 		durationMs := userDurations[i]
 		u.DurationMs = durationMs
-		if u.Bytes > 0 && durationMs > 0 {
+		if startMs, endMs := userStartMs[i], userEndMs[i]; u.Bytes > 0 && endMs > startMs {
+			u.Speed = float64(u.Bytes) / (float64(endMs-startMs) / 1000.0)
+		} else if u.Bytes > 0 && durationMs > 0 {
 			u.Speed = float64(u.Bytes) / (float64(durationMs) / 1000.0)
 		}
 		var peakBytes, peakMs sql.NullInt64
@@ -675,15 +685,11 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 			log.Printf("[RaceDB] group row scan failed for %s: %v", dirPath, err)
 			return nil, nil, 0, 0, 0
 		}
-		var groupDurationMs int64
 		for _, u := range users {
 			if u.Group != g.Name {
 				continue
 			}
-			groupDurationMs += u.DurationMs
-		}
-		if g.Bytes > 0 && groupDurationMs > 0 {
-			g.Speed = float64(g.Bytes) / (float64(groupDurationMs) / 1000.0)
+			g.Speed += u.Speed
 		}
 		if total > 0 {
 			g.Percent = (g.Files * 100) / total
