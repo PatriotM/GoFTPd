@@ -61,7 +61,7 @@ func TestScanTargetsForBaseIncludeArchiveMountAtRoot(t *testing.T) {
 	if len(targets) != 2 {
 		t.Fatalf("expected 2 scan targets, got %d", len(targets))
 	}
-	if targets[0].virtualBase != "/ARCHiVE" {
-		t.Fatalf("expected more specific mount first, got %+v", targets)
+	if targets[0].virtualBase != "/" || targets[1].virtualBase != "/ARCHiVE" {
+		t.Fatalf("expected site root first at / remerge, got %+v", targets)
 	}
 }

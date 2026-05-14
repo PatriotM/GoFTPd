@@ -230,6 +230,14 @@ func (s *Slave) scanTargetsForBase(basePath string) []scanTarget {
 		}
 	}
 	sort.SliceStable(targets, func(i, j int) bool {
+		if basePath == "/" {
+			if targets[i].root.MountPath == "/" && targets[j].root.MountPath != "/" {
+				return true
+			}
+			if targets[j].root.MountPath == "/" && targets[i].root.MountPath != "/" {
+				return false
+			}
+		}
 		return len(targets[i].root.MountPath) > len(targets[j].root.MountPath)
 	})
 	return targets
