@@ -574,30 +574,45 @@ func boolFromCfg(m map[string]interface{}, key string, def bool) bool {
 func parseSlaveRoots(slaveCfg map[string]interface{}) ([]string, []slave.MountedRoot) {
 	var roots []string
 	var mounted []slave.MountedRoot
-	rootsRaw, ok := slaveCfg["roots"]
-	if !ok {
-		return roots, mounted
-	}
-	rootsList, ok := rootsRaw.([]interface{})
-	if !ok {
-		return roots, mounted
-	}
-	for _, item := range rootsList {
-		switch v := item.(type) {
-		case string:
-			if strings.TrimSpace(v) != "" {
-				roots = append(roots, strings.TrimSpace(v))
+	if rootsRaw, ok := slaveCfg["roots"]; ok {
+		if rootsList, ok := rootsRaw.([]interface{}); ok {
+			for _, item := range rootsList {
+				switch v := item.(type) {
+				case string:
+					if strings.TrimSpace(v) != "" {
+						roots = append(roots, strings.TrimSpace(v))
+					}
+				case map[string]interface{}:
+					pathValue, _ := v["path"].(string)
+					mountValue, _ := v["mount_path"].(string)
+					if strings.TrimSpace(pathValue) == "" {
+						continue
+					}
+					mounted = append(mounted, slave.MountedRoot{
+						Path:      strings.TrimSpace(pathValue),
+						MountPath: strings.TrimSpace(mountValue),
+					})
+				}
 			}
-		case map[string]interface{}:
-			pathValue, _ := v["path"].(string)
-			mountValue, _ := v["mount_path"].(string)
-			if strings.TrimSpace(pathValue) == "" {
-				continue
+		}
+	}
+	if mountedRaw, ok := slaveCfg["mounted_roots"]; ok {
+		if mountedList, ok := mountedRaw.([]interface{}); ok {
+			for _, item := range mountedList {
+				v, ok := item.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				pathValue, _ := v["path"].(string)
+				mountValue, _ := v["mount_path"].(string)
+				if strings.TrimSpace(pathValue) == "" {
+					continue
+				}
+				mounted = append(mounted, slave.MountedRoot{
+					Path:      strings.TrimSpace(pathValue),
+					MountPath: strings.TrimSpace(mountValue),
+				})
 			}
-			mounted = append(mounted, slave.MountedRoot{
-				Path:      strings.TrimSpace(pathValue),
-				MountPath: strings.TrimSpace(mountValue),
-			})
 		}
 	}
 	return roots, mounted

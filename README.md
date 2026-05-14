@@ -179,9 +179,14 @@ For an archive server, point a slave root at the existing archive tree and set
 `readonly: true`. Use `sections` or `paths` only if you want to limit which
 paths that archive slave serves.
 
-Slave `roots` also support mapped virtual mount paths. This is useful when one
-slave should expose normal site paths from one local tree and archive content
-from other disks under a shared virtual prefix such as `/ARCHiVE`, without
+Slave roots can also be split into two clear buckets:
+
+- `roots`: normal site roots mounted at `/`
+- `mounted_roots`: extra physical roots mounted under a virtual prefix such as
+  `/ARCHiVE`
+
+This is useful when one slave should expose normal site paths from one local
+tree and archive content from other disks under a shared virtual prefix without
 putting mergerfs in front of GoFTPd itself. This is especially useful when your
 archive disks are already mounted individually over NFS and you want GoFTPd to
 talk to those real paths directly instead of scanning one big merged mount.
@@ -191,6 +196,7 @@ Example:
 slave:
   roots:
     - "/goftpd/site"
+  mounted_roots:
     - path: "/goftpd/DISK1"
       mount_path: "/ARCHiVE"
     - path: "/goftpd/DISK2"
@@ -218,6 +224,11 @@ With that setup, `/X265/...` resolves under `/goftpd/site`, while
 `/goftpd/DISK2`, `/goftpd/DISK3`, and so on. That keeps archive access on the
 real per-disk mounts, which is usually much faster and more predictable than a
 large mergerfs pool layered over NFS.
+
+On a full remerge, GoFTPd scans normal `roots` first and only scans
+`mounted_roots` after that. That keeps the live site tree responsive while the
+larger archive trees catch up in the background, which makes `mounted_roots`
+especially suitable for archive-style storage.
 
 On a slave host, the role-specific settings you normally care about are:
 
