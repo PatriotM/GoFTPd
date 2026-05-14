@@ -247,8 +247,15 @@ func UpdateActiveSessionACL(engine *acl.Engine) {
 }
 
 func remoteAddrString(conn net.Conn) string {
-	if conn == nil || conn.RemoteAddr() == nil {
+	if conn == nil {
 		return ""
 	}
-	return conn.RemoteAddr().String()
+	defer func() {
+		_ = recover()
+	}()
+	addr := conn.RemoteAddr()
+	if addr == nil {
+		return ""
+	}
+	return addr.String()
 }

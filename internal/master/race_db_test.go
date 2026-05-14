@@ -185,7 +185,7 @@ func TestRaceDBGetRaceStatsUsesNormalizedFilenameKeys(t *testing.T) {
 	}
 }
 
-func TestRaceDBGetRaceStatsUsesAveragePerFileSpeeds(t *testing.T) {
+func TestRaceDBGetRaceStatsUsesAggregateUserSpeeds(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "race.db")
 	rdb, err := NewRaceDB(dbPath)
 	if err != nil {
@@ -193,7 +193,7 @@ func TestRaceDBGetRaceStatsUsesAveragePerFileSpeeds(t *testing.T) {
 	}
 	defer rdb.Close()
 
-	releasePath := "/site/MP3/Average.Speed-GRP"
+	releasePath := "/site/MP3/Aggregate.Speed-GRP"
 	if err := rdb.SaveSFV(releasePath, "release.sfv", map[string]uint32{
 		"01-track.mp3": 1,
 		"02-track.mp3": 2,
@@ -217,11 +217,11 @@ func TestRaceDBGetRaceStatsUsesAveragePerFileSpeeds(t *testing.T) {
 	if users[0].DurationMs != 5000 {
 		t.Fatalf("expected summed duration 5000ms, got %d", users[0].DurationMs)
 	}
-	if users[0].Speed != 75 {
-		t.Fatalf("expected pzs-ng style average user speed 75 bytes/s, got %f", users[0].Speed)
+	if users[0].Speed != 150 {
+		t.Fatalf("expected aggregate user speed 150 bytes/s, got %f", users[0].Speed)
 	}
-	if groups[0].Speed != 75 {
-		t.Fatalf("expected pzs-ng style average group speed 75 bytes/s, got %f", groups[0].Speed)
+	if groups[0].Speed != 150 {
+		t.Fatalf("expected aggregate group speed 150 bytes/s, got %f", groups[0].Speed)
 	}
 }
 

@@ -119,6 +119,8 @@ In `mode: slave`, the slave-specific runtime comes from the `slave:` block.
 
 Edit `sitebot/etc/config.yml` before starting the sitebot. The daemon and
 sitebot must use the same `event_fifo` path.
+External scripts can also write JSON-line `CUSTOM` events to that FIFO for
+direct IRC announces; see `sitebot/plugins/README.md` for examples.
 
 The example user is `goftpd` / `goftpd`. Change that before exposing the
 daemon.
@@ -177,6 +179,57 @@ For an archive server, point a slave root at the existing archive tree and set
 `readonly: true`. Use `sections` or `paths` only if you want to limit which
 paths that archive slave serves.
 
+Slave roots can also be split into two clear buckets:
+
+- `roots`: normal site roots mounted at `/`
+- `mounted_roots`: extra physical roots mounted under a virtual prefix such as
+  `/ARCHiVE`
+
+This is useful when one slave should expose normal site paths from one local
+tree and archive content from other disks under a shared virtual prefix without
+putting mergerfs in front of GoFTPd itself. This is especially useful when your
+archive disks are already mounted individually over NFS and you want GoFTPd to
+talk to those real paths directly instead of scanning one big merged mount.
+Example:
+
+```yml
+slave:
+  roots:
+    - "/goftpd/site"
+  mounted_roots:
+    - path: "/goftpd/DISK1"
+      mount_path: "/ARCHiVE"
+    - path: "/goftpd/DISK2"
+      mount_path: "/ARCHiVE"
+    - path: "/goftpd/DISK3"
+      mount_path: "/ARCHiVE"
+    - path: "/goftpd/DISK4"
+      mount_path: "/ARCHiVE"
+    - path: "/goftpd/DISK5"
+      mount_path: "/ARCHiVE"
+    - path: "/goftpd/DISK6"
+      mount_path: "/ARCHiVE"
+    - path: "/goftpd/DISK7"
+      mount_path: "/ARCHiVE"
+    - path: "/goftpd/DISK8"
+      mount_path: "/ARCHiVE"
+    - path: "/goftpd/DISK9"
+      mount_path: "/ARCHiVE"
+    - path: "/goftpd/DISK10"
+      mount_path: "/ARCHiVE"
+```
+
+With that setup, `/X265/...` resolves under `/goftpd/site`, while
+`/ARCHiVE/EBOOKS/...` resolves directly against `/goftpd/DISK1`,
+`/goftpd/DISK2`, `/goftpd/DISK3`, and so on. That keeps archive access on the
+real per-disk mounts, which is usually much faster and more predictable than a
+large mergerfs pool layered over NFS.
+
+On a full remerge, GoFTPd scans normal `roots` first and only scans
+`mounted_roots` after that. That keeps the live site tree responsive while the
+larger archive trees catch up in the background, which makes `mounted_roots`
+especially suitable for archive-style storage.
+
 On a slave host, the role-specific settings you normally care about are:
 
 - `mode: slave`
@@ -210,6 +263,14 @@ On a normal master restart, the first reconnect from a slave with cached VFS
 entries now reuses that cached tree instead of immediately forcing a full
 startup remerge. Later reconnects in the same runtime still use normal remerge
 behavior.
+
+`master.remerge_mode` controls startup reconnect behavior:
+
+- `off`: keep the slave unavailable until startup remerge finishes
+- `instant`: keep the slave online while the VFS fills in
+
+`master.manual_remerge_mode` controls `SITE REMERGE` separately and defaults to
+`instant`, so large hand-triggered remerges do not take the site offline.
 
 If `master.remerge_checksums: true`, remerge only asks slaves for CRCs when the
 current VFS entry does not already have a stored checksum. Unchanged files with
@@ -387,6 +448,10 @@ all. The two sides can be switched independently with
 `enable_freespace_actions` and `enable_archive_actions`, and both skip active
 transfers and incomplete releases by default. Dated bucket directories such as
 `0426`, `20260426`, and `2026-04-26` are skipped as cleanup/archive targets.
+Archive rules can also create dated destination buckets under the configured
+destination by enabling `destination_dated` and setting
+`destination_date_format` (same tokens as the `dateddirs` plugin, such as
+`MMDD`, `YYYYMMDD`, or `YYYY-WW`).
 Archive jobs run in the background. If the destination path routes to another
 slave, spacekeeper performs a real cross-slave copy and only removes the
 source after the destination copy completes successfully. If the destination
@@ -417,6 +482,8 @@ Example archive rule:
   slave: "SLAVE1"
   action: "archive_oldest"
   destination: "/ARCHiVE/0DAY"
+  destination_dated: true
+  destination_date_format: "MMDD"
   target_slaves: ["ARCHIVE1", "ARCHIVE2"]
   paths:
     - "/0DAY/*/*"
@@ -486,6 +553,16 @@ Account command notes:
 The sitebot reads daemon events from the configured FIFO and posts to IRC. It
 supports channel routing, per-channel Blowfish keys, themed output, command
 plugins, and SIGHUP reload.
+
+External scripts can also write JSON-line events directly to the same
+`event_fifo`. The built-in announce plugin supports a generic `CUSTOM` event:
+
+- set `type` to `CUSTOM`
+- put the final IRC text in `data.message`
+- optionally set `data.announce_type` for `announce.type_routes`
+- set `path` and `section` if you want normal section/path-based channel routing
+
+See `sitebot/plugins/README.md` for a full JSON and Python example.
 
 Built-in sitebot plugins:
 
@@ -591,7 +668,8 @@ flags, IP restrictions, limits, show_diz map, nuke style, and debug.
 
 `SITE RESCAN <path|path/*>` checks release files against SFV data. `SITE
 REMERGE <slave|*>` asks connected slave(s) to rescan their filesystem roots and
-refresh the master's VFS index.
+refresh the master's VFS index. Its online/offline behavior is controlled by
+`master.manual_remerge_mode`.
 
 The sitebot also supports SIGHUP reload for channels, encryption keys, theme,
 sections, plugin config, and announce routing without dropping the IRC

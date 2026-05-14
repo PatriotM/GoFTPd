@@ -146,6 +146,10 @@ type MasterBridge interface {
 	// StartRemergeAll starts a full background VFS refresh for every online slave.
 	StartRemergeAll() (started int, errors []string)
 
+	// SyncStatusMarkersForPath refreshes zipscript/VFS status markers for a
+	// path and its parent context after rescan, remerge, or file mutations.
+	SyncStatusMarkersForPath(filePath string, isDir bool)
+
 	// Slave-port auth guards: persistent denylist plus current temp bans.
 	ListSlaveAuthDenyEntries() []string
 	AddSlaveAuthDenyEntry(entry string) (string, error)

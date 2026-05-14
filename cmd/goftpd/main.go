@@ -171,7 +171,9 @@ func main() {
 		sm.SetProtectedDirs(protectedVFSDirs(cfg))
 		sm.SetHiddenPaths(cfg.HiddenVFSPaths)
 		sm.SetExcludePaths(cfg.ExcludeVFSPaths)
+		sm.SetStatusMarkerConfig(cfg.Zipscript)
 		sm.SetRemergeMode(stringFromCfg(cfg.Master, "remerge_mode", "off"))
+		sm.SetManualRemergeMode(stringFromCfg(cfg.Master, "manual_remerge_mode", "instant"))
 		sm.SetEnableRemergeChecksums(boolFromCfg(cfg.Master, "remerge_checksums", false))
 		sm.SetRemergeFlowControl(
 			intFromCfg(cfg.Master, "remerge_pause_threshold", 250),
@@ -215,7 +217,9 @@ func main() {
 			sm.SetProtectedDirs(protectedVFSDirs(c))
 			sm.SetHiddenPaths(c.HiddenVFSPaths)
 			sm.SetExcludePaths(c.ExcludeVFSPaths)
+			sm.SetStatusMarkerConfig(c.Zipscript)
 			sm.SetRemergeMode(stringFromCfg(c.Master, "remerge_mode", "off"))
+			sm.SetManualRemergeMode(stringFromCfg(c.Master, "manual_remerge_mode", "instant"))
 			sm.SetEnableRemergeChecksums(boolFromCfg(c.Master, "remerge_checksums", false))
 			sm.SetRemergeFlowControl(
 				intFromCfg(c.Master, "remerge_pause_threshold", 250),
@@ -498,16 +502,7 @@ func startSlave(cfg *core.Config) {
 	masterHost, _ := slaveCfg["master_host"].(string)
 	masterPort := intFromCfg(slaveCfg, "master_port", 1099)
 
-	var roots []string
-	if rootsRaw, ok := slaveCfg["roots"]; ok {
-		if rootsList, ok := rootsRaw.([]interface{}); ok {
-			for _, r := range rootsList {
-				if s, ok := r.(string); ok {
-					roots = append(roots, s)
-				}
-			}
-		}
-	}
+	roots, mountedRoots := parseSlaveRoots(slaveCfg)
 	pasvMin := intFromCfg(slaveCfg, "pasv_port_min", 0)
 	pasvMax := intFromCfg(slaveCfg, "pasv_port_max", 0)
 	bindIP, _ := slaveCfg["bind_ip"].(string)
@@ -515,14 +510,15 @@ func startSlave(cfg *core.Config) {
 	ignorePartialRemerge := boolFromCfg(slaveCfg, "ignore_partial_remerge", false)
 	transferBufferSize := intFromCfg(slaveCfg, "transfer_buffer_size", 0)
 
-	log.Printf("[STARTUP] Slave mode [name=%s] [master=%s:%d] [roots=%v] [bind_ip=%s] [pasv=%d-%d]",
-		name, masterHost, masterPort, roots, bindIP, pasvMin, pasvMax)
+	log.Printf("[STARTUP] Slave mode [name=%s] [master=%s:%d] [roots=%v] [mounted_roots=%v] [bind_ip=%s] [pasv=%d-%d]",
+		name, masterHost, masterPort, roots, mountedRoots, bindIP, pasvMin, pasvMax)
 
 	s := slave.NewSlave(slave.SlaveConfig{
 		Name:                 name,
 		MasterHost:           masterHost,
 		MasterPort:           masterPort,
 		Roots:                roots,
+		MountedRoots:         mountedRoots,
 		PasvPortMin:          pasvMin,
 		PasvPortMax:          pasvMax,
 		TLSEnabled:           cfg.TLSEnabled,
@@ -575,6 +571,53 @@ func boolFromCfg(m map[string]interface{}, key string, def bool) bool {
 		return def
 	}
 	return b
+}
+
+func parseSlaveRoots(slaveCfg map[string]interface{}) ([]string, []slave.MountedRoot) {
+	var roots []string
+	var mounted []slave.MountedRoot
+	if rootsRaw, ok := slaveCfg["roots"]; ok {
+		if rootsList, ok := rootsRaw.([]interface{}); ok {
+			for _, item := range rootsList {
+				switch v := item.(type) {
+				case string:
+					if strings.TrimSpace(v) != "" {
+						roots = append(roots, strings.TrimSpace(v))
+					}
+				case map[string]interface{}:
+					pathValue, _ := v["path"].(string)
+					mountValue, _ := v["mount_path"].(string)
+					if strings.TrimSpace(pathValue) == "" {
+						continue
+					}
+					mounted = append(mounted, slave.MountedRoot{
+						Path:      strings.TrimSpace(pathValue),
+						MountPath: strings.TrimSpace(mountValue),
+					})
+				}
+			}
+		}
+	}
+	if mountedRaw, ok := slaveCfg["mounted_roots"]; ok {
+		if mountedList, ok := mountedRaw.([]interface{}); ok {
+			for _, item := range mountedList {
+				v, ok := item.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				pathValue, _ := v["path"].(string)
+				mountValue, _ := v["mount_path"].(string)
+				if strings.TrimSpace(pathValue) == "" {
+					continue
+				}
+				mounted = append(mounted, slave.MountedRoot{
+					Path:      strings.TrimSpace(pathValue),
+					MountPath: strings.TrimSpace(mountValue),
+				})
+			}
+		}
+	}
+	return roots, mounted
 }
 
 func stringSliceFromCfg(m map[string]interface{}, key string) []string {

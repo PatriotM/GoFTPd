@@ -1165,10 +1165,27 @@ type mp4Track struct {
 }
 
 func (s *mp4ProbeState) bestVideoTrack() *mp4Track {
+	best := -1
 	for i := range s.tracks {
 		if s.tracks[i].handler == "vide" {
-			return &s.tracks[i]
+			if best < 0 {
+				best = i
+				continue
+			}
+			bestArea := s.tracks[best].width * s.tracks[best].height
+			curArea := s.tracks[i].width * s.tracks[i].height
+			switch {
+			case curArea > bestArea:
+				best = i
+			case curArea == bestArea && s.tracks[i].durationSeconds > s.tracks[best].durationSeconds:
+				best = i
+			case bestArea == 0 && curArea == 0 && s.tracks[i].codec != "" && s.tracks[best].codec == "":
+				best = i
+			}
 		}
+	}
+	if best >= 0 {
+		return &s.tracks[best]
 	}
 	return nil
 }
@@ -1506,6 +1523,10 @@ func parseMKVElements(r io.ReadSeeker, fileSize int64, state *mkvProbeState) err
 			payloadEnd = fileSize
 		}
 		switch id {
+		case 0x18538067:
+			if err := parseMKVElements(r, payloadEnd, state); err != nil {
+				return err
+			}
 		case 0x1549A966:
 			if err := parseMKVInfo(r, payloadEnd, state); err != nil {
 				return err

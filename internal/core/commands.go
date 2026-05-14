@@ -2538,23 +2538,11 @@ func mlsdSymlinkType(e MasterFileEntry) string {
 }
 
 func incompleteMarkerName(pattern, relname string) string {
-	pattern = strings.TrimSpace(pattern)
-	relname = strings.TrimSpace(relname)
-	if pattern == "" || relname == "" {
-		return ""
-	}
-	if strings.Contains(pattern, "%0") {
-		return path.Base(strings.ReplaceAll(pattern, "%0", relname))
-	}
-	return path.Base(pattern)
+	return zipscript.StatusMarkerName(pattern, relname)
 }
 
 func incompleteMarkerName2(pattern, relname, child string) string {
-	pattern = incompleteMarkerName(pattern, relname)
-	if strings.Contains(pattern, "%1") {
-		pattern = strings.ReplaceAll(pattern, "%1", strings.TrimSpace(child))
-	}
-	return pattern
+	return zipscript.StatusMarkerNameForChild(pattern, relname, child)
 }
 
 func markerLinkTarget(dirPath, relName string) string {
@@ -2562,15 +2550,19 @@ func markerLinkTarget(dirPath, relName string) string {
 }
 
 func isIncompleteMarkerName(pattern, name string) bool {
-	pattern = strings.TrimSpace(pattern)
-	if pattern == "" {
+	if strings.TrimSpace(pattern) == "" {
 		return strings.HasPrefix(strings.ToLower(name), "[incomplete]")
 	}
-	if strings.Contains(pattern, "%0") {
-		prefix := path.Base(strings.SplitN(pattern, "%0", 2)[0])
-		return prefix != "" && strings.HasPrefix(name, prefix)
-	}
-	return name == path.Base(pattern)
+	return zipscript.IsStatusMarkerName(zipscript.Config{
+		Enabled: true,
+		Incomplete: zipscript.IncompleteConfig{
+			Enabled:        true,
+			Indicator:      pattern,
+			NoSFVIndicator: pattern,
+			NFOIndicator:   pattern,
+			CDIndicator:    pattern,
+		},
+	}, name)
 }
 
 func incompleteMarkerEntries(bridge MasterBridge, cfg *Config, pattern, dirPath string, entries []MasterFileEntry) []MasterFileEntry {
@@ -2586,17 +2578,13 @@ func incompleteMarkerEntriesWithOptions(bridge MasterBridge, cfg *Config, patter
 	if cleanDirPath == "/" {
 		return nil
 	}
-	noSFVPattern := zipscript.NoSFVIndicator(cfg.Zipscript)
-	nfoPattern := zipscript.NFOIndicator(cfg.Zipscript)
-	cdPattern := zipscript.CDIndicator(cfg.Zipscript)
-	markEmptyDirs := zipscript.MarkEmptyDirsOnRescan(cfg.Zipscript)
 	bulkProgress := bridge.GetImmediateReleaseProgress(dirPath)
 	childFacts := bridge.GetImmediateReleaseChildFacts(dirPath)
 	existing := make(map[string]bool, len(entries))
 	for _, e := range entries {
 		existing[e.Name] = true
 	}
-	out := []MasterFileEntry{}
+	releases := make([]zipscript.StatusMarkerRelease, 0, len(entries))
 	for _, e := range entries {
 		if !e.IsDir || e.IsSymlink || strings.HasPrefix(e.Name, ".") || isIncompleteMarkerName(pattern, e.Name) {
 			continue
@@ -2608,95 +2596,42 @@ func incompleteMarkerEntriesWithOptions(bridge MasterBridge, cfg *Config, patter
 		if zipscript.IsIgnoredReleaseSubdir(cfg.Zipscript, releasePath) {
 			continue
 		}
-		present, total := 0, 0
 		progress, hasProgress := bulkProgress[releasePath]
 		facts, hasFacts := childFacts[releasePath]
-		if hasProgress {
-			present, total = progress.Present, progress.Total
-		} else {
+		if !hasProgress {
 			continue
 		}
-
-		hasSFV := hasProgress && progress.HasSFV
-		if !hasSFV && hasFacts {
-			hasSFV = facts.HasSFV
+		release := zipscript.StatusMarkerRelease{
+			Name:    e.Name,
+			Path:    releasePath,
+			ModTime: e.ModTime,
+			Present: progress.Present,
+			Total:   progress.Total,
+			HasSFV:  progress.HasSFV,
 		}
-		if noSFVPattern != "" && !hasSFV {
-			marker := incompleteMarkerName(noSFVPattern, e.Name)
-			if marker != "" && !existing[marker] {
-				out = append(out, MasterFileEntry{
-					Name:       marker,
-					IsSymlink:  true,
-					LinkTarget: releasePath,
-					ModTime:    e.ModTime,
-					Owner:      "GoFTPd",
-					Group:      "GoFTPd",
-				})
-				existing[marker] = true
-			}
-		}
-		hasNFO := false
 		if hasFacts {
-			hasNFO = facts.HasNFO
-		}
-		if nfoPattern != "" && !hasNFO {
-			marker := incompleteMarkerName(nfoPattern, e.Name)
-			if marker != "" && !existing[marker] {
-				out = append(out, MasterFileEntry{
-					Name:       marker,
-					IsSymlink:  true,
-					LinkTarget: releasePath,
-					ModTime:    e.ModTime,
-					Owner:      "GoFTPd",
-					Group:      "GoFTPd",
-				})
-				existing[marker] = true
+			release.VisibleCount = facts.VisibleCount
+			release.HasNFO = facts.HasNFO
+			if !release.HasSFV {
+				release.HasSFV = facts.HasSFV
 			}
 		}
-
-		emptyDir := false
-		if total <= 0 {
-			if markEmptyDirs {
-				if hasFacts {
-					emptyDir = facts.VisibleCount == 0
-				} else {
-					continue
-				}
-			}
-			if !emptyDir {
-				continue
-			}
+		releases = append(releases, release)
+	}
+	out := make([]MasterFileEntry, 0, len(releases))
+	for _, marker := range zipscript.BuildStatusMarkerEntries(cfg.Zipscript, cleanDirPath, releases) {
+		if existing[marker.Name] {
+			continue
 		}
-		if total > 0 && present < total {
-			marker := incompleteMarkerName(pattern, e.Name)
-			if marker != "" && !existing[marker] {
-				out = append(out, MasterFileEntry{
-					Name:       marker,
-					IsSymlink:  true,
-					LinkTarget: releasePath,
-					ModTime:    e.ModTime,
-					Owner:      "GoFTPd",
-					Group:      "GoFTPd",
-				})
-				existing[marker] = true
-			}
-		}
-		if cdPattern != "" && isDiscDirName(e.Name) {
-			if total > 0 && present < total {
-				marker := incompleteMarkerName2(cdPattern, path.Base(dirPath), e.Name)
-				if marker != "" && !existing[marker] {
-					out = append(out, MasterFileEntry{
-						Name:       marker,
-						IsSymlink:  true,
-						LinkTarget: releasePath,
-						ModTime:    e.ModTime,
-						Owner:      "GoFTPd",
-						Group:      "GoFTPd",
-					})
-					existing[marker] = true
-				}
-			}
-		}
+		out = append(out, MasterFileEntry{
+			Name:       marker.Name,
+			IsSymlink:  true,
+			LinkTarget: marker.LinkTarget,
+			ModTime:    marker.ModTime,
+			Owner:      "GoFTPd",
+			Group:      "GoFTPd",
+		})
+		existing[marker.Name] = true
 	}
 	return out
 }
@@ -2772,12 +2707,6 @@ func hasSFVEntry(entries []MasterFileEntry) bool {
 	return false
 }
 
-func isDiscDirName(name string) bool {
-	lower := strings.ToLower(strings.TrimSpace(name))
-	ok, _ := regexp.MatchString(`^(cd|disc|disk|dvd)\d+$`, lower)
-	return ok
-}
-
 func progressBar(present, total, width int) string {
 	if total <= 0 {
 		total = 1
@@ -2828,6 +2757,16 @@ func currentRaceSpeedMB(dirPath string, totalBytes int64, bridge MasterBridge) f
 		return 0
 	}
 	return (float64(totalBytes) / 1024.0 / 1024.0) / (float64(ms) / 1000.0)
+}
+
+func aggregateRaceSpeedMB(users []VFSRaceUser) float64 {
+	total := 0.0
+	for _, u := range users {
+		if u.Speed > 0 {
+			total += u.Speed
+		}
+	}
+	return total / 1024.0 / 1024.0
 }
 
 func maxUserRaceDurationMs(users []VFSRaceUser) int64 {
@@ -3866,18 +3805,30 @@ func emitOrPrimeReleaseAudioInfo(s *Session, bridge MasterBridge, dirPath string
 
 func probeSTORSitebotMediaInfo(s *Session, bridge MasterBridge, dirPath, filePath, fileName string, hadMediaInfo bool) map[string]string {
 	if hadMediaInfo || s == nil || bridge == nil || s.Config == nil {
+		if s != nil && s.Config != nil && s.Config.Debug && hadMediaInfo {
+			log.Printf("[MASTER-ZS] stor media probe skipped for %s: release already has cached media info", filePath)
+		}
 		return nil
 	}
 	sections, sampleOnly, videoExts := mediaInfoPluginSettings(s.Config)
 	section := sectionFromPathWithConfig(s.Config, dirPath)
 	if len(sections) > 0 && !mediaInfoSectionMatch(section, sections) {
+		if s.Config.Debug {
+			log.Printf("[MASTER-ZS] stor media probe skipped for %s: section %q not enabled", filePath, section)
+		}
 		return nil
 	}
 	ext := strings.ToLower(strings.TrimPrefix(path.Ext(fileName), "."))
 	if !videoExts[ext] {
+		if s.Config.Debug {
+			log.Printf("[MASTER-ZS] stor media probe skipped for %s: extension %q not enabled", filePath, ext)
+		}
 		return nil
 	}
 	if sampleOnly && !isSampleMediaPath(filePath) {
+		if s.Config.Debug {
+			log.Printf("[MASTER-ZS] stor media probe skipped for %s: sample_only enabled and path is not a sample path", filePath)
+		}
 		return nil
 	}
 	fields, err := bridge.ProbeMediaInfo(filePath, "", 0)
@@ -3889,7 +3840,13 @@ func probeSTORSitebotMediaInfo(s *Session, bridge MasterBridge, dirPath, filePat
 	}
 	normalizeReleaseMediaInfoFields(fields)
 	if !releaseMediaInfoLooksUsable(fields) {
+		if s.Config.Debug {
+			log.Printf("[MASTER-ZS] stor media probe skipped for %s: parser returned unusable metadata", filePath)
+		}
 		return nil
+	}
+	if s.Config.Debug {
+		log.Printf("[MASTER-ZS] stor media probe emitted for %s: video=%q audio=%q width=%q height=%q duration=%q", filePath, strings.TrimSpace(fields["video_format"]), strings.TrimSpace(fields["audio_format"]), strings.TrimSpace(fields["width"]), strings.TrimSpace(fields["height"]), strings.TrimSpace(fields["duration"]))
 	}
 	bridge.CacheMediaInfo(dirPath, fields)
 	return fields
@@ -4678,13 +4635,12 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 		}
 		if total > 0 {
 			raceDurationMs := bridge.GetRaceWallClockMilliseconds(dirPath)
-			displayDurationMs := raceDurationMs
-			if userDurationMs := maxUserRaceDurationMs(users); userDurationMs > displayDurationMs {
-				displayDurationMs = userDurationMs
-			}
-			avgSpeedMB := raceSpeedMBForDuration(totalBytes, displayDurationMs)
+			avgSpeedMB := aggregateRaceSpeedMB(users)
 			if avgSpeedMB <= 0 {
 				avgSpeedMB = currentRaceSpeedMB(dirPath, totalBytes, bridge)
+			}
+			if avgSpeedMB <= 0 {
+				avgSpeedMB = raceSpeedMBForDuration(totalBytes, raceDurationMs)
 			}
 			totalFiles := total
 			if expected > 0 {
@@ -4737,13 +4693,12 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 		}
 		raceDurationMs = bridge.GetRaceWallClockMilliseconds(dirPath)
 		if total > 0 {
-			displayDurationMs := raceDurationMs
-			if userDurationMs := maxUserRaceDurationMs(users); userDurationMs > displayDurationMs {
-				displayDurationMs = userDurationMs
-			}
-			avgSpeedMB := raceSpeedMBForDuration(totalBytes, displayDurationMs)
+			avgSpeedMB := aggregateRaceSpeedMB(users)
 			if avgSpeedMB <= 0 {
 				avgSpeedMB = currentRaceSpeedMB(dirPath, totalBytes, bridge)
+			}
+			if avgSpeedMB <= 0 {
+				avgSpeedMB = raceSpeedMBForDuration(totalBytes, raceDurationMs)
 			}
 			data["relname"] = path.Base(dirPath)
 			data["t_files"] = fmt.Sprintf("%d", total)

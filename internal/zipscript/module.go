@@ -22,6 +22,23 @@ type AudioSortLink struct {
 	Target   string
 }
 
+type StatusMarkerRelease struct {
+	Name         string
+	Path         string
+	ModTime      int64
+	VisibleCount int
+	HasSFV       bool
+	HasNFO       bool
+	Present      int
+	Total        int
+}
+
+type StatusMarkerEntry struct {
+	Name       string
+	LinkTarget string
+	ModTime    int64
+}
+
 var scenePayloadExts = map[string]bool{
 	"rar":  true,
 	"zip":  true,
@@ -209,6 +226,139 @@ func CDIndicator(cfg Config) string {
 		return ""
 	}
 	return strings.TrimSpace(cfg.Incomplete.CDIndicator)
+}
+
+func IsStatusMarkerName(cfg Config, name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+	patterns := []string{
+		IncompleteIndicator(cfg, ""),
+		NoSFVIndicator(cfg),
+		NFOIndicator(cfg),
+		CDIndicator(cfg),
+	}
+	for _, pattern := range patterns {
+		if isStatusMarkerName(pattern, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func StatusMarkerName(pattern, relname string) string {
+	return statusMarkerName(pattern, relname)
+}
+
+func StatusMarkerNameForChild(pattern, relname, child string) string {
+	return statusMarkerNameForChild(pattern, relname, child)
+}
+
+func BuildStatusMarkerEntries(cfg Config, parentDir string, releases []StatusMarkerRelease) []StatusMarkerEntry {
+	parentDir = normalizePath(parentDir)
+	if parentDir == "/" {
+		return nil
+	}
+	incompletePattern := strings.TrimSpace(IncompleteIndicator(cfg, ""))
+	noSFVPattern := strings.TrimSpace(NoSFVIndicator(cfg))
+	nfoPattern := strings.TrimSpace(NFOIndicator(cfg))
+	cdPattern := strings.TrimSpace(CDIndicator(cfg))
+	markEmptyDirs := MarkEmptyDirsOnRescan(cfg)
+
+	out := make([]StatusMarkerEntry, 0, len(releases)*2)
+	seen := make(map[string]struct{}, len(releases)*2)
+	for _, rel := range releases {
+		name := strings.TrimSpace(rel.Name)
+		releasePath := normalizePath(rel.Path)
+		if name == "" || releasePath == "/" {
+			continue
+		}
+		if !UsesReleaseCheckEntry(cfg, releasePath) || IsIgnoredReleaseSubdir(cfg, releasePath) {
+			continue
+		}
+
+		if noSFVPattern != "" && !rel.HasSFV {
+			appendStatusMarker(&out, seen, statusMarkerName(noSFVPattern, name), releasePath, rel.ModTime)
+		}
+		if nfoPattern != "" && !rel.HasNFO {
+			appendStatusMarker(&out, seen, statusMarkerName(nfoPattern, name), releasePath, rel.ModTime)
+		}
+
+		emptyDir := false
+		if rel.Total <= 0 {
+			if markEmptyDirs {
+				emptyDir = rel.VisibleCount == 0
+			}
+			if !emptyDir {
+				continue
+			}
+		}
+
+		if rel.Total > 0 && rel.Present < rel.Total && incompletePattern != "" {
+			appendStatusMarker(&out, seen, statusMarkerName(incompletePattern, name), releasePath, rel.ModTime)
+		}
+		if cdPattern != "" && isDiscDirName(name) && rel.Total > 0 && rel.Present < rel.Total {
+			appendStatusMarker(&out, seen, statusMarkerNameForChild(cdPattern, path.Base(parentDir), name), releasePath, rel.ModTime)
+		}
+	}
+	return out
+}
+
+func appendStatusMarker(out *[]StatusMarkerEntry, seen map[string]struct{}, name, target string, modTime int64) {
+	name = strings.TrimSpace(path.Base(name))
+	target = normalizePath(target)
+	if name == "" || target == "/" {
+		return
+	}
+	if _, ok := seen[name]; ok {
+		return
+	}
+	seen[name] = struct{}{}
+	*out = append(*out, StatusMarkerEntry{
+		Name:       name,
+		LinkTarget: target,
+		ModTime:    modTime,
+	})
+}
+
+func isDiscDirName(name string) bool {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	ok, _ := regexp.MatchString(`^(cd|disc|disk|dvd)\d+$`, lower)
+	return ok
+}
+
+func isStatusMarkerName(pattern, name string) bool {
+	pattern = strings.TrimSpace(pattern)
+	name = strings.TrimSpace(name)
+	if pattern == "" || name == "" {
+		return false
+	}
+	if strings.Contains(pattern, "%0") {
+		prefix := path.Base(strings.SplitN(pattern, "%0", 2)[0])
+		return prefix != "" && strings.HasPrefix(strings.ToLower(name), strings.ToLower(prefix))
+	}
+	return strings.EqualFold(name, path.Base(pattern))
+}
+
+func statusMarkerName(pattern, relname string) string {
+	pattern = strings.TrimSpace(pattern)
+	relname = strings.TrimSpace(relname)
+	if pattern == "" || relname == "" {
+		return ""
+	}
+	if strings.Contains(pattern, "%0") {
+		return path.Base(strings.ReplaceAll(pattern, "%0", relname))
+	}
+	return path.Base(pattern)
+}
+
+func statusMarkerNameForChild(pattern, relname, child string) string {
+	pattern = statusMarkerName(pattern, relname)
+	if strings.Contains(pattern, "%1") {
+		pattern = strings.ReplaceAll(pattern, "%1", strings.TrimSpace(child))
+	}
+	return path.Base(pattern)
 }
 
 func MarkEmptyDirsOnRescan(cfg Config) bool {

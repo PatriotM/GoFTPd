@@ -101,15 +101,15 @@ func (h *Handler) apply(now time.Time) {
 
 		linkPath := ""
 		if h.todaySymlink {
-			linkPath = "/" + h.symlinkPrefix + section
-			if h.symlinkCurrent(linkPath, todayPath) {
-				if h.debug {
-					log.Printf("[DATEDDIRS] symlink %s already points to %s", linkPath, todayPath)
-				}
-			} else if err := h.svc.Bridge.Symlink(linkPath, todayPath); err != nil && h.debug {
-				log.Printf("[DATEDDIRS] symlink %s -> %s failed: %v", linkPath, todayPath, err)
+		linkPath = "/" + h.symlinkPrefix + section
+		if h.symlinkCurrent(linkPath, todayPath) {
+			if h.debug {
+				log.Printf("[DATEDDIRS] symlink %s already points to %s", linkPath, todayPath)
 			}
+		} else if err := h.svc.Bridge.VFSSymlink(linkPath, todayPath); err != nil && h.debug {
+			log.Printf("[DATEDDIRS] symlink %s -> %s failed: %v", linkPath, todayPath, err)
 		}
+	}
 
 		if announce && h.svc.EmitEvent != nil {
 			h.svc.EmitEvent("NEWDAY", todayPath, today, section, 0, 0, map[string]string{

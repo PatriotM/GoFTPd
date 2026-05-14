@@ -361,7 +361,7 @@ func (h *Handler) handleEmpty(rel releaseCandidate) bool {
 		h.clearWarning(rel, "empty")
 		return false
 	}
-	return h.applyTimedRule(rel, "empty", rule, rule.Reason, "")
+	return h.applyTimedRule(rel, "empty", rule, timedNukeReason(rule.Reason, rule.NukeAfterMin), "")
 }
 
 func (h *Handler) handleHalfEmpty(rel releaseCandidate) bool {
@@ -384,7 +384,7 @@ func (h *Handler) handleHalfEmpty(rel releaseCandidate) bool {
 			}
 		}
 	}
-	return h.applyTimedRule(rel, "halfempty", rule.timedRule, rule.Reason, "")
+	return h.applyTimedRule(rel, "halfempty", rule.timedRule, timedNukeReason(rule.Reason, rule.NukeAfterMin), "")
 }
 
 func (h *Handler) handleIncomplete(rel releaseCandidate) bool {
@@ -397,7 +397,7 @@ func (h *Handler) handleIncomplete(rel releaseCandidate) bool {
 		h.clearWarning(rel, "incomplete")
 		return false
 	}
-	return h.applyTimedRule(rel, "incomplete", rule.timedRule, rule.Reason, "")
+	return h.applyTimedRule(rel, "incomplete", rule.timedRule, timedNukeReason(rule.Reason, rule.NukeAfterMin), "")
 }
 
 func (h *Handler) handleBanned(rel releaseCandidate) bool {
@@ -670,6 +670,21 @@ func (h *Handler) sfvMissingFiles(dirPath string, sfv map[string]uint32) bool {
 		}
 	}
 	return false
+}
+
+func timedNukeReason(base string, minutes int) string {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		base = "Autonuke"
+	}
+	if minutes <= 0 {
+		return base
+	}
+	unit := "minutes"
+	if minutes == 1 {
+		unit = "minute"
+	}
+	return fmt.Sprintf("%s after %d %s", base, minutes, unit)
 }
 
 func (h *Handler) nuke(rel releaseCandidate, multiplier int, reason string) bool {

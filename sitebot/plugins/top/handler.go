@@ -18,6 +18,7 @@ import (
 
 type uploaderStat struct {
 	User  string
+	Group string
 	Files int64
 	Bytes int64
 }
@@ -191,10 +192,11 @@ func (p *Plugin) buildLines(limit int, includeEmptyMessage bool) ([]string, erro
 		lines = append(lines, p.render("TOPCMD_ENTRY", map[string]string{
 			"rank":     fmt.Sprintf("%02d", idx+1),
 			"user":     stat.User,
+			"group":    stat.Group,
 			"files":    strconv.FormatInt(stat.Files, 10),
 			"size":     formatBytes(stat.Bytes),
 			"response": stat.User,
-		}, fmt.Sprintf("[ %02d ] %s - (%d Files) - (%s)", idx+1, stat.User, stat.Files, formatBytes(stat.Bytes))))
+		}, fmt.Sprintf("[%02d] %s/%s - (%d Files) - (%s)", idx+1, stat.User, stat.Group, stat.Files, formatBytes(stat.Bytes))))
 	}
 
 	lines = append(lines, p.render("TOPCMD_TOTAL", map[string]string{
@@ -219,22 +221,22 @@ func (p *Plugin) loadDayUploadStats() ([]uploaderStat, int64, int64, error) {
 		if name == "" || strings.HasPrefix(name, ".") || entry.IsDir() {
 			continue
 		}
-		files, bytes, err := parseCurrentDayUp(filepath.Join(p.usersDir, name), time.Now())
+		stat, err := parseDayUploadSnapshot(filepath.Join(p.usersDir, name), name, time.Now())
 		if err != nil {
 			if p.debug {
 				log.Printf("[Top] skipping %s: %v", filepath.Join(p.usersDir, name), err)
 			}
 			continue
 		}
-		if p.autoOnlyNonZero && files == 0 && bytes == 0 {
+		if p.autoOnlyNonZero && stat.Files == 0 && stat.Bytes == 0 {
 			continue
 		}
-		if files == 0 && bytes == 0 {
+		if stat.Files == 0 && stat.Bytes == 0 {
 			continue
 		}
-		stats = append(stats, uploaderStat{User: name, Files: files, Bytes: bytes})
-		totalFiles += files
-		totalBytes += bytes
+		stats = append(stats, stat)
+		totalFiles += stat.Files
+		totalBytes += stat.Bytes
 	}
 
 	sort.Slice(stats, func(i, j int) bool {
@@ -249,17 +251,23 @@ func (p *Plugin) loadDayUploadStats() ([]uploaderStat, int64, int64, error) {
 	return stats, totalFiles, totalBytes, nil
 }
 
-func parseCurrentDayUp(path string, now time.Time) (int64, int64, error) {
+func parseDayUploadSnapshot(path, username string, now time.Time) (uploaderStat, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return 0, 0, err
+		return uploaderStat{}, err
+	}
+	var fileModTime int64
+	if st, err := os.Stat(path); err == nil {
+		fileModTime = st.ModTime().Unix()
 	}
 	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
 	var (
 		foundDayUp bool
-		files      int64
-		bytes      int64
-		lastLogin  int64
+		files       int64
+		bytes       int64
+		lastLogin   int64
+		periodAnchor int64
+		group       = "Unknown"
 	)
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -267,18 +275,28 @@ func parseCurrentDayUp(path string, now time.Time) (int64, int64, error) {
 		case strings.HasPrefix(line, "DAYUP "):
 			fields := strings.Fields(line)
 			if len(fields) < 3 {
-				return 0, 0, fmt.Errorf("short DAYUP line")
+				return uploaderStat{}, fmt.Errorf("short DAYUP line")
 			}
 			var err error
 			files, err = strconv.ParseInt(fields[1], 10, 64)
 			if err != nil {
-				return 0, 0, err
+				return uploaderStat{}, err
 			}
 			bytes, err = strconv.ParseInt(fields[2], 10, 64)
 			if err != nil {
-				return 0, 0, err
+				return uploaderStat{}, err
 			}
 			foundDayUp = true
+		case strings.HasPrefix(line, "PRIMARY_GROUP "):
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				group = fields[1]
+			}
+		case strings.HasPrefix(line, "GROUP "):
+			fields := strings.Fields(line)
+			if len(fields) >= 2 && group == "Unknown" {
+				group = fields[1]
+			}
 		case strings.HasPrefix(line, "TIME "):
 			fields := strings.Fields(line)
 			if len(fields) >= 3 {
@@ -286,18 +304,30 @@ func parseCurrentDayUp(path string, now time.Time) (int64, int64, error) {
 					lastLogin = ts
 				}
 			}
+			if len(fields) >= 6 {
+				if ts, err := strconv.ParseInt(fields[5], 10, 64); err == nil {
+					periodAnchor = ts
+				}
+			}
 		}
 	}
 	if !foundDayUp {
-		return 0, 0, fmt.Errorf("no DAYUP line")
+		return uploaderStat{}, fmt.Errorf("no DAYUP line")
 	}
-	if lastLogin > 0 {
-		prev := time.Unix(lastLogin, 0).In(now.Location())
+	anchor := periodAnchor
+	if anchor <= 0 {
+		anchor = fileModTime
+	}
+	if anchor <= 0 {
+		anchor = lastLogin
+	}
+	if anchor > 0 {
+		prev := time.Unix(anchor, 0).In(now.Location())
 		if prev.Year() != now.Year() || prev.YearDay() != now.YearDay() {
-			return 0, 0, nil
+			return uploaderStat{User: username, Group: group}, nil
 		}
 	}
-	return files, bytes, nil
+	return uploaderStat{User: username, Group: group, Files: files, Bytes: bytes}, nil
 }
 
 func (p *Plugin) startAutoAnnounce() {

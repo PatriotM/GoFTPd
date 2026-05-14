@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadAndSavePreservesImportedUserfileFields(t *testing.T) {
@@ -115,5 +116,29 @@ func TestLoadAndSavePreservesImportedUserfileFields(t *testing.T) {
 		if !strings.Contains(text, needle) {
 			t.Fatalf("saved userfile missing %q\n%s", needle, text)
 		}
+	}
+}
+
+func TestResetTransferStatPeriodsIfDueUsesDedicatedPeriodAnchor(t *testing.T) {
+	u := &User{
+		LastLogin:    time.Date(2026, 5, 13, 20, 0, 0, 0, time.Local).Unix(),
+		PeriodAnchor: time.Date(2026, 5, 13, 23, 55, 0, 0, time.Local).Unix(),
+		DayUp:        StatLine{Files: 10, Bytes: 1000},
+		WkUp:         StatLine{Files: 20, Bytes: 2000},
+		MonthUp:      StatLine{Files: 30, Bytes: 3000},
+	}
+
+	now := time.Date(2026, 5, 14, 0, 5, 0, 0, time.Local)
+	if !u.ResetTransferStatPeriodsIfDue(now) {
+		t.Fatalf("expected rollover to reset stats")
+	}
+	if u.DayUp.Files != 0 || u.DayUp.Bytes != 0 {
+		t.Fatalf("day stats were not reset: %+v", u.DayUp)
+	}
+	if u.PeriodAnchor != now.Unix() {
+		t.Fatalf("PeriodAnchor = %d, want %d", u.PeriodAnchor, now.Unix())
+	}
+	if u.LastLogin != time.Date(2026, 5, 13, 20, 0, 0, 0, time.Local).Unix() {
+		t.Fatalf("LastLogin should remain unchanged")
 	}
 }

@@ -33,6 +33,7 @@ const (
 	EventNewDay           EventType = "NEWDAY"
 	EventAudioInfo        EventType = "AUDIOINFO"
 	EventMediaInfo        EventType = "MEDIAINFO"
+	EventCustom           EventType = "CUSTOM"
 	EventSpeedtest        EventType = "SPEEDTEST"
 	EventPre              EventType = "PRE"
 	EventPreAudioInfo     EventType = "PREAUDIOINFO"

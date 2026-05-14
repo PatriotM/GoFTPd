@@ -566,6 +566,20 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 		fallback := fmt.Sprintf("SAMPLE-INFO: [%s] %s - Video: %s - Audio: %s - Subs: %s - Duration: %s",
 			section, rel, formatSampleVideoLabel(vars), formatSampleAudioLabel(vars), formatSampleSubtitleLabel(vars), formatSampleDurationLabel(vars))
 		outs = append(outs, plugin.Output{Type: "MEDIAINFO", Text: p.render("MEDIAINFO", vars, fallback)})
+	case event.EventCustom:
+		message := strings.TrimSpace(vars["message"])
+		if message == "" {
+			message = fmt.Sprintf("CUSTOM: [%s] %s", section, rel)
+		}
+		outType := strings.ToUpper(strings.TrimSpace(vars["announce_type"]))
+		if outType == "" {
+			outType = "CUSTOM"
+		}
+		templateKey := strings.ToUpper(strings.TrimSpace(vars["template"]))
+		if templateKey == "" {
+			templateKey = outType
+		}
+		outs = append(outs, plugin.Output{Type: outType, Text: p.render(templateKey, vars, p.render("CUSTOM", vars, message))})
 	case event.EventSpeedtest:
 		nick := vars["nick"]
 		if nick == "" {
@@ -664,7 +678,11 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 			// NEW LEADER: announce when the leading user changes (skip single-user races)
 			if leader := vars["leader_name"]; leader != "" && leader != st.CurrentLeader && len(st.Users) > 1 {
 				if st.CurrentLeader != "" {
-					outs = append(outs, plugin.Output{Type: "RACE", Text: p.render("NEWLEADER", vars, fmt.Sprintf("NEW LEADER: [%s] %s%s - %s takes the lead - %sMB/%sF/%s%%/%s", section, vars["subdir_prefix"], rel, leader, vars["leader_mb"], vars["leader_files"], vars["leader_pct"], vars["leader_speed"]))})
+					leftText := strings.TrimSpace(vars["t_filesleft"])
+					if leftText != "" {
+						leftText = " - " + leftText + " files left."
+					}
+					outs = append(outs, plugin.Output{Type: "RACE", Text: p.render("NEWLEADER", vars, fmt.Sprintf("NEW LEADER: [%s] %s%s - %s takes the lead - %sMB/%sF/%s%%/%s%s", section, vars["subdir_prefix"], rel, leader, vars["leader_mb"], vars["leader_files"], vars["leader_pct"], vars["leader_speed"], leftText))})
 				}
 				st.CurrentLeader = leader
 			}
@@ -706,6 +724,9 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 			appendRaceStatsLine(st, line)
 		}
 		if line := strings.TrimSpace(p.render("STATS_SPEEDS", vars, fmt.Sprintf("STATS: Slowest: %s at %s - Fastest: %s at %s.", vars["u_slowest_name"], vars["u_slowest_speed"], vars["u_fastest_name"], vars["u_fastest_speed"]))); line != "" {
+			appendRaceStatsLine(st, line)
+		}
+		if line := strings.TrimSpace(p.render("STATS_USER_HEADER", vars, "UserTop")); line != "" {
 			appendRaceStatsLine(st, line)
 		}
 	case event.EventRaceUser:

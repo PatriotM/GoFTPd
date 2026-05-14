@@ -447,7 +447,7 @@ func (p *Plugin) buildStatusLines() ([]string, error) {
 			"status_plain":   passWord(entry.WkUpBytes >= p.quotaBytes || p.isForcePassingLocked(entry.Username)),
 			"status_colored": passColored(entry.WkUpBytes >= p.quotaBytes || p.isForcePassingLocked(entry.Username)),
 			"days_remaining": strconv.Itoa(entry.DaysRemaining),
-		}, fmt.Sprintf("[ %02d ] %s/%s ( %s Up ) is currently %s.", idx+1, entry.Username, entry.Group, formatBytes(entry.WkUpBytes), passWord(entry.WkUpBytes >= p.quotaBytes || p.isForcePassingLocked(entry.Username)))))
+		}, fmt.Sprintf("[%02d] %s/%s ( %s Up ) is currently %s.", idx+1, entry.Username, entry.Group, formatBytes(entry.WkUpBytes), passWord(entry.WkUpBytes >= p.quotaBytes || p.isForcePassingLocked(entry.Username)))))
 	}
 
 	lines = append(lines, p.render("QUOTACMD_TRIAL_HEADER", map[string]string{
@@ -465,7 +465,7 @@ func (p *Plugin) buildStatusLines() ([]string, error) {
 			"status_plain":   passWord(entry.WkUpBytes >= p.trialQuotaBytes || p.isForcePassingLocked(entry.Username)),
 			"status_colored": passColored(entry.WkUpBytes >= p.trialQuotaBytes || p.isForcePassingLocked(entry.Username)),
 			"days_remaining": strconv.Itoa(entry.DaysRemaining),
-		}, fmt.Sprintf("[ %02d ] %s/trial ( %s Up ) is currently %s. (%d days left)", idx+1, entry.Username, formatBytes(entry.WkUpBytes), passWord(entry.WkUpBytes >= p.trialQuotaBytes || p.isForcePassingLocked(entry.Username)), entry.DaysRemaining)))
+		}, fmt.Sprintf("[%02d] %s/trial ( %s Up ) is currently %s. (%d days left)", idx+1, entry.Username, formatBytes(entry.WkUpBytes), passWord(entry.WkUpBytes >= p.trialQuotaBytes || p.isForcePassingLocked(entry.Username)), entry.DaysRemaining)))
 	}
 
 	return lines, nil

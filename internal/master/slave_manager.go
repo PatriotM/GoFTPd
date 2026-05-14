@@ -75,8 +75,11 @@ type SlaveManager struct {
 	releaseFacts         map[string]*vfsReleaseSnapshot
 	releaseFactsByParent map[string]map[string]*vfsReleaseSnapshot
 	releaseRaceWindows   map[string]*releaseRaceWindow
+	statusMarkerMu       sync.RWMutex
+	statusMarkerCfg      statusMarkerConfig
 
-	remergeMode atomic.Value
+	remergeMode       atomic.Value
+	manualRemergeMode atomic.Value
 
 	listener        net.Listener
 	running         atomic.Bool
@@ -143,6 +146,7 @@ func NewSlaveManager(host string, port int, tlsEnabled bool, tlsCert, tlsKey str
 		remergeCRCSem:        make(chan struct{}, 16),
 	}
 	sm.remergeMode.Store("off")
+	sm.manualRemergeMode.Store("instant")
 	sm.remergePauseAt.Store(250)
 	sm.remergeResumeAt.Store(50)
 	return sm
@@ -302,6 +306,16 @@ func (sm *SlaveManager) SetRemergeMode(mode string) {
 	}
 }
 
+func (sm *SlaveManager) SetManualRemergeMode(mode string) {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	switch mode {
+	case "off":
+		sm.manualRemergeMode.Store("off")
+	default:
+		sm.manualRemergeMode.Store("instant")
+	}
+}
+
 func (sm *SlaveManager) GetRemergeFlowControl() (pauseThreshold, resumeThreshold int) {
 	pauseThreshold = int(sm.remergePauseAt.Load())
 	resumeThreshold = int(sm.remergeResumeAt.Load())
@@ -321,6 +335,15 @@ func (sm *SlaveManager) GetRemergeMode() string {
 		}
 	}
 	return "off"
+}
+
+func (sm *SlaveManager) GetManualRemergeMode() string {
+	if raw := sm.manualRemergeMode.Load(); raw != nil {
+		if mode, ok := raw.(string); ok && strings.TrimSpace(mode) != "" {
+			return mode
+		}
+	}
+	return "instant"
 }
 
 func (sm *SlaveManager) getExcludePaths() []string {
@@ -503,7 +526,7 @@ func (sm *SlaveManager) handleSlaveConnection(conn net.Conn) {
 
 	// Start remerge ()
 	rs.remerging.Store(true)
-	go sm.initializeSlaveAfterConnect(rs)
+	go sm.initializeSlaveAfterConnect(rs, false)
 
 	// Start the main read loop (())
 	rs.Run(sm)
@@ -1138,14 +1161,17 @@ func (sm *SlaveManager) saveReleaseSnapshotToDisk(filePath string) error {
 
 	dir := filepath.Dir(filePath)
 	if dir != "" && dir != "." {
-		os.MkdirAll(dir, 0755)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("create release snapshot dir: %w", err)
+		}
 	}
 
-	tmpPath := filePath + ".tmp"
-	f, err := os.Create(tmpPath)
+	tmpPattern := filepath.Base(filePath) + ".*.tmp"
+	f, err := os.CreateTemp(dir, tmpPattern)
 	if err != nil {
 		return fmt.Errorf("create release snapshot file: %w", err)
 	}
+	tmpPath := f.Name()
 	enc := gob.NewEncoder(f)
 	if err := enc.Encode(snapshotFile); err != nil {
 		f.Close()
@@ -1189,9 +1215,9 @@ func (sm *SlaveManager) loadReleaseSnapshotFromDisk(filePath string) error {
 // Uses "instant online" approach : slave is marked available
 // immediately and remerge runs in the background. Files appear in LIST
 // as they are indexed.
-func (sm *SlaveManager) initializeSlaveAfterConnect(rs *RemoteSlave) {
+func (sm *SlaveManager) initializeSlaveAfterConnect(rs *RemoteSlave, forceInstantOnline bool) {
 	mode := sm.GetRemergeMode()
-	instantOnline := mode == "instant"
+	instantOnline := forceInstantOnline || mode == "instant"
 	if _, useCachedVFS := sm.startupCachedSlaves.LoadAndDelete(rs.name); useCachedVFS {
 		log.Printf("[SlaveManager] Reusing cached VFS for slave %s on startup; skipping initial remerge", rs.name)
 		rs.remerging.Store(false)
@@ -1268,21 +1294,22 @@ func (sm *SlaveManager) ProcessRemerge(rs *RemoteSlave, resp *protocol.AsyncResp
 	log.Printf("[SlaveManager] Remerge from %s: dir=%s files=%d", rs.name, resp.Path, len(resp.Files))
 
 	sfvPaths := make([]string, 0, 1)
+	touchedDirs := make(map[string]struct{}, 8)
 	for _, inode := range resp.Files {
-		path := resp.Path
-		if path == "/" {
-			path = "/" + inode.Name
+		fullPath := resp.Path
+		if fullPath == "/" {
+			fullPath = "/" + inode.Name
 		} else {
-			path = resp.Path + "/" + inode.Name
+			fullPath = resp.Path + "/" + inode.Name
 		}
-		if sm.vfs.IsExcludedPath(path) {
+		if sm.vfs.IsExcludedPath(fullPath) {
 			continue
 		}
 
 		// Keep trusted FTP owner/group metadata instead of replacing it with OS ownership.
 		owner := inode.Owner
 		group := inode.Group
-		if existingFile := sm.vfs.GetFile(path); existingFile != nil {
+		if existingFile := sm.vfs.GetFile(fullPath); existingFile != nil {
 			// ALWAYS trust the Master's VFS owner over the Slave's physical OS owner.
 			// This prevents the Slave OS (GoFTPd/ftp) from wiping out real FTP users (N0pe) on restart.
 			if existingFile.Owner != "" && existingFile.Owner != "GoFTPd" && existingFile.Owner != "ftp" {
@@ -1291,8 +1318,8 @@ func (sm *SlaveManager) ProcessRemerge(rs *RemoteSlave, resp *protocol.AsyncResp
 			}
 		}
 
-		sm.vfs.AddFile(path, VFSFile{
-			Path:         path,
+		sm.vfs.AddFile(fullPath, VFSFile{
+			Path:         fullPath,
 			Size:         inode.Size,
 			IsDir:        inode.IsDir,
 			IsSymlink:    inode.IsSymlink,
@@ -1303,11 +1330,15 @@ func (sm *SlaveManager) ProcessRemerge(rs *RemoteSlave, resp *protocol.AsyncResp
 			Group:        group,
 			Seen:         true,
 		})
-		if !inode.IsDir && strings.HasSuffix(strings.ToLower(inode.Name), ".sfv") {
-			sfvPaths = append(sfvPaths, path)
+		touchedDirs[path.Dir(fullPath)] = struct{}{}
+		if inode.IsDir {
+			touchedDirs[fullPath] = struct{}{}
 		}
-		if sm.shouldRefreshRemergeChecksum(path, inode) {
-			sm.scheduleRemergeChecksumRefresh(rs, path)
+		if !inode.IsDir && strings.HasSuffix(strings.ToLower(inode.Name), ".sfv") {
+			sfvPaths = append(sfvPaths, fullPath)
+		}
+		if sm.shouldRefreshRemergeChecksum(fullPath, inode) {
+			sm.scheduleRemergeChecksumRefresh(rs, fullPath)
 		}
 	}
 	for _, sfvPath := range sfvPaths {
@@ -1318,6 +1349,9 @@ func (sm *SlaveManager) ProcessRemerge(rs *RemoteSlave, resp *protocol.AsyncResp
 	// stale unseen children in that directory so clients do not try to download
 	// ghost files while the rest of the slave remerge is still running.
 	sm.vfs.PurgeUnseenChildren(rs.name, resp.Path)
+	for dirPath := range touchedDirs {
+		sm.syncStatusMarkersForDir(dirPath)
+	}
 }
 
 func (sm *SlaveManager) shouldRefreshRemergeChecksum(filePath string, inode protocol.LightRemoteInode) bool {
@@ -1409,6 +1443,7 @@ func (sm *SlaveManager) scheduleRemergeSFVParse(rs *RemoteSlave, sfvPath string)
 			sfvMap[strings.ToLower(path.Base(entry.FileName))] = entry.CRC32
 		}
 		sm.vfs.SetSFVData(dirPath, sfvName, sfvMap)
+		sm.syncStatusMarkersForDir(dirPath)
 
 		for _, child := range sm.vfs.ListDirectory(dirPath) {
 			if child == nil || child.IsDir || child.Size <= 0 {
@@ -1455,7 +1490,7 @@ func (sm *SlaveManager) StartRemerge(name string) error {
 	if !rs.remerging.CompareAndSwap(false, true) {
 		return fmt.Errorf("slave %s is already remerging", rs.Name())
 	}
-	go sm.initializeSlaveAfterConnect(rs)
+	go sm.initializeSlaveAfterConnect(rs, sm.GetManualRemergeMode() == "instant")
 	return nil
 }
 

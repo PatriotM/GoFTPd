@@ -1,4 +1,4 @@
-############################################################
+﻿############################################################
 #  GoFTPd sitebot theme - DrFTPD-style preset              #
 ############################################################
 #
@@ -31,19 +31,19 @@ COLOR_FOREIGN_4 = "10"
 COLOR_FOREIGN_5 = "07"
 
 COLOR_PRE_1 = "14"
-COLOR_PRE_2 = "02"
+COLOR_PRE_2 = "12"
 COLOR_PRE_3 = "14"
 COLOR_PRE_4 = "02"
 COLOR_PRE_5 = "07"
 
 COLOR_REQUESTS_1 = "14"
-COLOR_REQUESTS_2 = "02"
+COLOR_REQUESTS_2 = "12"
 COLOR_REQUESTS_3 = "14"
 COLOR_REQUESTS_4 = "02"
 COLOR_REQUESTS_5 = "07"
 
 COLOR_SPEEDTEST_1 = "14"
-COLOR_SPEEDTEST_2 = "03"
+COLOR_SPEEDTEST_2 = "04"
 COLOR_SPEEDTEST_3 = "14"
 COLOR_SPEEDTEST_4 = "03"
 COLOR_SPEEDTEST_5 = "07"
@@ -68,7 +68,7 @@ COLOR_TV-DK_4 = "03"
 COLOR_TV-DK_5 = "07"
 
 COLOR_TV-ES_1 = "14"
-COLOR_TV-ES_2 = "05"
+COLOR_TV-ES_2 = "07"
 COLOR_TV-ES_3 = "14"
 COLOR_TV-ES_4 = "05"
 COLOR_TV-ES_5 = "07"
@@ -80,31 +80,31 @@ COLOR_TV-FI_4 = "02"
 COLOR_TV-FI_5 = "07"
 
 COLOR_TV-FR_1 = "14"
-COLOR_TV-FR_2 = "10"
+COLOR_TV-FR_2 = "12"
 COLOR_TV-FR_3 = "14"
 COLOR_TV-FR_4 = "10"
 COLOR_TV-FR_5 = "07"
 
 COLOR_TV-IT_1 = "14"
-COLOR_TV-IT_2 = "06"
+COLOR_TV-IT_2 = "05"
 COLOR_TV-IT_3 = "14"
 COLOR_TV-IT_4 = "06"
 COLOR_TV-IT_5 = "07"
 
 COLOR_TV-NL_1 = "14"
-COLOR_TV-NL_2 = "03"
+COLOR_TV-NL_2 = "02"
 COLOR_TV-NL_3 = "14"
 COLOR_TV-NL_4 = "03"
 COLOR_TV-NL_5 = "07"
 
 COLOR_TV-NO_1 = "14"
-COLOR_TV-NO_2 = "05"
+COLOR_TV-NO_2 = "04"
 COLOR_TV-NO_3 = "14"
 COLOR_TV-NO_4 = "05"
 COLOR_TV-NO_5 = "07"
 
 COLOR_TV-PL_1 = "14"
-COLOR_TV-PL_2 = "02"
+COLOR_TV-PL_2 = "03"
 COLOR_TV-PL_3 = "14"
 COLOR_TV-PL_4 = "02"
 COLOR_TV-PL_5 = "07"
@@ -116,7 +116,7 @@ COLOR_TV-SE_4 = "05"
 COLOR_TV-SE_5 = "07"
 
 COLOR_TV-SK_1 = "14"
-COLOR_TV-SK_2 = "02"
+COLOR_TV-SK_2 = "04"
 COLOR_TV-SK_3 = "14"
 COLOR_TV-SK_4 = "02"
 COLOR_TV-SK_5 = "07"
@@ -129,45 +129,45 @@ COLOR_X264-HD-FOREIGN_4 = "02"
 COLOR_X264-HD-FOREIGN_5 = "07"
 
 COLOR_X264-SD-FOREIGN_1 = "14"
-COLOR_X264-SD-FOREIGN_2 = "10"
+COLOR_X264-SD-FOREIGN_2 = "06"
 COLOR_X264-SD-FOREIGN_3 = "14"
 COLOR_X264-SD-FOREIGN_4 = "10"
 COLOR_X264-SD-FOREIGN_5 = "07"
 
 COLOR_X265-FOREIGN_1 = "14"
-COLOR_X265-FOREIGN_2 = "05"
+COLOR_X265-FOREIGN_2 = "07"
 COLOR_X265-FOREIGN_3 = "14"
 COLOR_X265-FOREIGN_4 = "05"
 COLOR_X265-FOREIGN_5 = "07"
 
 # Apps/Ebook blue
 COLOR_0DAY_1 = "14"
-COLOR_0DAY_2 = "02"
+COLOR_0DAY_2 = "12"
 COLOR_0DAY_3 = "14"
 COLOR_0DAY_4 = "02"
 COLOR_0DAY_5 = "07"
 
 COLOR_APPS_1 = "14"
-COLOR_APPS_2 = "02"
+COLOR_APPS_2 = "10"
 COLOR_APPS_3 = "14"
 COLOR_APPS_4 = "02"
 COLOR_APPS_5 = "07"
 
 COLOR_EBOOKS_1 = "14"
-COLOR_EBOOKS_2 = "02"
+COLOR_EBOOKS_2 = "06"
 COLOR_EBOOKS_3 = "14"
 COLOR_EBOOKS_4 = "02"
 COLOR_EBOOKS_5 = "07"
 
 # Music purple
 COLOR_MBLURAY_1 = "14"
-COLOR_MBLURAY_2 = "06"
+COLOR_MBLURAY_2 = "05"
 COLOR_MBLURAY_3 = "14"
 COLOR_MBLURAY_4 = "06"
 COLOR_MBLURAY_5 = "07"
 
 COLOR_MVID_1 = "14"
-COLOR_MVID_2 = "06"
+COLOR_MVID_2 = "04"
 COLOR_MVID_3 = "14"
 COLOR_MVID_4 = "06"
 COLOR_MVID_5 = "07"
@@ -179,20 +179,20 @@ COLOR_MDVDR_4 = "06"
 COLOR_MDVDR_5 = "07"
 
 COLOR_MP3_1 = "14"
-COLOR_MP3_2 = "06"
+COLOR_MP3_2 = "10"
 COLOR_MP3_3 = "14"
 COLOR_MP3_4 = "06"
 COLOR_MP3_5 = "07"
 
 COLOR_FLAC_1 = "14"
-COLOR_FLAC_2 = "06"
+COLOR_FLAC_2 = "12"
 COLOR_FLAC_3 = "14"
 COLOR_FLAC_4 = "06"
 COLOR_FLAC_5 = "07"
 
 # Games cyan
 COLOR_NSW_1 = "14"
-COLOR_NSW_2 = "10"
+COLOR_NSW_2 = "03"
 COLOR_NSW_3 = "14"
 COLOR_NSW_4 = "10"
 COLOR_NSW_5 = "07"
@@ -204,7 +204,7 @@ COLOR_PS5_4 = "10"
 COLOR_PS5_5 = "07"
 
 COLOR_GAMES_1 = "14"
-COLOR_GAMES_2 = "10"
+COLOR_GAMES_2 = "04"
 COLOR_GAMES_3 = "14"
 COLOR_GAMES_4 = "10"
 COLOR_GAMES_5 = "07"
@@ -217,44 +217,44 @@ COLOR_TV-BLURAY_4 = "03"
 COLOR_TV-BLURAY_5 = "07"
 
 COLOR_TV-2160P_1 = "14"
-COLOR_TV-2160P_2 = "03"
+COLOR_TV-2160P_2 = "12"
 COLOR_TV-2160P_3 = "14"
 COLOR_TV-2160P_4 = "03"
 COLOR_TV-2160P_5 = "07"
 
 COLOR_TV-1080P_1 = "14"
-COLOR_TV-1080P_2 = "03"
+COLOR_TV-1080P_2 = "02"
 COLOR_TV-1080P_3 = "14"
 COLOR_TV-1080P_4 = "03"
 COLOR_TV-1080P_5 = "07"
 
 COLOR_TV-720P_1 = "14"
-COLOR_TV-720P_2 = "03"
+COLOR_TV-720P_2 = "10"
 COLOR_TV-720P_3 = "14"
 COLOR_TV-720P_4 = "03"
 COLOR_TV-720P_5 = "07"
 
 COLOR_TV-SD_1 = "14"
-COLOR_TV-SD_2 = "03"
+COLOR_TV-SD_2 = "12"
 COLOR_TV-SD_3 = "14"
 COLOR_TV-SD_4 = "03"
 COLOR_TV-SD_5 = "07"
 
 COLOR_TV-SPORTS_1 = "14"
-COLOR_TV-SPORTS_2 = "03"
+COLOR_TV-SPORTS_2 = "04"
 COLOR_TV-SPORTS_3 = "14"
 COLOR_TV-SPORTS_4 = "03"
 COLOR_TV-SPORTS_5 = "07"
 
 COLOR_TV-HDRiP_1 = "14"
-COLOR_TV-HDRiP_2 = "03"
+COLOR_TV-HDRiP_2 = "06"
 COLOR_TV-HDRiP_3 = "14"
 COLOR_TV-HDRiP_4 = "03"
 COLOR_TV-HDRiP_5 = "07"
 
 # Movie orange/brown
 COLOR_BLURAY_1 = "14"
-COLOR_BLURAY_2 = "05"
+COLOR_BLURAY_2 = "07"
 COLOR_BLURAY_3 = "14"
 COLOR_BLURAY_4 = "05"
 COLOR_BLURAY_5 = "07"
@@ -266,7 +266,7 @@ COLOR_DVDR_4 = "05"
 COLOR_DVDR_5 = "07"
 
 COLOR_BLURAY-UHD_1 = "14"
-COLOR_BLURAY-UHD_2 = "05"
+COLOR_BLURAY-UHD_2 = "04"
 COLOR_BLURAY-UHD_3 = "14"
 COLOR_BLURAY-UHD_4 = "05"
 COLOR_BLURAY-UHD_5 = "07"
@@ -278,19 +278,19 @@ COLOR_X265_4 = "05"
 COLOR_X265_5 = "07"
 
 COLOR_X264-SD_1 = "14"
-COLOR_X264-SD_2 = "05"
+COLOR_X264-SD_2 = "06"
 COLOR_X264-SD_3 = "14"
 COLOR_X264-SD_4 = "05"
 COLOR_X264-SD_5 = "07"
 
 COLOR_X264-HD-1080P_1 = "14"
-COLOR_X264-HD-1080P_2 = "05"
+COLOR_X264-HD-1080P_2 = "02"
 COLOR_X264-HD-1080P_3 = "14"
 COLOR_X264-HD-1080P_4 = "05"
 COLOR_X264-HD-1080P_5 = "07"
 
 COLOR_X264-HD-720P_1 = "14"
-COLOR_X264-HD-720P_2 = "05"
+COLOR_X264-HD-720P_2 = "12"
 COLOR_X264-HD-720P_3 = "14"
 COLOR_X264-HD-720P_4 = "05"
 COLOR_X264-HD-720P_5 = "07"
@@ -320,51 +320,59 @@ COLOR_XXX-0DAY_3 = "14"
 COLOR_XXX-0DAY_4 = "13"
 COLOR_XXX-0DAY_5 = "07"
 
-announce.NEWDIR = "%b%c01{NEW:}%b %c14{[}%section_colored%c14{]} %c%sec_c3{%relname} %c01{by }%c%sec_c4{%u_name}"
+announce.NEWDIR = "%b%c01{NEW:}%b %c14{[}%section_colored%c14{]} %c14{%relname} %c01{by }%c%sec_c2{%u_name}"
 
 announce.NEWDAY = "%b%c01{NEW DAY:}%b %c01{-}%section_colored%c01{- A new day has come!} %c%sec_c5{%date} %c01{has been created along with its symlink.}"
 
-announce.AUDIOINFO = "%c01{FLAC} %c01{-> }%relname%b %c14{[}%genre%b %c01{from }%year%b %c01{at sample rate }%sample_rate%b %c01{Hz, channels }%channels%b%c14{]}"
+announce.AUDIOINFO = "%c01{FLAC} %c01{-> }%c14{%relname}%b %c14{[}%genre%b %c01{from }%year%b %c01{at sample rate }%sample_rate%b %c01{Hz, channels }%channels%b%c14{]}"
 
-announce.MEDIAINFO = "[SAMPLE] %relname%b %c01{::} %video_format%b %c01{: }%c05{%{width}}%c01{x}%c05{%{height}} %c01{: }%audio_format%b %c01{: }%channels%b %c01{: }%duration%b"
+announce.MEDIAINFO = "[SAMPLE] %c14{%relname}%b %c01{::} %video_format%b %c01{: }%c05{%{width}}%c01{x}%c05{%{height}} %c01{: }%audio_format%b %c01{: }%channels%b %c01{: }%duration%b"
+announce.CUSTOM = "%message"
+announce.SPACEARCHIVE = "%c14{[SPACE]:} %c09{[ARCHiViNG]} %c14{::} %c14{%relname} %c14{::} %c06{[}%c14{%size_mb} MB%c06{]} %c14{to} %c07{[}%c14{%destination_label}%c07{]}"
+announce.SPACEOFFSITE = "%c14{[SPACE]:} %c13{[OFFSiTE]} %c14{::} %c14{%relname} %c14{::} %c06{[}%c14{%size_mb} MB%c06{]} %c14{to} %c07{[}%c14{%destination_label}%c07{]}"
+announce.SPACEDELETE = "%c14{[SPACE]:} %c04{[DELETiNG]} %c14{::} %c14{%relname} %c14{::} %c06{[}%c14{%size_mb} MB%c06{]} %c14{from} %c07{[}%c14{%destination_label}%c07{]}"
+announce.ARCHIVEINFO = "%c15{ARCHIVE} %c01{[}%c%sec_c2{%orig_section}%c01{] -> }%relname%b %c01{:: }%target_path%b %c01{:: }%size_mb%b%c01{MB :: }%incoming_free_gb%b%c01{GB in :: }%archive_free_gb%b%c01{GB arc}"
+announce.ARCHIVEOFFSITE = "%c15{ARCHIVE} %c01{[}%c%sec_c2{%orig_section}%c01{] -> }%relname%b %c01{:: }%target_path%b %c01{:: }%size_mb%b%c01{MB :: offsite}"
 
 announce.SPEEDTEST = "%b%c01{SPEEDTEST:}%b %c04{%nick} %c01{%action} %c01{a} %c05{%{size_mb}MB} %c01{file with} %c06{%speed_mbs}"
 
-announce.SFV_RAR = "%b%c01{RACE:}%b %c14{[}%section_colored%c14{]} %c01{Got SFV for }%c%sec_c3{%relname} %c01{uploaded by }%c%sec_c4{%u_name}%c01{. Now expecting }%c%sec_c5{%t_filecount} %c01{%t_file_label.}"
+announce.SFV_RAR = "%b%c01{RACE:}%b %c14{[}%section_colored%c14{]} %c01{Got SFV for }%c14{%relname} %c01{uploaded by }%c%sec_c2{%u_name}%c01{. Now expecting }%b%c14{%t_filecount}%b %c01{%t_file_label.}"
 
-announce.UPDATE_RAR = "%c01{FIRST} %c01{in }%section_colored%c01{: -> }%c%sec_c3{%relname} %c01{by }%user%b %c01{at }%speed%b%c01{. Expecting }%size%b %c01{in }%files%b %c01{files.}"
+announce.UPDATE_RAR = "%c01{FIRST} %c01{in }%section_colored%c01{: -> }%c14{%relname} %c01{by }%user%b %c01{at }%speed%b%c01{. Expecting }%size%b %c01{in }%files%b %c01{files.}"
 
-announce.UPDATE_RAR_UNKNOWN = "%c01{FIRST} %c01{in }%section_colored%c01{: -> }%c%sec_c3{%relname} %c01{by }%user%b %c01{at }%speed%b."
+announce.UPDATE_RAR_UNKNOWN = "%c01{FIRST} %c01{in }%section_colored%c01{: -> }%c14{%relname} %c01{by }%user%b %c01{at }%speed%b."
 
-announce.UPDATE_ZIP = "%c01{FIRST} %c01{in }%section_colored%c01{: -> }%c%sec_c3{%relname} %c01{by }%user%b %c01{at }%speed%b%c01{. Expecting }%size%b %c01{in }%files%b %c01{files.}"
+announce.UPDATE_ZIP = "%c01{FIRST} %c01{in }%section_colored%c01{: -> }%c14{%relname} %c01{by }%user%b %c01{at }%speed%b%c01{. Expecting }%size%b %c01{in }%files%b %c01{files.}"
 
-announce.UPDATE_ZIP_UNKNOWN = "%c01{FIRST} %c01{in }%section_colored%c01{: -> }%c%sec_c3{%relname} %c01{by }%user%b %c01{at }%speed%b."
+announce.UPDATE_ZIP_UNKNOWN = "%c01{FIRST} %c01{in }%section_colored%c01{: -> }%c14{%relname} %c01{by }%user%b %c01{at }%speed%b."
 
-announce.UPDATE_TRACK = "%c01{FIRST} %c01{in }%section_colored%c01{: -> }%c%sec_c3{%relname} %c01{by }%user%b %c01{at }%speed%b."
+announce.UPDATE_TRACK = "%c01{FIRST} %c01{in }%section_colored%c01{: -> }%c14{%relname} %c01{by }%user%b %c01{at }%speed%b."
 
-announce.RACE_RAR = "%b%c01{RACE:}%b %c14{[}%section_colored%c14{]} %c%sec_c3{%relname} %c01{- }%c%sec_c4{%u_name} %c01{joined the race at }%b%c14{%u_speed}%b%c01{.}"
+announce.RACE_RAR = "%b%c01{RACE:}%b %c14{[}%section_colored%c14{]} %c14{%relname} %c01{- }%c%sec_c2{%u_name} %c01{joined the race at }%b%c14{%u_speed}%b%c01{.}"
 
-announce.NEWLEADER = "%b%c01{NEW LEADER:}%b %c14{[}%section_colored%c14{]} %c%sec_c3{%relname} %c01{- }%c%sec_c4{%leaduser} %c01{takes the lead - }%b%c14{%leadsize}%b%c01{/}%b%c14{%leadfiles}F%b%c01{/}%b%c14{%leadpercent}%b%c01{/}%b%c14{%leadspeed}%b%c01{.}"
+announce.NEWLEADER = "%b%c01{NEW LEADER:}%b %c14{[}%section_colored%c14{]} %c14{%relname} %c01{- }%c%sec_c2{%leaduser} %c01{takes the lead - }%b%c14{%leadsize}%b%c01{/}%b%c14{%leadfiles}F%b%c01{/}%b%c14{%leadpercent}%b%c01{/}%b%c14{%leadspeed}%b %c01{- }%b%c14{%filesleft}%b %c01{files left.}"
 
-announce.HALFWAY = "%b%c01{HALFWAY:}%b %c14{[}%section_colored%c14{]} %c%sec_c3{%relname} %c01{- avg speed: }%b%c14{%t_avgspeed}%b %c01{- time left: }%b%c14{%t_timeleft}%b %c01{- leader: }%c%sec_c4{%leaduser} %c14{[}%b%c14{%leadsize}%b%c01{/}%b%c14{%leadfiles}F%b%c01{/}%b%c14{%leadpercent}%b%c01{/}%b%c14{%leadspeed}%b%c01{] - }%b%c14{%filesleft}%b %c01{left.}"
+announce.HALFWAY = "%b%c01{HALFWAY:}%b %c14{[}%section_colored%c14{]} %c14{%relname} %c01{- avg speed: }%b%c14{%t_avgspeed}%b %c01{- time left: }%b%c14{%t_timeleft}%b %c01{- leader: }%c%sec_c2{%leaduser} %c14{[}%b%c14{%leadsize}%b%c01{/}%b%c14{%leadfiles}F%b%c01{/}%b%c14{%leadpercent}%b%c01{/}%b%c14{%leadspeed}%b%c01{] - }%b%c14{%filesleft}%b %c01{files left.}"
 
 announce.TVINFO = "%c01{RACE:} %c14{[}%section_colored%c14{]} %c01{[TvMaze] }%c07{%title}%c01{ :: }%c07{%network}%c01{ :: }%c07{%type}%c01{ :: }%c07{%genre}%c01{ :: }%c07{%language}%c01{ :: }%link"
 
 announce.MOVIEINFO = "%c01{RACE:} %c14{[}%section_colored%c14{]} %c05{[IMDB]} %c07{%title}%c01{ (}%c07{%year}%c01{)}\n%c01{RACE:} %c14{[}%section_colored%c14{]} %c05{[IMDB]} %c01{Genres: }%c07{%genre}%c01{ :: Language: }%c07{%language}%c01{ :: Country: }%c07{%country}%c01{ :: Director: }%c07{%director}%c01{ :: Scored: }%c07{%rating}/10%c01{ with }%c07{%votes}%c01{ votes :: Runtime: }%c07{%runtime}\n%c01{RACE:} %c14{[}%section_colored%c14{]} %c05{[IMDB]} %c01{Plot: }%c07{%plot}\n%c01{RACE:} %c14{[}%section_colored%c14{]} %c05{[IMDB]} %u{%link}"
 
-announce.COMPLETE = "%b%c01{COMPLETE:}%b %c14{[}%section_colored%c14{]} %c%sec_c3{%relname} %c01{by }%b%c14{%racers}%b %c01{racers - }%b%c14{%size}%b%c01{/}%b%c14{%files}%b%c01{/}%b%c14{%t_avgspeed}%b%c01{/}%b%c14{%t_duration}%b"
+announce.COMPLETE = "%b%c01{COMPLETE:}%b %c14{[}%section_colored%c14{]} %c14{%relname} %c01{by }%b%c14{%racers}%b %c01{racers - }%b%c14{%size}%b%c01{/}%b%c14{%files}%b%c01{/}%b%c14{%t_avgspeed}%b%c01{/}%b%c14{%t_duration}%b"
 
-announce.STATS_HOF = "%b%c01{STATS:}%b ▂▃▅▇█▓▒░۩۞۩  %c%sec_c4{Users Hall Of Fame}  ۩۞۩░▒▓█▇▅▃▂"
+announce.STATS_HOF = "%b%c01{STATS:}%b ▂▃▅▇█▓▒░۩۞۩  %c%sec_c2{Users Hall Of Fame}  ۩۞۩░▒▓█▇▅▃▂"
 
-announce.STATS_SPEEDS = "%b%c01{STATS:}%b %c14{Slowest:} %c%sec_c4{%u_slowest_name} %c14{at} %b%c14{%u_slowest_speed}%b %c14{-} %c14{Fastest:} %c%sec_c4{%u_fastest_name} %c14{at} %b%c14{%u_fastest_speed}%b%c14{.}"
+announce.STATS_SPEEDS = "%b%c01{STATS:}%b %c14{Slowest:} %c%sec_c2{%u_slowest_name} %c14{at} %b%c14{%u_slowest_speed}%b %c14{-} %c14{Fastest:} %c%sec_c2{%u_fastest_name} %c14{at} %b%c14{%u_fastest_speed}%b%c14{.}"
 
-announce.STATS_USER = "%b%c01{STATS:}%b %c%sec_c4{[%{u_rank}]} %c%sec_c4{%{u_name}} %c01{/} %c%sec_c5{%{u_group}} %c14{-} %b%c14{%{u_files}f}%b %c14{-} %b%c14{%{u_mb}MB}%b %c14{-} %b%c14{%{u_pct}%}%b %c14{-} %b%c14{%{u_speed}}%b %c14{[ }%b%c14{ALLUP}%b %c03{#%{u_alup}} %c14{] [ }%b%c14{WKUP}%b %c03{#%{u_wkup}} %c14{]}"
+announce.STATS_USER_HEADER = "%b%c01{STATS:}%b %c14{[ }%c%sec_c2{UserTop} %c14{]}"
 
-announce.STATS_GROUP_HEADER = "%b%c01{STATS:}%b %c14{[ GroupTop ]}"
+announce.STATS_USER = "%b%c01{STATS:}%b %c14{[}%c03{%{u_rank}}%c14{]} %c%sec_c2{%{u_name}} %c01{/} %c07{%{u_group}} %c14{-} %b%c14{%{u_files}f}%b %c14{-} %b%c14{%{u_mb}MB}%b %c14{-} %b%c14{%{u_pct}%}%b %c14{-} %b%c14{%{u_speed}}%b %c14{[ }%c14{ALLUP} %c03{#%{u_alup}} %c14{] [ }%c14{WKUP} %c03{#%{u_wkup}} %c14{]}"
 
-announce.STATS_GROUP = "%b%c01{STATS:}%b %c%sec_c4{[%{g_rank}]} %c%sec_c4{%{g_name}} %c14{-} %b%c14{%{g_files}f}%b %c14{-} %b%c14{%{g_mb}MB}%b %c14{-} %b%c14{%{g_pct}%}%b %c14{-} %b%c14{%{g_speed}}%b"
+announce.STATS_GROUP_HEADER = "%b%c01{STATS:}%b %c14{[ }%c%sec_c2{GroupTop} %c14{]}"
 
-announce.STATS_END = "%b%c01{STATS:}%b -----------====>>>>           %c%sec_c4{END}          <<<<====-----------"
+announce.STATS_GROUP = "%b%c01{STATS:}%b %c14{[}%c03{%{g_rank}}%c14{]} %c07{%{g_name}} %c14{-} %b%c14{%{g_files}f}%b %c14{-} %b%c14{%{g_mb}MB}%b %c14{-} %b%c14{%{g_pct}%}%b %c14{-} %b%c14{%{g_speed}}%b"
+
+announce.STATS_END = "%b%c01{STATS:}%b -----------====>>>>           %c%sec_c5{END}          <<<<====-----------"
 
 announce.BNC = "%c01{BNC:} %c01{Checking %{sitename} status, please wait ...}"
 
@@ -387,7 +395,7 @@ announce.BANNEDCMD_ERROR = "%c01{BANNED:} %c04{%response}"
 
 announce.TOPCMD_HEADER = "%c03{TOP UPLOADERS FOR THE DAY:} %c14{[ }%c01{%count} %c01{Users ]}"
 
-announce.TOPCMD_ENTRY = "%c14{[ }%c06{%rank} %c14{]} %user %c01{- (}%c01{%files} %c01{Files) - (}%c01{%size}%c01{)}"
+announce.TOPCMD_ENTRY = "%c14{[}%c03{%rank}%c14{]} %c06{%user}%c01{/}%c07{%group} %c01{- (}%c03{%files} %c01{Files) - (}%c05{%size}%c01{)}"
 
 announce.TOPCMD_TOTAL = "%c03{TOTAL UPLOADS FOR THE DAY:} %c01{( }%c01{%files} %c01{Files ) - ( }%c01{%size}%c01{)}"
 
@@ -405,9 +413,9 @@ announce.RULESCMD_LINE = "%c01{RULES:} %c05{%line}"
 
 announce.RULESCMD_ERROR = "%c01{RULES:} %c04{%response}"
 announce.QUOTACMD_QUOTA_HEADER = "%c02{QUOTA:} %c05{WEEKLY QUOTA} %c14{[ }%c06{%count} %c01{Users - (Min }%c06{%quota_gb}%c01{) ]}"
-announce.QUOTACMD_QUOTA_ENTRY = "%c14{[ }%c06{%rank} %c14{]} %user%c01{/}%c06{%group} %c01{( }%c06{%size} %c01{Up ) is currently }%status_colored%c01{.}"
+announce.QUOTACMD_QUOTA_ENTRY = "%c14{[}%b%c03{%rank}%b%c14{]} %user%c01{/}%c07{%group} %c01{( }%c06{%size} %c01{Up ) is currently }%status_colored%c01{.}"
 announce.QUOTACMD_TRIAL_HEADER = "%c02{QUOTA:} %c05{TRIAL QUOTA} %c01{[ Trial List - }%c06{%count} %c01{Trialing - (Min }%c06{%quota_gb}%c01{) ]}"
-announce.QUOTACMD_TRIAL_ENTRY = "%c14{[ }%c06{%rank} %c14{]} %user%c01{/trial ( }%c06{%size} %c01{Up ) is currently }%status_colored%c01{. (}%c06{%days_remaining}%c01{ days left)}"
+announce.QUOTACMD_TRIAL_ENTRY = "%c14{[}%b%c03{%rank}%b%c14{]} %user%c01{/trial ( }%c06{%size} %c01{Up ) is currently }%status_colored%c01{. (}%c06{%days_remaining}%c01{ days left)}"
 announce.QUOTACMD_EMPTY = "%c02{QUOTA:} %c04{No trial or quota users tracked.}"
 announce.QUOTACMD_OK = "%c02{QUOTA:} %c05{%response}"
 announce.QUOTACMD_ERROR = "%c02{QUOTA:} %c04{%response}"
@@ -450,10 +458,10 @@ announce.PREBWUSER = "[%section_colored] %c14{-PREBW-} %c01{:: }%user%b %c01{:: 
 
 announce.NEWPRETIME = "%c09{PRETiME:} %c14{[}%section_colored%c14{]} %c%sec_c3{%relname} %c01{::} %c09{OK} %c01{:: released} %c09{%preage}%c01{ ago}"
 announce.OLDPRETIME = "%c04{PRETiME:} %c14{[}%section_colored%c14{]} %c%sec_c3{%relname} %c01{::} %c04{BAD} %c01{:: released} %c04{%preage}%c01{ ago}"
-announce.NEWPRETIMEINLINE = "%c01{NEW:} %c14{[}%section_colored%c14{]} %c%sec_c3{%relname} %c01{by} %c%sec_c4{%u_name} %c01{:: released} %c09{%preage}%c01{ ago}"
-announce.OLDPRETIMEINLINE = "%c01{NEW:} %c14{[}%section_colored%c14{]} %c%sec_c3{%relname} %c01{by} %c%sec_c4{%u_name} %c01{:: released} %c04{%preage}%c01{ ago}"
+announce.NEWPRETIMEINLINE = "%c01{NEW:} %c14{[}%section_colored%c14{]} %c%sec_c3{%relname} %c01{by} %c%sec_c2{%u_name} %c01{:: released} %c09{%preage}%c01{ ago}"
+announce.OLDPRETIMEINLINE = "%c01{NEW:} %c14{[}%section_colored%c14{]} %c%sec_c3{%relname} %c01{by} %c%sec_c2{%u_name} %c01{:: released} %c04{%preage}%c01{ ago}"
 
-announce.DF_SLAVE = "%c02{DF:} %c06{%slave} %c01{-} %c03{%free} %c01{free /} %c05{%total} %c01{total (}%c03{%{free_pct}%}%c01{ free) [}%c04{%state}%c14{]}"
+announce.DF_SLAVE = "%c02{DF:} %c06{%slave} %c01{-} %c03{%free} %c01{free /} %c05{%total} %c01{total (}%c03{%{free_pct}%}%c01{ free) [}%state_colored%c14{]}"
 
 announce.DF_TOTAL = "%c02{DF:} %c06{TOTAL} %c01{-} %c03{%free} %c01{free /} %c05{%total} %c01{total (}%c03{%{free_pct}%}%c01{ free)}"
 
@@ -478,5 +486,6 @@ announce.REQUESTCMD_LINE = "%c02{REQUEST:} %c05{%line}"
 announce.REQUESTCMD_ERROR = "%c02{REQUEST:} %c04{SITE %command failed:} %c05{%response}"
 announce.REQUESTCMD_DENIED = "%c02{REQUEST:} %c04{%response}"
 announce.REQUESTCMD_USAGE = "%c02{REQUEST:} %c01{Usage:} %c05{%response}"
+
 
 

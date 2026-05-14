@@ -88,7 +88,7 @@ func DirUploaderBytes(bridge MasterBridge, dirPath string) map[string]int64 {
 		if uploaderBytes := VFSUploaderBytes(bridge.ListDir(dirPath)); len(uploaderBytes) > 0 {
 			return uploaderBytes
 		}
-		return vfsUploaderBytesRecursive(bridge, dirPath, 4)
+		return vfsUploaderBytesRecursive(bridge, dirPath, 8)
 	}
 	return nil
 }

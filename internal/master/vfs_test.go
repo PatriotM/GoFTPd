@@ -116,8 +116,8 @@ func TestVFSRaceStatsUseCachedDirectChildren(t *testing.T) {
 	if users[0].DurationMs != 3000 {
 		t.Fatalf("expected duration 3000ms, got %d", users[0].DurationMs)
 	}
-	if users[0].Speed != 75 {
-		t.Fatalf("expected pzs-ng style user speed 75 bytes/s, got %f", users[0].Speed)
+	if users[0].Speed != 150 {
+		t.Fatalf("expected aggregate user speed 150 bytes/s, got %f", users[0].Speed)
 	}
 	if users[0].Percent != 66 {
 		t.Fatalf("expected 66 percent, got %d", users[0].Percent)
@@ -125,8 +125,8 @@ func TestVFSRaceStatsUseCachedDirectChildren(t *testing.T) {
 	if len(groups) != 1 || groups[0].Name != "Admin" {
 		t.Fatalf("expected Admin group stats, got %+v", groups)
 	}
-	if groups[0].Speed != 75 {
-		t.Fatalf("expected pzs-ng style group speed 75 bytes/s, got %f", groups[0].Speed)
+	if groups[0].Speed != 150 {
+		t.Fatalf("expected aggregate group speed 150 bytes/s, got %f", groups[0].Speed)
 	}
 }
 

@@ -188,6 +188,7 @@ type MasterBridge interface {
 	PluginListDir(path string) []FileEntry
 	MakeDir(path, owner, group string) error
 	Symlink(linkPath, targetPath string) error
+	VFSSymlink(linkPath, targetPath string) error
 	Chmod(path string, mode uint32) error
 	CreateSparseFile(path string, size int64, owner, group string) error
 	DeleteFile(path string) error

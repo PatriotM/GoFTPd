@@ -388,7 +388,7 @@ ensure_enabled_plugin_configs() {
 
     repair_legacy_daemon_plugin_names
 
-local daemon_plugins=(autonuke dateddirs tvmaze imdb mediainfo speedtest request releaseguard pre pretime slowkick spacekeeper)
+local daemon_plugins=(autonuke dateddirs tvmaze imdb speedtest request releaseguard pre pretime slowkick spacekeeper)
     if [ "${SETUP_DAEMON_MODE:-master}" != "slave" ] && [ -f "${daemon_config}" ]; then
         for plugin_name in "${daemon_plugins[@]}"; do
             enabled_value="$(daemon_plugin_enabled_in_config "${daemon_config}" "${plugin_name}")"
@@ -1143,7 +1143,7 @@ configure_daemon() {
     local daemon_enabled=()
     local daemon_disabled=()
     if [ "${daemon_mode}" = "master" ]; then
-daemon_plugins=(autonuke dateddirs tvmaze imdb mediainfo speedtest request releaseguard pre pretime slowkick spacekeeper)
+daemon_plugins=(autonuke dateddirs tvmaze imdb speedtest request releaseguard pre pretime slowkick spacekeeper)
     fi
 
     local plugin_name
@@ -2525,6 +2525,7 @@ show_usage() {
     say_color "${C_YELLOW}" "Usage:"
     say "  ./setup.sh install   Run guided install/config setup"
     say "  ./setup.sh build     Build daemon and sitebot only"
+    say "  ./setup.sh update    Pull the latest Git changes with git pull --ff-only"
     say "  ./setup.sh certs     Generate fresh TLS certificates"
     say "  ./setup.sh import-glftpd [root]  Import users/groups from a glFTPD tree"
     say "  ./setup.sh import-drftpd3 [root] Import users/groups from a DrFTPD v3 tree"
@@ -2537,12 +2538,31 @@ show_usage() {
     say "Notes:"
     say "  - 'install' loads ${STATE_FILE} as defaults when you allow it."
     say "  - 'build' just runs the daemon and sitebot build scripts."
+    say "  - 'update' runs git pull --ff-only from the repository root."
     say "  - 'certs' writes CA, server, and slave certs into ./etc/certs."
     say "  - 'import-glftpd' stages a copy of /glftpd-style account files, backs up current GoFTPd account data, then converts passwd/group/user/group files."
     say "  - 'import-drftpd3' stages userdata/users/javabeans, derives groups, merges into GoFTPd, and requires siteop password resets afterward."
     say "  - 'import-drftpd4' stages DrFTPD v4 users/groups JSON, preserves supported password formats when possible, and merges into GoFTPd."
     say "  - 'systemd' installs Debian/Ubuntu-friendly service files for the daemon and optional sitebot."
     say "  - 'clean' keeps ${STATE_FILE} but backs up generated configs, FIFO, and certs."
+}
+
+run_update_mode() {
+    show_banner
+    say_color "${C_YELLOW}${C_BOLD}" "Update mode"
+    say "Running git pull --ff-only in:"
+    say "  ${ROOT_DIR}"
+    say ""
+    if ! command -v git >/dev/null 2>&1; then
+        say "git is not installed or not in PATH."
+        exit 1
+    fi
+    (
+        cd "${ROOT_DIR}"
+        git pull --ff-only
+    )
+    say ""
+    say "Update complete."
 }
 
 case "${1:-help}" in
@@ -2560,6 +2580,11 @@ case "${1:-help}" in
         build_everything
         say ""
         say "Build complete."
+        exit 0
+        ;;
+    update|--update|pull|--pull)
+        ensure_script_permissions
+        run_update_mode
         exit 0
         ;;
     import-glftpd|--import-glftpd)

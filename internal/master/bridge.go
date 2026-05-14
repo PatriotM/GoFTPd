@@ -561,6 +561,7 @@ func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group s
 		XferTime:     xferTime,
 		Checksum:     checksum,
 	})
+	b.sm.SyncStatusMarkersForPath(filePath, false)
 
 	return finalSize, checksum, nil
 }
@@ -667,6 +668,7 @@ func (b *Bridge) DeleteFile(filePath string) error {
 	}
 	b.invalidateReadFileCache(filePath)
 	b.sm.InvalidateReleaseStateForPath(filePath, vfsFile != nil && vfsFile.IsDir)
+	b.sm.SyncStatusMarkersForPath(filePath, vfsFile != nil && vfsFile.IsDir)
 	return nil
 }
 
@@ -712,6 +714,8 @@ func (b *Bridge) RenameFile(from, toDir, toName string) error {
 		}
 	}
 	b.sm.RenameReleaseState(from, toPath, vfsFile != nil && vfsFile.IsDir)
+	b.sm.SyncStatusMarkersForPath(from, vfsFile != nil && vfsFile.IsDir)
+	b.sm.SyncStatusMarkersForPath(toPath, vfsFile != nil && vfsFile.IsDir)
 	return nil
 }
 
@@ -759,6 +763,8 @@ func (b *Bridge) RelocatePathToSlave(from, toDir, toName, targetSlave string) er
 			}
 		}
 		b.sm.RenameReleaseState(from, toPath, file.IsDir)
+		b.sm.SyncStatusMarkersForPath(from, file.IsDir)
+		b.sm.SyncStatusMarkersForPath(toPath, file.IsDir)
 		return nil
 	}
 	index, err := IssueRelocate(rs, from, toDir, toName)
@@ -780,6 +786,8 @@ func (b *Bridge) RelocatePathToSlave(from, toDir, toName, targetSlave string) er
 		}
 	}
 	b.sm.RenameReleaseState(from, toPath, file.IsDir)
+	b.sm.SyncStatusMarkersForPath(from, file.IsDir)
+	b.sm.SyncStatusMarkersForPath(toPath, file.IsDir)
 	return nil
 }
 
@@ -1087,6 +1095,20 @@ func (b *Bridge) Symlink(linkPath, targetPath string) error {
 	return nil
 }
 
+func (b *Bridge) VFSSymlink(linkPath, targetPath string) error {
+	linkPath = filepath.ToSlash(filepath.Clean(linkPath))
+	targetPath = filepath.ToSlash(filepath.Clean(targetPath))
+	b.sm.GetVFS().AddSymlink(linkPath, targetPath)
+	return nil
+}
+
+func (b *Bridge) SyncStatusMarkersForPath(filePath string, isDir bool) {
+	if b == nil || b.sm == nil {
+		return
+	}
+	b.sm.SyncStatusMarkersForPath(filePath, isDir)
+}
+
 func (b *Bridge) Chmod(path string, mode uint32) error {
 	path = filepath.ToSlash(filepath.Clean(path))
 	slave, file, err := b.resolveOwningSlave(path)
@@ -1384,6 +1406,7 @@ func (b *Bridge) WriteFile(filePath string, content []byte) error {
 		SlaveName:    slave.Name(),
 	})
 	b.cacheReadFileResult(filePath, content, nil)
+	b.sm.SyncStatusMarkersForPath(filePath, false)
 
 	return nil
 }
@@ -1448,6 +1471,7 @@ func (b *Bridge) CreateSparseFile(filePath string, size int64, owner, group stri
 		Owner:        owner,
 		Group:        group,
 	})
+	b.sm.SyncStatusMarkersForPath(filePath, false)
 	return nil
 }
 
@@ -2104,6 +2128,7 @@ func (b *Bridge) SlaveReceivePassthrough(filePath string, transferIdx int32, sla
 		XferTime:     status.Elapsed,
 		Checksum:     finalChecksum,
 	})
+	b.sm.SyncStatusMarkersForPath(filePath, false)
 
 	log.Printf("[Passthrough] Upload %s on %s (%d bytes, %dms, CRC=%08X)",
 		filePath, slaveName, finalSize, status.Elapsed, finalChecksum)
@@ -2231,6 +2256,7 @@ func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group strin
 		XferTime:     status.Elapsed,
 		Checksum:     finalChecksum,
 	})
+	b.sm.SyncStatusMarkersForPath(filePath, false)
 
 	log.Printf("[Passthrough-PORT] Upload %s on %s (%d bytes, %dms, CRC=%08X)",
 		filePath, slave.Name(), finalSize, status.Elapsed, finalChecksum)

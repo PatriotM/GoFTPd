@@ -170,6 +170,15 @@ func (p *Plugin) render(key string, vars map[string]string, fallback string) str
 }
 
 func diskVars(st diskStatus, state string, now time.Time) map[string]string {
+	stateColored := state
+	switch {
+	case strings.HasPrefix(state, "online"):
+		stateColored = "\x0303" + state + "\x03"
+	case strings.HasPrefix(state, "offline"):
+		stateColored = "\x0304" + state + "\x03"
+	case strings.HasPrefix(state, "remerging"):
+		stateColored = "\x0307" + state + "\x03"
+	}
 	return map[string]string{
 		"slave":       st.Name,
 		"name":        st.Name,
@@ -178,6 +187,7 @@ func diskVars(st diskStatus, state string, now time.Time) map[string]string {
 		"free_pct":    fmt.Sprintf("%.1f", percentFree(st.Free, st.Total)),
 		"used_pct":    fmt.Sprintf("%.1f", 100-percentFree(st.Free, st.Total)),
 		"state":       state,
+		"state_colored": stateColored,
 		"sections":    strings.Join(st.Sections, ","),
 		"age":         formatAge(now.Sub(st.Updated)),
 		"free_bytes":  strconv.FormatInt(st.Free, 10),

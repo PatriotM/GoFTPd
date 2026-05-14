@@ -409,6 +409,7 @@ func (s *Session) rescanSingleFile(bridge MasterBridge, filePath string, opts re
 			}
 		}
 	}
+	bridge.SyncStatusMarkersForPath(releasePath, true)
 	return result
 }
 
@@ -457,6 +458,7 @@ func (s *Session) rescanRelease(bridge MasterBridge, releasePath string, opts re
 			}
 		}
 	}
+	bridge.SyncStatusMarkersForPath(releasePath, true)
 
 	return result
 }
