@@ -503,7 +503,7 @@ func (sm *SlaveManager) handleSlaveConnection(conn net.Conn) {
 
 	// Start remerge ()
 	rs.remerging.Store(true)
-	go sm.initializeSlaveAfterConnect(rs, false)
+	go sm.initializeSlaveAfterConnect(rs, true)
 
 	// Start the main read loop (())
 	rs.Run(sm)
