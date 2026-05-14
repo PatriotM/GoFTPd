@@ -4635,9 +4635,9 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 		}
 		if total > 0 {
 			raceDurationMs := bridge.GetRaceWallClockMilliseconds(dirPath)
-			avgSpeedMB := aggregateRaceSpeedMB(users)
+			avgSpeedMB := currentRaceSpeedMB(dirPath, totalBytes, bridge)
 			if avgSpeedMB <= 0 {
-				avgSpeedMB = currentRaceSpeedMB(dirPath, totalBytes, bridge)
+				avgSpeedMB = aggregateRaceSpeedMB(users)
 			}
 			if avgSpeedMB <= 0 {
 				avgSpeedMB = raceSpeedMBForDuration(totalBytes, raceDurationMs)
@@ -4693,9 +4693,9 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 		}
 		raceDurationMs = bridge.GetRaceWallClockMilliseconds(dirPath)
 		if total > 0 {
-			avgSpeedMB := aggregateRaceSpeedMB(users)
+			avgSpeedMB := currentRaceSpeedMB(dirPath, totalBytes, bridge)
 			if avgSpeedMB <= 0 {
-				avgSpeedMB = currentRaceSpeedMB(dirPath, totalBytes, bridge)
+				avgSpeedMB = aggregateRaceSpeedMB(users)
 			}
 			if avgSpeedMB <= 0 {
 				avgSpeedMB = raceSpeedMBForDuration(totalBytes, raceDurationMs)

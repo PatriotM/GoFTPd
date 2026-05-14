@@ -549,11 +549,7 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
             p.grp,
             COUNT(*),
             COALESCE(SUM(p.size_bytes),0),
-            COALESCE(SUM(p.duration_ms),0),
-            COALESCE(SUM(CASE
-                WHEN p.duration_ms > 0 THEN (CAST(p.size_bytes AS REAL) / CAST(p.duration_ms AS REAL)) * 1000.0
-                ELSE 0
-              END), 0)
+            COALESCE(SUM(p.duration_ms),0)
         FROM release_files p
         JOIN release_files e
           ON e.release_id = p.release_id
@@ -573,18 +569,15 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 
 	var users []core.VFSRaceUser
 	var userDurations []int64
-	var userAggregateSpeeds []float64
 	for userRows.Next() {
 		var u core.VFSRaceUser
 		var durationMs int64
-		var aggregateSpeed float64
-		if err := userRows.Scan(&u.Name, &u.Group, &u.Files, &u.Bytes, &durationMs, &aggregateSpeed); err != nil {
+		if err := userRows.Scan(&u.Name, &u.Group, &u.Files, &u.Bytes, &durationMs); err != nil {
 			log.Printf("[RaceDB] user row scan failed for %s: %v", dirPath, err)
 			return nil, nil, 0, 0, 0
 		}
 		users = append(users, u)
 		userDurations = append(userDurations, durationMs)
-		userAggregateSpeeds = append(userAggregateSpeeds, aggregateSpeed)
 	}
 	if err := userRows.Err(); err != nil {
 		log.Printf("[RaceDB] user rows iteration failed for %s: %v", dirPath, err)
@@ -596,7 +589,9 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 		u := &users[i]
 		durationMs := userDurations[i]
 		u.DurationMs = durationMs
-		u.Speed = userAggregateSpeeds[i]
+		if u.Bytes > 0 && durationMs > 0 {
+			u.Speed = float64(u.Bytes) / (float64(durationMs) / 1000.0)
+		}
 		var peakBytes, peakMs sql.NullInt64
 		err := r.db.QueryRow(`
             SELECT size_bytes, duration_ms FROM release_files
@@ -680,11 +675,15 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 			log.Printf("[RaceDB] group row scan failed for %s: %v", dirPath, err)
 			return nil, nil, 0, 0, 0
 		}
+		var groupDurationMs int64
 		for _, u := range users {
 			if u.Group != g.Name {
 				continue
 			}
-			g.Speed += u.Speed
+			groupDurationMs += u.DurationMs
+		}
+		if g.Bytes > 0 && groupDurationMs > 0 {
+			g.Speed = float64(g.Bytes) / (float64(groupDurationMs) / 1000.0)
 		}
 		if total > 0 {
 			g.Percent = (g.Files * 100) / total
