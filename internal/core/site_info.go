@@ -30,6 +30,7 @@ var baseSiteHelpEntries = []siteHelpEntry{
 	{Command: "GROUPS", Usage: "", Summary: "List groups", Area: "Info"},
 	{Command: "GROUP", Usage: "<group>", Summary: "Show group details", Area: "Info", Aliases: []string{"GINFO"}},
 	{Command: "GRPNFO", Usage: "<group>", Summary: "Show group file", Area: "Info"},
+	{Command: "STAT", Usage: "", Summary: "Show simple account stats for parsing", Area: "Info"},
 	{Command: "TRAFFIC", Usage: "", Summary: "Show traffic stats", Area: "Info"},
 	{Command: "ALLUP", Usage: "[user|group]", Summary: "Show raw ALLUP stats line", Area: "Info"},
 	{Command: "ALLDN", Usage: "[user|group]", Summary: "Show raw ALLDN stats line", Area: "Info"},

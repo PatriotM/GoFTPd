@@ -4,3 +4,17 @@ reply_target: "channel"
 
 # Treat disk status older than this as stale/down.
 stale_after_seconds: 600
+
+# Optional named groups shown by !df.
+# Each group can sum slave root statuses by virtual mount_paths and/or direct local paths.
+# Use mount_paths when you want all mounted_roots under one virtual path like /ARCHiVE.
+# Use paths when you want to name specific local disks directly, like /glftpd/DISK1.
+# Example for one LOCAL slave with mounted_roots under /ARCHiVE and /OFFSITE:
+#
+# named_groups:
+#   - name: "ARCHiVE"
+#     mount_paths: ["/ARCHiVE"]
+#   - name: "OFFSiTE ARCHiVE"
+#     mount_paths: ["/OFFSITE"]
+#   - name: "LOCAL ARCH DISKS"
+#     paths: ["/glftpd/DISK1", "/glftpd/DISK2", "/glftpd/DISK3"]

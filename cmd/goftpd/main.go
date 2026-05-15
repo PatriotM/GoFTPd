@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -125,6 +126,16 @@ func main() {
 			time.Duration(intFromCfg(cfg.Master, "slave_auth_ban_seconds", 3600))*time.Second,
 		)
 		sm.SetDiskStatusHook(func(name string, status protocol.DiskStatus, online, available bool, sections []string) {
+			roots := make([]map[string]string, 0, len(status.Roots))
+			for _, root := range status.Roots {
+				roots = append(roots, map[string]string{
+					"path":       root.Path,
+					"mount_path": root.MountPath,
+					"free_bytes": fmt.Sprintf("%d", root.SpaceAvailable),
+					"total_bytes": fmt.Sprintf("%d", root.SpaceCapacity),
+				})
+			}
+			rootsJSON, _ := json.Marshal(roots)
 			core.PublishEvent(cfg, core.Event{
 				Type:      core.EventDiskStatus,
 				Timestamp: time.Now(),
@@ -135,6 +146,7 @@ func main() {
 					"online":      fmt.Sprintf("%t", online),
 					"available":   fmt.Sprintf("%t", available),
 					"sections":    strings.Join(sections, ","),
+					"roots_json":  string(rootsJSON),
 				},
 			})
 		})
@@ -280,6 +292,15 @@ func main() {
 					continue
 				}
 				ds := rs.GetDiskStatus()
+				rootStates := make([]plugin.SlaveRootState, 0, len(ds.Roots))
+				for _, root := range ds.Roots {
+					rootStates = append(rootStates, plugin.SlaveRootState{
+						Path:       root.Path,
+						MountPath:  root.MountPath,
+						FreeBytes:  root.SpaceAvailable,
+						TotalBytes: root.SpaceCapacity,
+					})
+				}
 				out = append(out, plugin.SlaveState{
 					Name:            rs.Name(),
 					Available:       rs.IsAvailable(),
@@ -287,6 +308,7 @@ func main() {
 					ActiveTransfers: rs.ActiveTransfers(),
 					FreeBytes:       ds.SpaceAvailable,
 					TotalBytes:      ds.SpaceCapacity,
+					Roots:           rootStates,
 				})
 			}
 			return out

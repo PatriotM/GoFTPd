@@ -80,6 +80,30 @@ func TestRaceDBSearchDirsRespectsLimit(t *testing.T) {
 	}
 }
 
+func TestRaceDBSearchDirsMatchesAllQueryTokens(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "race.db")
+	rdb, err := NewRaceDB(dbPath)
+	if err != nil {
+		t.Fatalf("NewRaceDB failed: %v", err)
+	}
+	defer rdb.Close()
+
+	releasePath := "/site/MP3/Lana_Del_Rey-First_Light-SINGLE-OST-WEB-2026-ENRiCH"
+	if err := rdb.SaveSFV(releasePath, "release.sfv", map[string]uint32{
+		"01-track.mp3": 1,
+	}); err != nil {
+		t.Fatalf("SaveSFV failed: %v", err)
+	}
+
+	results := rdb.SearchDirs("lana rey", 10)
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result for multi-token query, got %d", len(results))
+	}
+	if results[0].Path != releasePath {
+		t.Fatalf("expected %s, got %s", releasePath, results[0].Path)
+	}
+}
+
 func TestRaceDBReconcileDoesNotPurgeWhenVFSIsEmpty(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "race.db")
 	rdb, err := NewRaceDB(dbPath)

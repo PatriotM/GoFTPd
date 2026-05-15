@@ -24,6 +24,7 @@ func (s *Session) HandleSiteBW(args []string) bool {
 	}
 
 	snaps := listActiveSessions()
+	uniqueUsers := map[string]struct{}{}
 	if targetUser != "" {
 		for _, snap := range snaps {
 			if !strings.EqualFold(strings.TrimSpace(snap.User), targetUser) {
@@ -39,6 +40,10 @@ func (s *Session) HandleSiteBW(args []string) bool {
 	var uploading, downloading, browsing, idling int
 	var upSpeed, downSpeed float64
 	for _, snap := range snaps {
+		userKey := strings.ToLower(strings.TrimSpace(snap.User))
+		if userKey != "" {
+			uniqueUsers[userKey] = struct{}{}
+		}
 		switch classifyBandwidthState(snap) {
 		case "upload":
 			uploading++
@@ -76,18 +81,15 @@ func (s *Session) HandleSiteBW(args []string) bool {
 		}
 	}
 
-	totalUsers := len(snaps)
+	totalUsers := len(uniqueUsers)
+	totalConnections := len(snaps)
 	totalSpeed := upSpeed + downSpeed
-	maxUsers := s.Config.MaxUsers
-	if maxUsers <= 0 {
-		maxUsers = totalUsers
-	}
 
-	fmt.Fprintf(s.Conn, "200 BANDWiDTH: (%d uploading at %s ~ 0%%) - (%d downloading at %s ~ 0%%) - (%d browsing) - (%d idling) - [%d out of %d users in total at %s ~ 0%%]\r\n",
+	fmt.Fprintf(s.Conn, "200 BANDWiDTH: (%d uploading at %s) - (%d downloading at %s) - (%d browsing) - (%d idling) - [%d users / %d connections total at %s]\r\n",
 		uploading, formatBandwidthSpeed(upSpeed),
 		downloading, formatBandwidthSpeed(downSpeed),
 		browsing, idling,
-		totalUsers, maxUsers, formatBandwidthSpeed(totalSpeed))
+		totalUsers, totalConnections, formatBandwidthSpeed(totalSpeed))
 	return false
 }
 
@@ -172,9 +174,9 @@ func snapshotTransferSpeedBytes(snap sessionSnapshot) float64 {
 
 func formatBandwidthSpeed(bytesPerSecond float64) string {
 	if bytesPerSecond <= 0 {
-		return "0.0KB/s"
+		return "0.00MB/s"
 	}
-	return fmt.Sprintf("%.1fKB/s", bytesPerSecond/1024.0)
+	return fmt.Sprintf("%.2fMB/s", bytesPerSecond/(1024.0*1024.0))
 }
 
 func formatUserBandwidthLine(snap sessionSnapshot, slaveStats []LiveTransferStat) string {

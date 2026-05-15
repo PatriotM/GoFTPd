@@ -961,8 +961,8 @@ func (vfs *VirtualFileSystem) GetAllFiles() map[string]*VFSFile {
 }
 
 func (vfs *VirtualFileSystem) SearchDirs(query string, limit int) []VFSSearchResult {
-	query = strings.ToLower(strings.TrimSpace(query))
-	if query == "" {
+	tokens := searchTokens(query)
+	if len(tokens) == 0 {
 		return nil
 	}
 	if limit <= 0 {
@@ -979,7 +979,16 @@ func (vfs *VirtualFileSystem) SearchDirs(query string, limit int) []VFSSearchRes
 		}
 		cleanPath := filepath.ToSlash(filepath.Clean(f.Path))
 		base := filepath.Base(cleanPath)
-		if strings.Contains(strings.ToLower(cleanPath), query) || strings.Contains(strings.ToLower(base), query) {
+		pathLower := strings.ToLower(cleanPath)
+		baseLower := strings.ToLower(base)
+		matched := true
+		for _, token := range tokens {
+			if !strings.Contains(pathLower, token) && !strings.Contains(baseLower, token) {
+				matched = false
+				break
+			}
+		}
+		if matched {
 			dirs = append(dirs, f)
 		}
 	}

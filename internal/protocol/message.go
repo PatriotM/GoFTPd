@@ -110,6 +110,14 @@ func (ar *AsyncResponseDiskStatus) GetIndex() string { return "DiskStatus" }
 type DiskStatus struct {
 	SpaceAvailable int64
 	SpaceCapacity  int64
+	Roots          []RootDiskStatus
+}
+
+type RootDiskStatus struct {
+	Path           string
+	MountPath      string
+	SpaceAvailable int64
+	SpaceCapacity  int64
 }
 
 type AsyncResponseRemerge struct {

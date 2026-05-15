@@ -117,6 +117,14 @@ type SlaveState struct {
 	ActiveTransfers int32
 	FreeBytes       int64
 	TotalBytes      int64
+	Roots           []SlaveRootState
+}
+
+type SlaveRootState struct {
+	Path       string
+	MountPath  string
+	FreeBytes  int64
+	TotalBytes int64
 }
 
 type SiteContext interface {

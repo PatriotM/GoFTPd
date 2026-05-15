@@ -59,6 +59,8 @@ func (s *Session) DispatchSiteCommand(args []string) bool {
 		return s.HandleSiteGroupSimult(remainingArgs)
 	case "TRAFFIC":
 		return s.HandleSiteTraffic(remainingArgs)
+	case "STAT":
+		return s.HandleSiteStat(remainingArgs)
 	case "ALLUP", "ALLDN", "WKUP", "WKDN", "DAYUP", "DAYDN", "MONTHUP", "MONTHDN":
 		return s.HandleSiteUserStatLine(siteCmd, remainingArgs)
 	case "TAGLINE":

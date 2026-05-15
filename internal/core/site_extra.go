@@ -213,6 +213,15 @@ func (s *Session) HandleSiteTraffic(args []string) bool {
 	return false
 }
 
+func (s *Session) HandleSiteStat(args []string) bool {
+	if len(args) > 0 {
+		fmt.Fprintf(s.Conn, "504 Command not implemented for that parameter.\r\n")
+		return false
+	}
+	s.showGlobalStats("200", true)
+	return false
+}
+
 func (s *Session) HandleSiteUserStatLine(kind string, args []string) bool {
 	kind = strings.ToUpper(strings.TrimSpace(kind))
 	target := s.User.Name
