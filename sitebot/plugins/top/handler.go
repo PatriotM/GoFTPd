@@ -26,6 +26,7 @@ type uploaderStat struct {
 type Plugin struct {
 	debug           bool
 	usersDir        string
+	location        *time.Location
 	channels        []string
 	replyTarget     string
 	defaultCount    int
@@ -43,6 +44,7 @@ type Plugin struct {
 func New() *Plugin {
 	return &Plugin{
 		usersDir:        "../etc/users",
+		location:        time.Local,
 		channels:        []string{"#goftpd"},
 		replyTarget:     "channel",
 		defaultCount:    10,
@@ -61,6 +63,15 @@ func (p *Plugin) SetAsyncEmitter(fn func(outType, text, section, relpath string)
 func (p *Plugin) Initialize(config map[string]interface{}) error {
 	if debug, ok := config["debug"].(bool); ok {
 		p.debug = debug
+	}
+	if raw, ok := config["timezone"]; ok {
+		if s, ok := raw.(string); ok && strings.TrimSpace(s) != "" {
+			if loc, err := time.LoadLocation(strings.TrimSpace(s)); err == nil {
+				p.location = loc
+			} else if p.debug {
+				log.Printf("[Top] invalid timezone %q: %v", s, err)
+			}
+		}
 	}
 	if themeFile, ok := config["theme_file"].(string); ok && strings.TrimSpace(themeFile) != "" {
 		th, err := tmpl.LoadTheme(themeFile)
@@ -185,8 +196,8 @@ func (p *Plugin) buildLines(limit int, includeEmptyMessage bool) ([]string, erro
 
 	lines := make([]string, 0, limit+2)
 	lines = append(lines, p.render("TOPCMD_HEADER", map[string]string{
-		"count": strconv.Itoa(limit),
-	}, fmt.Sprintf("TOP UPLOADERS FOR THE DAY: [ %d Users ]", limit)))
+		"count": strconv.Itoa(len(stats)),
+	}, fmt.Sprintf("TOP UPLOADERS FOR THE DAY: [ %d Users ]", len(stats))))
 
 	for idx, stat := range stats[:limit] {
 		lines = append(lines, p.render("TOPCMD_ENTRY", map[string]string{
@@ -216,12 +227,17 @@ func (p *Plugin) loadDayUploadStats() ([]uploaderStat, int64, int64, error) {
 	var totalFiles int64
 	var totalBytes int64
 
+	now := time.Now()
+	if p.location != nil {
+		now = now.In(p.location)
+	}
+
 	for _, entry := range dirEntries {
 		name := strings.TrimSpace(entry.Name())
 		if name == "" || strings.HasPrefix(name, ".") || entry.IsDir() {
 			continue
 		}
-		stat, err := parseDayUploadSnapshot(filepath.Join(p.usersDir, name), name, time.Now())
+		stat, err := parseDayUploadSnapshot(filepath.Join(p.usersDir, name), name, now)
 		if err != nil {
 			if p.debug {
 				log.Printf("[Top] skipping %s: %v", filepath.Join(p.usersDir, name), err)
