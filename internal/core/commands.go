@@ -2854,7 +2854,12 @@ func dirRaceStatusName(bridge MasterBridge, cfg *Config, dirPath, siteName strin
 			}
 		} else {
 			pct := (present * 100) / total
-			statusEntries = append(statusEntries, fmt.Sprintf("%s - %3d%% Complete - [%s]", progressBar(present, total, 20), pct, siteName))
+			if extra != "" {
+				statusEntries = append(statusEntries, fmt.Sprintf("[%s] - ( %s %3d%% COMPLETE - %s ) - [%s]", siteName, progressBar(present, total, 20), pct, extra, siteName))
+				extra = ""
+			} else {
+				statusEntries = append(statusEntries, fmt.Sprintf("[%s] - ( %s %3d%% COMPLETE ) - [%s]", siteName, progressBar(present, total, 20), pct, siteName))
+			}
 		}
 	}
 	if extra != "" {

@@ -109,6 +109,14 @@ func (b *Bridge) StartRemergeAll() (int, []string) {
 	return b.sm.StartRemergeAll()
 }
 
+func (b *Bridge) StartRemergePath(slaveName, basePath string, rootsOnly bool) error {
+	return b.sm.StartRemergePath(slaveName, basePath, rootsOnly)
+}
+
+func (b *Bridge) StartRemergeAllPath(basePath string, rootsOnly bool) (int, []string) {
+	return b.sm.StartRemergeAllPath(basePath, rootsOnly)
+}
+
 func (b *Bridge) GetLiveTransferStats() []core.LiveTransferStat {
 	return b.getLiveTransferStats(true)
 }
@@ -1811,15 +1819,63 @@ func (b *Bridge) GetVFSRaceStatsFresh(dirPath string) ([]core.VFSRaceUser, []cor
 	return coreUsers, coreGroups, totalBytes, present, total
 }
 
+func mergeReleaseProgress(primary, fallback map[string]core.ReleaseProgressStat) map[string]core.ReleaseProgressStat {
+	if len(primary) == 0 {
+		if len(fallback) == 0 {
+			return nil
+		}
+		out := make(map[string]core.ReleaseProgressStat, len(fallback))
+		for key, value := range fallback {
+			out[key] = value
+		}
+		return out
+	}
+	if len(fallback) == 0 {
+		return primary
+	}
+	out := make(map[string]core.ReleaseProgressStat, len(primary)+len(fallback))
+	for key, value := range fallback {
+		out[key] = value
+	}
+	for key, value := range primary {
+		out[key] = value
+	}
+	return out
+}
+
+func mergeReleaseChildFacts(primary, fallback map[string]core.ReleaseChildFacts) map[string]core.ReleaseChildFacts {
+	if len(primary) == 0 {
+		if len(fallback) == 0 {
+			return nil
+		}
+		out := make(map[string]core.ReleaseChildFacts, len(fallback))
+		for key, value := range fallback {
+			out[key] = value
+		}
+		return out
+	}
+	if len(fallback) == 0 {
+		return primary
+	}
+	out := make(map[string]core.ReleaseChildFacts, len(primary)+len(fallback))
+	for key, value := range fallback {
+		out[key] = value
+	}
+	for key, value := range primary {
+		out[key] = value
+	}
+	return out
+}
+
 func (b *Bridge) GetImmediateReleaseProgress(dirPath string) map[string]core.ReleaseProgressStat {
 	if b == nil || b.sm == nil {
 		return nil
 	}
 	cleanDirPath := filepath.Clean(dirPath)
-	if out := b.sm.GetImmediateReleaseProgress(cleanDirPath); len(out) > 0 {
-		return out
-	}
-	return b.sm.GetVFS().GetImmediateChildDirProgress(cleanDirPath)
+	return mergeReleaseProgress(
+		b.sm.GetImmediateReleaseProgress(cleanDirPath),
+		b.sm.GetVFS().GetImmediateChildDirProgress(cleanDirPath),
+	)
 }
 
 func (b *Bridge) GetImmediateReleaseChildFacts(dirPath string) map[string]core.ReleaseChildFacts {
@@ -1827,10 +1883,10 @@ func (b *Bridge) GetImmediateReleaseChildFacts(dirPath string) map[string]core.R
 		return nil
 	}
 	cleanDirPath := filepath.Clean(dirPath)
-	if out := b.sm.GetImmediateReleaseChildFacts(cleanDirPath); len(out) > 0 {
-		return out
-	}
-	return b.sm.GetVFS().GetImmediateChildDirFacts(cleanDirPath)
+	return mergeReleaseChildFacts(
+		b.sm.GetImmediateReleaseChildFacts(cleanDirPath),
+		b.sm.GetVFS().GetImmediateChildDirFacts(cleanDirPath),
+	)
 }
 
 func (b *Bridge) PluginGetVFSRaceStats(dirPath string) ([]plugin.RaceUser, []plugin.RaceGroup, int64, int, int) {

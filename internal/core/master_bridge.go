@@ -146,6 +146,14 @@ type MasterBridge interface {
 	// StartRemergeAll starts a full background VFS refresh for every online slave.
 	StartRemergeAll() (started int, errors []string)
 
+	// StartRemergePath starts a scoped background VFS refresh for one slave.
+	// When rootsOnly is true and basePath is "/", only normal roots are scanned.
+	StartRemergePath(slaveName, basePath string, rootsOnly bool) error
+
+	// StartRemergeAllPath starts a scoped background VFS refresh for every
+	// online slave.
+	StartRemergeAllPath(basePath string, rootsOnly bool) (started int, errors []string)
+
 	// SyncStatusMarkersForPath refreshes zipscript/VFS status markers for a
 	// path and its parent context after rescan, remerge, or file mutations.
 	SyncStatusMarkersForPath(filePath string, isDir bool)

@@ -60,13 +60,9 @@ func (sm *SlaveManager) syncStatusMarkersForDir(dirPath string) {
 
 	entries := sm.vfs.ListDirectory(dirPath)
 	childFacts := sm.GetImmediateReleaseChildFacts(dirPath)
-	if len(childFacts) == 0 {
-		childFacts = sm.vfs.GetImmediateChildDirFacts(dirPath)
-	}
+	childFacts = mergeReleaseChildFacts(childFacts, sm.vfs.GetImmediateChildDirFacts(dirPath))
 	progress := sm.GetImmediateReleaseProgress(dirPath)
-	if len(progress) == 0 {
-		progress = sm.vfs.GetImmediateChildDirProgress(dirPath)
-	}
+	progress = mergeReleaseProgress(progress, sm.vfs.GetImmediateChildDirProgress(dirPath))
 
 	desired := make(map[string]string)
 	existingMarkers := make(map[string]string)

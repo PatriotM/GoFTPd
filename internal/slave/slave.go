@@ -215,11 +215,14 @@ type scanTarget struct {
 	virtualBase string
 }
 
-func (s *Slave) scanTargetsForBase(basePath string) []scanTarget {
+func (s *Slave) scanTargetsForBase(basePath string, rootsOnly bool) []scanTarget {
 	basePath = cleanVirtualPath(basePath)
 	targets := make([]scanTarget, 0, len(s.roots))
 	for _, root := range s.roots {
 		mountPath := cleanVirtualPath(root.MountPath)
+		if rootsOnly && mountPath != "/" {
+			continue
+		}
 		switch {
 		case basePath == "/":
 			targets = append(targets, scanTarget{root: root, scanRoot: root.Path, virtualBase: mountPath})
@@ -1000,6 +1003,7 @@ func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
 		basePath = ac.Args[0]
 	}
 	instantOnline := len(ac.Args) > 4 && strings.EqualFold(strings.TrimSpace(ac.Args[4]), "true")
+	rootsOnly := len(ac.Args) > 5 && strings.EqualFold(strings.TrimSpace(ac.Args[5]), "true")
 	partialRemerge := len(ac.Args) > 1 && strings.EqualFold(strings.TrimSpace(ac.Args[1]), "true") && !s.ignorePartialRemerge && !instantOnline
 	skipAgeCutoff := int64(0)
 	if partialRemerge && len(ac.Args) > 2 {
@@ -1014,10 +1018,10 @@ func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
 			partialRemerge = false
 		}
 	}
-	excludePaths := normalizeExcludeVFSPaths(ac.Args[5:])
+	excludePaths := normalizeExcludeVFSPaths(ac.Args[6:])
 
-	scanTargets := s.scanTargetsForBase(basePath)
-	log.Printf("[Slave] Starting remerge from %s across %d roots", basePath, len(scanTargets))
+	scanTargets := s.scanTargetsForBase(basePath, rootsOnly)
+	log.Printf("[Slave] Starting remerge from %s across %d roots (rootsOnly=%v)", basePath, len(scanTargets), rootsOnly)
 
 	totalFiles := 0
 	totalDirs := 0

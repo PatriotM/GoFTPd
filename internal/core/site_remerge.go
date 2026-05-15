@@ -2,12 +2,13 @@ package core
 
 import (
 	"fmt"
+	"path"
 	"strings"
 )
 
 func (s *Session) HandleSiteRemerge(args []string) bool {
-	if len(args) != 1 {
-		fmt.Fprintf(s.Conn, "501 Usage: SITE REMERGE <slave|*>\r\n")
+	if len(args) < 1 || len(args) > 2 {
+		fmt.Fprintf(s.Conn, "501 Usage: SITE REMERGE <slave|*> [SITE|<path>]\r\n")
 		return false
 	}
 	if s.Config.Mode != "master" || s.MasterManager == nil {
@@ -21,8 +22,27 @@ func (s *Session) HandleSiteRemerge(args []string) bool {
 	}
 
 	target := strings.TrimSpace(args[0])
+	basePath := "/"
+	rootsOnly := false
+	scoped := false
+	if len(args) == 2 {
+		scoped = true
+		scopeArg := strings.TrimSpace(args[1])
+		if strings.EqualFold(scopeArg, "SITE") {
+			basePath = "/"
+			rootsOnly = true
+		} else {
+			basePath = path.Clean("/" + scopeArg)
+		}
+	}
 	if target == "*" {
-		started, errs := bridge.StartRemergeAll()
+		var started int
+		var errs []string
+		if scoped {
+			started, errs = bridge.StartRemergeAllPath(basePath, rootsOnly)
+		} else {
+			started, errs = bridge.StartRemergeAll()
+		}
 		if started == 0 && len(errs) > 0 {
 			fmt.Fprintf(s.Conn, "550 REMERGE failed: %s\r\n", strings.Join(errs, "; "))
 			return false
@@ -35,8 +55,22 @@ func (s *Session) HandleSiteRemerge(args []string) bool {
 		return false
 	}
 
-	if err := bridge.StartRemerge(target); err != nil {
+	var err error
+	if scoped {
+		err = bridge.StartRemergePath(target, basePath, rootsOnly)
+	} else {
+		err = bridge.StartRemerge(target)
+	}
+	if err != nil {
 		fmt.Fprintf(s.Conn, "550 REMERGE failed: %v\r\n", err)
+		return false
+	}
+	if scoped {
+		if rootsOnly {
+			fmt.Fprintf(s.Conn, "200 REMERGE started for %s (site roots only).\r\n", target)
+			return false
+		}
+		fmt.Fprintf(s.Conn, "200 REMERGE started for %s at %s.\r\n", target, basePath)
 		return false
 	}
 	fmt.Fprintf(s.Conn, "200 REMERGE started for %s.\r\n", target)
