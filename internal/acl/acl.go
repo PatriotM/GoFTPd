@@ -538,8 +538,41 @@ func requirementToLegacyString(req *Requirement) string {
 	return strings.Join(parts, " ")
 }
 
-// pathMatches checks if path matches pattern
-func pathMatches(pattern, vpath string) bool {
+func expandBracePatterns(pattern string) []string {
+	pattern = strings.TrimSpace(pattern)
+	start := strings.Index(pattern, "{")
+	if start < 0 {
+		return []string{pattern}
+	}
+	end := strings.Index(pattern[start:], "}")
+	if end < 0 {
+		return []string{pattern}
+	}
+	end += start
+	body := pattern[start+1 : end]
+	parts := strings.Split(body, ",")
+	if len(parts) == 0 {
+		return []string{pattern}
+	}
+	out := make([]string, 0, len(parts))
+	prefix := pattern[:start]
+	suffix := pattern[end+1:]
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		for _, expanded := range expandBracePatterns(prefix + part + suffix) {
+			out = append(out, expanded)
+		}
+	}
+	if len(out) == 0 {
+		return []string{pattern}
+	}
+	return out
+}
+
+func pathMatchesSingle(pattern, vpath string) bool {
 	rawPattern := strings.ReplaceAll(strings.TrimSpace(pattern), "\\", "/")
 	rawPath := strings.ReplaceAll(strings.TrimSpace(vpath), "\\", "/")
 	if strings.HasSuffix(rawPattern, "/") {
@@ -780,6 +813,16 @@ func (e *Engine) CanPerformRuleOnly(u *user.User, action string, vpath string) b
 			if pathMatches(rule.Path, vpath) || pathIsBelow(vpath, rulePath) {
 				return ruleAllows(rule, u)
 			}
+		}
+	}
+	return false
+}
+
+// pathMatches checks if path matches pattern
+func pathMatches(pattern, vpath string) bool {
+	for _, expanded := range expandBracePatterns(pattern) {
+		if pathMatchesSingle(expanded, vpath) {
+			return true
 		}
 	}
 	return false

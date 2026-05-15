@@ -239,6 +239,41 @@ func TestCanPerformCoversExactPathDescendants(t *testing.T) {
 	}
 }
 
+func TestCanPerformSupportsBracePathPatterns(t *testing.T) {
+	e := &Engine{RulesByType: map[string][]Rule{
+		"dirlog": {
+			{Type: "dirlog", Path: "/SERIES-SD/*/{Sample,Subs,Proof}", Required: "$nobody"},
+			{Type: "dirlog", Path: "/*", Required: "*"},
+		},
+		"list": {
+			{Type: "list", Path: "/*", Required: "*"},
+		},
+	}}
+
+	u := &user.User{Name: "tester"}
+
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "sample hidden", path: "/SERIES-SD/Release-GRP/Sample", want: false},
+		{name: "subs hidden", path: "/SERIES-SD/Release-GRP/Subs", want: false},
+		{name: "proof hidden", path: "/SERIES-SD/Release-GRP/Proof", want: false},
+		{name: "release still visible", path: "/SERIES-SD/Release-GRP", want: true},
+		{name: "other section visible", path: "/MOVIES-SD/Release-GRP/Sample", want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := e.CanPerform(u, "DIRLOG", tt.path)
+			if got != tt.want {
+				t.Fatalf("CanPerform(DIRLOG, %q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestPrivpathOverridesBroadListAllow(t *testing.T) {
 	e := &Engine{RulesByType: map[string][]Rule{
 		"list": {
