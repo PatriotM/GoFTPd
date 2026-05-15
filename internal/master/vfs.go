@@ -1468,6 +1468,8 @@ func (vfs *VirtualFileSystem) computeRaceStateFilteredLocked(dirPath string, exc
 
 	userMap := make(map[string]*RaceUserStat)
 	groupMap := make(map[string]*RaceGroupStat)
+	userStartMs := make(map[string]int64)
+	userEndMs := make(map[string]int64)
 	presentFiles := make(map[string]*VFSFile)
 	for childPath := range vfs.children[dirPath] {
 		f := vfs.files[childPath]
@@ -1516,7 +1518,6 @@ func (vfs *VirtualFileSystem) computeRaceStateFilteredLocked(dirPath string, exc
 		us.Files++
 		us.Bytes += f.Size
 		fileSpeed := float64(f.Size) / (float64(f.XferTime) / 1000.0)
-		us.Speed += fileSpeed
 		if fileSpeed > us.PeakSpeed {
 			us.PeakSpeed = fileSpeed
 		}
@@ -1524,6 +1525,20 @@ func (vfs *VirtualFileSystem) computeRaceStateFilteredLocked(dirPath string, exc
 			us.SlowSpeed = fileSpeed
 		}
 		us.DurationMs += f.XferTime
+		fileEndMs := f.LastModified * 1000
+		if fileEndMs <= 0 {
+			fileEndMs = time.Now().UnixMilli()
+		}
+		fileStartMs := fileEndMs - f.XferTime
+		if fileStartMs < 0 {
+			fileStartMs = 0
+		}
+		if start := userStartMs[owner]; start == 0 || fileStartMs < start {
+			userStartMs[owner] = fileStartMs
+		}
+		if fileEndMs > userEndMs[owner] {
+			userEndMs[owner] = fileEndMs
+		}
 
 		gs := groupMap[group]
 		if gs == nil {
@@ -1536,6 +1551,11 @@ func (vfs *VirtualFileSystem) computeRaceStateFilteredLocked(dirPath string, exc
 
 	cache.Users = make([]RaceUserStat, 0, len(userMap))
 	for _, us := range userMap {
+		if startMs, endMs := userStartMs[us.Name], userEndMs[us.Name]; us.Bytes > 0 && endMs > startMs {
+			us.Speed = float64(us.Bytes) / (float64(endMs-startMs) / 1000.0)
+		} else if us.Bytes > 0 && us.DurationMs > 0 {
+			us.Speed = float64(us.Bytes) / (float64(us.DurationMs) / 1000.0)
+		}
 		if cache.Total > 0 {
 			us.Percent = (us.Files * 100) / cache.Total
 		}

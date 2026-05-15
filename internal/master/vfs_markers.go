@@ -128,6 +128,11 @@ func (sm *SlaveManager) syncStatusMarkersForDir(dirPath string) {
 			continue
 		}
 		targetPath := path.Clean(existingMarkers[markerPath])
+		targetEntry := sm.vfs.GetFile(targetPath)
+		if targetEntry == nil || !targetEntry.IsDir || strings.HasPrefix(path.Base(targetPath), "[NUKED]-") {
+			sm.vfs.DeleteFile(markerPath)
+			continue
+		}
 		if _, ok := evaluatedTargets[targetPath]; !ok {
 			continue
 		}

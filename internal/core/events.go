@@ -420,16 +420,13 @@ func emitRaceEnd(s *Session, dirPath string, users []VFSRaceUser, groups []VFSRa
 		}
 	}
 
-	// Keep COMPLETE speed aligned with the live race stats by preferring the
-	// summed uploader throughput; fall back to wall-clock throughput if needed.
+	// Keep COMPLETE speed aligned with the summed racer throughput first;
+	// fall back to wall-clock throughput only when live user speeds are absent.
 	raceDurationMs = chooseRaceDurationMs(raceDurationMs, users, xferMs)
 
 	avgMB := aggregateRaceSpeedMB(users)
 	if avgMB <= 0 {
-		durSec := float64(raceDurationMs) / 1000.0
-		if durSec > 0 {
-			avgMB = (float64(totalBytes) / 1024.0 / 1024.0) / durSec
-		}
+		avgMB = raceSpeedMBForDuration(totalBytes, raceDurationMs)
 	}
 	rel := path.Base(dirPath)
 	common := map[string]string{

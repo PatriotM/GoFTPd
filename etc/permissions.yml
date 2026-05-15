@@ -273,6 +273,15 @@ rules:
     - path: /PRE/*
       required: $siteop
 
+    # Hide noisy subdirs from SITE SEARCH / dirlog-style results while leaving
+    # the parent release visible. Brace patterns expand one path rule into
+    # multiple matches, e.g. {Sample,Subs,Proof}.
+    - path: /SERIES-SD/*/{Sample,Subs,Proof}
+      required: $nobody
+
+    - path: /MOVIES-SD/*/{Sample,Subs,Proof}
+      required: $nobody
+
     - path: /*
       required: $anyone
 
