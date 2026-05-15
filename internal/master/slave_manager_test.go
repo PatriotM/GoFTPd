@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"goftpd/internal/protocol"
+	"goftpd/internal/zipscript"
 )
 
 func TestRemoteSlaveOfflineClearsVFSFiles(t *testing.T) {
@@ -72,6 +73,45 @@ func TestShouldRefreshRemergeChecksumDisabledByDefault(t *testing.T) {
 
 	if sm.shouldRefreshRemergeChecksum("/X265/release/file.r00", protocol.LightRemoteInode{Name: "file.r00", Size: 100}) {
 		t.Fatalf("expected remerge checksum refresh to stay disabled by default")
+	}
+}
+
+func TestMarkFileMissingRefreshesStatusMarkers(t *testing.T) {
+	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
+	sm.SetStatusMarkerConfig(zipscript.Config{
+		Enabled: true,
+		Incomplete: zipscript.IncompleteConfig{
+			Enabled:        true,
+			Indicator:      "[incomplete]-%0",
+			NoSFVIndicator: "[no-sfv]-%0",
+			NFOIndicator:   "[no-nfo]-%0",
+		},
+	})
+
+	sm.vfs.AddFile("/X265", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.AddFile("/X265/release", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.AddFile("/X265/release/release.sfv", VFSFile{Size: 10, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.AddFile("/X265/release/release.nfo", VFSFile{Size: 10, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.SetSFVData("/X265/release", "release.sfv", map[string]uint32{"file.r00": 1})
+	sm.vfs.AddFile("/X265/release/file.r00", VFSFile{
+		Size:      100,
+		Seen:      true,
+		SlaveName: "LOCAL",
+		Checksum:  1,
+	})
+	sm.SyncStatusMarkersForPath("/X265/release", true)
+	if got := sm.vfs.GetFile("/X265/[incomplete]-release"); got != nil {
+		t.Fatalf("did not expect incomplete marker before missing file, got %+v", got)
+	}
+
+	bridge := &Bridge{sm: sm}
+	if err := bridge.MarkFileMissing("/X265/release/file.r00"); err != nil {
+		t.Fatalf("MarkFileMissing() error = %v", err)
+	}
+
+	got := sm.vfs.GetFile("/X265/[incomplete]-release")
+	if got == nil || !got.IsSymlink || got.LinkTarget != "/X265/release" {
+		t.Fatalf("expected incomplete marker to target release, got %+v", got)
 	}
 }
 

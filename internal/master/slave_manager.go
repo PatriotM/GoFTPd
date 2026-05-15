@@ -1462,6 +1462,7 @@ func (sm *SlaveManager) scheduleRemergeSFVParse(rs *RemoteSlave, sfvPath string)
 			sfvMap[strings.ToLower(path.Base(entry.FileName))] = entry.CRC32
 		}
 		sm.vfs.SetSFVData(dirPath, sfvName, sfvMap)
+		sm.cleanupStaleMissingMarkersAfterRemerge(rs, dirPath, sfvMap)
 		sm.syncStatusMarkersForDir(dirPath)
 
 		for _, child := range sm.vfs.ListDirectory(dirPath) {
@@ -1477,6 +1478,40 @@ func (sm *SlaveManager) scheduleRemergeSFVParse(rs *RemoteSlave, sfvPath string)
 			}
 		}
 	}()
+}
+
+func (sm *SlaveManager) cleanupStaleMissingMarkersAfterRemerge(rs *RemoteSlave, dirPath string, sfvMap map[string]uint32) {
+	if sm == nil || rs == nil || len(sfvMap) == 0 {
+		return
+	}
+	if !zipscript.ShowMissingFilesForDir(sm.statusMarkerConfig().Zipscript, dirPath) {
+		return
+	}
+	filesByName := make(map[string]*VFSFile)
+	for _, entry := range sm.vfs.ListDirectory(dirPath) {
+		if entry == nil || entry.IsDir {
+			continue
+		}
+		filesByName[strings.ToLower(path.Base(entry.Path))] = entry
+	}
+	for expectedName := range sfvMap {
+		realEntry := filesByName[strings.ToLower(path.Base(expectedName))]
+		missingEntry := filesByName[strings.ToLower(path.Base(expectedName)+"-MISSING")]
+		if realEntry == nil || missingEntry == nil {
+			continue
+		}
+		missingPath := missingEntry.Path
+		sm.vfs.DeleteFile(missingPath)
+		go func(missing string) {
+			index, err := IssueDelete(rs, missing)
+			if err != nil {
+				return
+			}
+			if _, err := rs.FetchResponse(index, 30*time.Second); err != nil {
+				log.Printf("[SlaveManager] stale missing marker delete failed for %s: %v", missing, err)
+			}
+		}(missingPath)
+	}
 }
 
 // --- Slave Access ---

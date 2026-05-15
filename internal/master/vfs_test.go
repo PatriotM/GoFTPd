@@ -459,6 +459,22 @@ func TestVFSResolvePathFollowsSymlinkSegments(t *testing.T) {
 	}
 }
 
+func TestVFSAddSymlinkKeepsTargetType(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/X265/release", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/X265/release/file.r00", VFSFile{Size: 100, Seen: true})
+
+	vfs.AddSymlink("/X265/release-link", "/X265/release")
+	if got := vfs.GetFile("/X265/release-link"); got == nil || !got.IsSymlink || !got.IsDir {
+		t.Fatalf("expected directory symlink, got %+v", got)
+	}
+
+	vfs.AddSymlink("/X265/file-link", "/X265/release/file.r00")
+	if got := vfs.GetFile("/X265/file-link"); got == nil || !got.IsSymlink || got.IsDir {
+		t.Fatalf("expected file symlink, got %+v", got)
+	}
+}
+
 func TestVFSAddFilePreservesVerifiedTransferDataAcrossRemerge(t *testing.T) {
 	vfs := NewVirtualFileSystem()
 

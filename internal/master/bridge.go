@@ -1541,10 +1541,13 @@ func (b *Bridge) candidateSlavesForPath(filePath string) ([]*RemoteSlave, error)
 
 func (b *Bridge) MarkFileMissing(filePath string) error {
 	b.sm.GetVFS().DeleteFile(filePath)
+	var err error
 	if b.raceDB != nil {
-		return b.raceDB.DeletePath(filepath.Clean(filePath), false)
+		err = b.raceDB.DeletePath(filepath.Clean(filePath), false)
 	}
-	return nil
+	b.sm.InvalidateReleaseStateForPath(filePath, false)
+	b.sm.SyncStatusMarkersForPath(filePath, false)
+	return err
 }
 
 func (b *Bridge) reconcileFailedUploadState(filePath string, slave *RemoteSlave) {

@@ -238,13 +238,18 @@ func (vfs *VirtualFileSystem) AddSymlink(linkPath, targetPath string) {
 
 	linkPath = cleanVFSPath(linkPath)
 	targetPath = cleanVFSPath(targetPath)
+	isDir := true
+	if target := vfs.files[targetPath]; target != nil {
+		isDir = target.IsDir
+	}
 	if existing := vfs.files[linkPath]; existing != nil && existing.IsSymlink && existing.LinkTarget == targetPath {
+		existing.IsDir = isDir
 		existing.Seen = true
 		return
 	}
 	vfs.files[linkPath] = &VFSFile{
 		Path:         linkPath,
-		IsDir:        true,
+		IsDir:        isDir,
 		IsSymlink:    true,
 		LinkTarget:   targetPath,
 		Mode:         0777,
@@ -253,9 +258,11 @@ func (vfs *VirtualFileSystem) AddSymlink(linkPath, targetPath string) {
 	}
 	vfs.ensureParentDirsLocked(linkPath, "")
 	vfs.linkChildLocked(cleanVFSPath(filepath.Dir(linkPath)), linkPath)
-	vfs.ensureChildrenBucketLocked(linkPath)
+	if isDir {
+		vfs.ensureChildrenBucketLocked(linkPath)
+	}
 	vfs.touchAncestorsLocked(linkPath, time.Now().Unix())
-	vfs.invalidateStartupFactsForPathLocked(linkPath, true)
+	vfs.invalidateStartupFactsForPathLocked(linkPath, isDir)
 	vfs.markPersistDirtyLocked()
 }
 
