@@ -2247,29 +2247,12 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		dataConn = trackTransferConn(s, dataConn, "download")
 
 		start := time.Now()
-		var transferChecksum uint32
-		var reader io.Reader = file
-		var checksumHash hash.Hash32
-		if restOffset == 0 {
-			checksumHash = crc32.NewIEEE()
-			reader = io.TeeReader(file, checksumHash)
-		}
-		var out io.Writer = dataConn
-		_, err = io.Copy(out, reader)
+		_, err = io.Copy(dataConn, file)
 		xferMs := time.Since(start).Milliseconds()
 		dataConn.Close()
 		if err != nil {
 			writeTransferFailure(s.Conn, "Download", err)
 			return false
-		}
-		if checksumHash != nil {
-			transferChecksum = checksumHash.Sum32()
-		}
-
-		if restOffset == 0 && transferChecksum != 0 {
-			if expectedCRC, ok := localExpectedCRCForFile(localPath); ok && transferChecksum != expectedCRC {
-				fmt.Fprintf(s.Conn, "226- WARNING: checksum from transfer didn't match checksum in .sfv\r\n")
-			}
 		}
 		fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
 		if remainingSize > 0 {
@@ -3466,32 +3449,27 @@ func shouldTreatDownloadAsMissing(cfg *Config, bridge MasterBridge, filePath str
 	if !exists || expectedCRC == 0 {
 		return false
 	}
-	checksum, err := bridge.ChecksumFile(filePath)
-	if err != nil {
-		if isRescanMissingError(err) {
+
+	if knownCRC, ok := bridge.GetKnownChecksum(filePath); ok {
+		if knownCRC == expectedCRC {
+			return false
+		}
+		if zipscript.ShouldDeleteBadCRCForDir(cfg.Zipscript, dirPath) {
+			if err := bridge.DeleteFile(filePath); err != nil && cfg.Debug {
+				log.Printf("[MASTER-ZS] cached bad CRC delete failed for %s: %v", filePath, err)
+			}
 			_ = bridge.MarkFileMissing(filePath)
 			missingPath := filePath + "-MISSING"
 			if bridge.GetFileSize(missingPath) < 0 {
 				_ = bridge.WriteFile(missingPath, []byte{})
 			}
-			return true
 		}
-		return false
+		return true
 	}
-	if checksum == expectedCRC {
-		return false
-	}
-	if zipscript.ShouldDeleteBadCRCForDir(cfg.Zipscript, dirPath) {
-		if err := bridge.DeleteFile(filePath); err != nil && cfg.Debug {
-			log.Printf("[MASTER-ZS] download-time bad CRC delete failed for %s: %v", filePath, err)
-		}
-		_ = bridge.MarkFileMissing(filePath)
-		missingPath := filePath + "-MISSING"
-		if bridge.GetFileSize(missingPath) < 0 {
-			_ = bridge.WriteFile(missingPath, []byte{})
-		}
-	}
-	return true
+
+	// Do not run an extra checksum pass on RETR.
+	// If no cached checksum is known yet, trust the upload-time verification path.
+	return false
 }
 
 func syncMasterSFVMissingMarkers(cfg *Config, bridge MasterBridge, dirPath string) {
