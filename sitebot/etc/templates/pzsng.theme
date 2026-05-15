@@ -438,7 +438,7 @@ announce.TOPICCMD_USAGE = "%c02{TOPIC:} %c01{Usage:} %c05{!topic #channel topic 
 announce.NUKE = "%c04{NUKED:} %c14{[}%section_colored%c14{]} %c06{%relname}"
 announce.NUKE_FACTOR = "%c04{NUKED:} %c01{Was nuked factor} %c04{%multiplier_label} %c01{by} %c%sec_c2{%u_name}"
 announce.NUKE_REASON = "%c04{NUKED:} %c01{[reason]} %c14{-->} %c04{%reason}"
-announce.NUKE_NUKEES = "%c04{NUKED:} %c01{[nukees]} %c14{-->} %c07{%nukees}"
+announce.NUKE_NUKEES = "%c04{NUKED:} %c01{[nukees]} %c14{-->} %{nukees_colored}"
 
 announce.UNNUKE = "%c01{UNNUKE:} %c14{[}%section_colored%c14{]} %c14{%relname} %c01{by} %c%sec_c2{%u_name}"
 

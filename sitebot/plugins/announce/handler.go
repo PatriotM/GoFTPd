@@ -514,6 +514,29 @@ func loginFailKey(vars map[string]string) string {
 	return username + "|" + reason + "|" + ip + "|" + mask
 }
 
+func colorizeNukees(raw string) string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		open := strings.LastIndex(part, " (")
+		close := strings.LastIndex(part, ")")
+		if open > 0 && close == len(part)-1 && close > open+2 {
+			user := strings.TrimSpace(part[:open])
+			size := strings.TrimSpace(part[open+2 : close])
+			if user != "" && size != "" {
+				out = append(out, "\x0306"+user+"\x03 \x0301("+size+")\x03")
+				continue
+			}
+		}
+		out = append(out, "\x0306"+part+"\x03")
+	}
+	return strings.Join(out, "\x0301, \x03")
+}
+
 func configInt(raw interface{}, fallback int) int {
 	switch v := raw.(type) {
 	case int:
@@ -809,7 +832,13 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 			outs = append(outs, plugin.Output{Type: "NUKE", Text: p.render("NUKE_REASON", vars, fmt.Sprintf("NUKED: [reason] --> %s", reason))})
 		}
 		if nukees := strings.TrimSpace(vars["nukees"]); nukees != "" {
-			outs = append(outs, plugin.Output{Type: "NUKE", Text: p.render("NUKE_NUKEES", vars, fmt.Sprintf("NUKED: [nukees] --> %s", nukees))})
+			perVars := map[string]string{}
+			for k, v := range vars {
+				perVars[k] = v
+			}
+			perVars["nukees_colored"] = colorizeNukees(nukees)
+			outs = append(outs, plugin.Output{Type: "NUKE", Text: p.render("NUKE_NUKEES", perVars, fmt.Sprintf("NUKED: [nukees] --> %s", perVars["nukees_colored"]))})
+			outs = append(outs, plugin.Output{Type: "NUKE", Text: "\u00a0"})
 		}
 	case event.EventUnnuke:
 		outs = append(outs, plugin.Output{Type: "UNNUKE", Text: p.render("UNNUKE", vars, fmt.Sprintf("UNNUKE: [%s] %s by %s", section, rel, evt.User))})
