@@ -319,6 +319,11 @@ func (h *Handler) skipRelease(rel releaseCandidate) bool {
 	if strings.HasPrefix(rel.Name, h.cfg.NukedPrefix) {
 		return true
 	}
+	if db, err := core.GetNukeHistoryDB(false); err == nil && db != nil {
+		if entry, err := db.FindActiveByPath(rel.Path); err == nil && entry != nil {
+			return true
+		}
+	}
 	nameLower := strings.ToLower(rel.Name)
 	for _, token := range h.excludeTokens() {
 		if token != "" && strings.Contains(nameLower, strings.ToLower(token)) {
