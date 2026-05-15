@@ -883,13 +883,21 @@ func (r *RaceDB) SearchDirs(query string, limit int) []core.VFSSearchResult {
 		return nil
 	}
 
-	query = strings.ToLower(strings.TrimSpace(query))
-	if query == "" {
+	tokens := searchTokens(query)
+	if len(tokens) == 0 {
 		return nil
 	}
 	if limit <= 0 {
 		limit = 100
 	}
+
+	where := make([]string, 0, len(tokens))
+	args := make([]interface{}, 0, len(tokens)+1)
+	for _, token := range tokens {
+		where = append(where, "LOWER(rel.path) LIKE ?")
+		args = append(args, "%"+token+"%")
+	}
+	args = append(args, limit)
 
 	rows, err := r.db.Query(`
         SELECT
@@ -905,11 +913,11 @@ func (r *RaceDB) SearchDirs(query string, limit int) []core.VFSSearchResult {
             ) AS mod_time
         FROM releases rel
         LEFT JOIN release_files rf ON rf.release_id = rel.id
-        WHERE LOWER(rel.path) LIKE ?
+        WHERE `+strings.Join(where, " AND ")+`
         GROUP BY rel.id, rel.path
         ORDER BY LOWER(rel.path) ASC
         LIMIT ?
-    `, "%"+query+"%", limit)
+    `, args...)
 	if err != nil {
 		log.Printf("[RaceDB] search query failed for %q: %v", query, err)
 		return nil
@@ -930,4 +938,24 @@ func (r *RaceDB) SearchDirs(query string, limit int) []core.VFSSearchResult {
 		return nil
 	}
 	return results
+}
+
+func searchTokens(query string) []string {
+	fields := strings.Fields(strings.ToLower(strings.TrimSpace(query)))
+	if len(fields) == 0 {
+		return nil
+	}
+	tokens := make([]string, 0, len(fields))
+	seen := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
+		if field == "" {
+			continue
+		}
+		if _, ok := seen[field]; ok {
+			continue
+		}
+		seen[field] = struct{}{}
+		tokens = append(tokens, field)
+	}
+	return tokens
 }

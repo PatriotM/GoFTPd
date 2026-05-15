@@ -1579,14 +1579,28 @@ func (s *Slave) handleCreateSparseFile(ac *protocol.AsyncCommand) interface{} {
 
 func (s *Slave) getDiskStatus() protocol.DiskStatus {
 	var totalAvail, totalCap int64
-	for _, root := range s.physicalRoots() {
-		avail, cap := getDiskSpace(root)
+	roots := make([]protocol.RootDiskStatus, 0, len(s.roots))
+	seen := make(map[string]struct{}, len(s.roots))
+	for _, root := range s.roots {
+		key := root.Path + "|" + cleanVirtualPath(root.MountPath)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		avail, cap := getDiskSpace(root.Path)
 		totalAvail += avail
 		totalCap += cap
+		roots = append(roots, protocol.RootDiskStatus{
+			Path:           root.Path,
+			MountPath:      cleanVirtualPath(root.MountPath),
+			SpaceAvailable: avail,
+			SpaceCapacity:  cap,
+		})
 	}
 	return protocol.DiskStatus{
 		SpaceAvailable: totalAvail,
 		SpaceCapacity:  totalCap,
+		Roots:          roots,
 	}
 }
 

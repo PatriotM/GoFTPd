@@ -400,9 +400,9 @@ announce.TOPCMD_EMPTY = "%c03{TOP:} %c05{No uploads recorded for today.}"
 
 announce.TOPCMD_ERROR = "%c03{TOP:} %c04{%response}"
 
-announce.BW = "%c01{BANDWiDTH:} %c01{Checking %{sitename} bandwidth, please wait ...}"
+announce.BW = "%c01{BANDWiDTH:} %c05{Checking }%c06{%{sitename}} %c05{bandwidth, please wait ...}"
 
-announce.BW_LINE = "%c01{%response}"
+announce.BW_LINE = "%response"
 
 announce.BW_ERROR = "%c01{BANDWiDTH:} %c04{%response}"
 

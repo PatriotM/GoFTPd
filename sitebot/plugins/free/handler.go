@@ -1,6 +1,7 @@
 package free
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -16,9 +17,17 @@ import (
 type Plugin struct {
 	mu          sync.RWMutex
 	slaves      map[string]diskStatus
+	groups      []namedGroup
 	replyTarget string
 	staleAfter  time.Duration
 	theme       *tmpl.Theme
+}
+
+type diskRootStatus struct {
+	Path      string
+	MountPath string
+	Free      int64
+	Total     int64
 }
 
 type diskStatus struct {
@@ -28,7 +37,14 @@ type diskStatus struct {
 	Online    bool
 	Available bool
 	Sections  []string
+	Roots     []diskRootStatus
 	Updated   time.Time
+}
+
+type namedGroup struct {
+	Name       string
+	MountPaths []string
+	Paths      []string
 }
 
 func New() *Plugin {
@@ -56,6 +72,7 @@ func (p *Plugin) Initialize(config map[string]interface{}) error {
 	if n := intConfig(configValue(cfg, config, "stale_after_seconds", "free_stale_after_seconds"), 0); n > 0 {
 		p.staleAfter = time.Duration(n) * time.Second
 	}
+	p.groups = parseNamedGroups(configValue(cfg, config, "named_groups", "free_named_groups"))
 	return nil
 }
 
@@ -87,6 +104,7 @@ func (p *Plugin) update(evt *event.Event) {
 	if len(sections) == 0 {
 		sections = []string{"*"}
 	}
+	roots := parseRootStatuses(evt.Data["roots_json"])
 
 	p.mu.Lock()
 	p.slaves[name] = diskStatus{
@@ -96,6 +114,7 @@ func (p *Plugin) update(evt *event.Event) {
 		Online:    online,
 		Available: available,
 		Sections:  sections,
+		Roots:     roots,
 		Updated:   time.Now(),
 	}
 	p.mu.Unlock()
@@ -138,6 +157,26 @@ func (p *Plugin) show(evt *event.Event) []plugin.Output {
 		vars := diskVars(st, state, now)
 		lines = append(lines, p.render("DF_SLAVE", vars, fmt.Sprintf("DF: %-12s %8s free / %8s total (%5.1f%% free) [%s]",
 			st.Name, humanBytes(st.Free), humanBytes(st.Total), percentFree(st.Free, st.Total), state)))
+	}
+	for _, group := range p.groups {
+		freeBytes, totalBytes, ok := aggregateNamedGroup(statuses, group)
+		if !ok {
+			continue
+		}
+		if filter != "" && !matchesNamedGroup(group, filter) {
+			continue
+		}
+		lines = append(lines, p.render("DF_GROUP", map[string]string{
+			"name":        group.Name,
+			"free":        humanBytes(freeBytes),
+			"total":       humanBytes(totalBytes),
+			"free_pct":    fmt.Sprintf("%.1f", percentFree(freeBytes, totalBytes)),
+			"used_pct":    fmt.Sprintf("%.1f", 100-percentFree(freeBytes, totalBytes)),
+			"free_bytes":  strconv.FormatInt(freeBytes, 10),
+			"total_bytes": strconv.FormatInt(totalBytes, 10),
+			"mount_paths": strings.Join(group.MountPaths, ","),
+			"paths":       strings.Join(group.Paths, ","),
+		}, fmt.Sprintf("DF: %-12s %8s free / %8s total (%5.1f%% free)", group.Name, humanBytes(freeBytes), humanBytes(totalBytes), percentFree(freeBytes, totalBytes))))
 	}
 	if len(lines) == 0 {
 		return p.reply(evt, p.render("DF_NOMATCH", map[string]string{"filter": filter}, fmt.Sprintf("DF: No slave matched %q.", filter)))
@@ -276,6 +315,148 @@ func splitCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+func parseRootStatuses(raw string) []diskRootStatus {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var payload []map[string]string
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return nil
+	}
+	out := make([]diskRootStatus, 0, len(payload))
+	for _, item := range payload {
+		freeBytes, _ := strconv.ParseInt(strings.TrimSpace(item["free_bytes"]), 10, 64)
+		totalBytes, _ := strconv.ParseInt(strings.TrimSpace(item["total_bytes"]), 10, 64)
+		out = append(out, diskRootStatus{
+			Path:      strings.TrimSpace(item["path"]),
+			MountPath: cleanMountPath(item["mount_path"]),
+			Free:      freeBytes,
+			Total:     totalBytes,
+		})
+	}
+	return out
+}
+
+func parseNamedGroups(raw interface{}) []namedGroup {
+	items, ok := raw.([]interface{})
+	if !ok {
+		return nil
+	}
+	out := make([]namedGroup, 0, len(items))
+	for _, item := range items {
+		cfg, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		name, _ := cfg["name"].(string)
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		mountPathCfg := plugin.ToStringSlice(cfg["mount_paths"], nil)
+		mountPaths := make([]string, 0, len(mountPathCfg))
+		for _, p := range mountPathCfg {
+			p = cleanMountPath(p)
+			if p != "" {
+				mountPaths = append(mountPaths, p)
+			}
+		}
+		pathCfg := plugin.ToStringSlice(cfg["paths"], nil)
+		paths := make([]string, 0, len(pathCfg))
+		for _, p := range pathCfg {
+			p = cleanRootPath(p)
+			if p != "" {
+				paths = append(paths, p)
+			}
+		}
+		if len(mountPaths) == 0 && len(paths) == 0 {
+			continue
+		}
+		out = append(out, namedGroup{Name: name, MountPaths: mountPaths, Paths: paths})
+	}
+	return out
+}
+
+func cleanMountPath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return ""
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	p = strings.ReplaceAll(p, "\\", "/")
+	p = strings.TrimRight(p, "/")
+	if p == "" {
+		return "/"
+	}
+	return p
+}
+
+func cleanRootPath(p string) string {
+	p = strings.TrimSpace(strings.ReplaceAll(p, "\\", "/"))
+	if p == "" {
+		return ""
+	}
+	if len(p) > 1 {
+		p = strings.TrimRight(p, "/")
+	}
+	return p
+}
+
+func aggregateNamedGroup(statuses []diskStatus, group namedGroup) (int64, int64, bool) {
+	var freeBytes, totalBytes int64
+	var matched bool
+	for _, st := range statuses {
+		for _, root := range st.Roots {
+			if rootMatchesGroup(root, group) {
+				freeBytes += root.Free
+				totalBytes += root.Total
+				matched = true
+			}
+		}
+	}
+	return freeBytes, totalBytes, matched
+}
+
+func rootMatchesGroup(root diskRootStatus, group namedGroup) bool {
+	rootMount := cleanMountPath(root.MountPath)
+	rootPath := cleanRootPath(root.Path)
+	for _, mountPath := range group.MountPaths {
+		if rootMount == mountPath {
+			return true
+		}
+	}
+	for _, path := range group.Paths {
+		if rootPath == path {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesNamedGroup(group namedGroup, filter string) bool {
+	filter = strings.ToLower(strings.TrimSpace(filter))
+	if filter == "" {
+		return true
+	}
+	if strings.Contains(strings.ToLower(group.Name), filter) {
+		return true
+	}
+	for _, mountPath := range group.MountPaths {
+		if strings.Contains(strings.ToLower(mountPath), filter) {
+			return true
+		}
+	}
+	for _, rootPath := range group.Paths {
+		if strings.Contains(strings.ToLower(rootPath), filter) {
+			return true
+		}
+	}
+	return false
 }
 
 func configValue(section, flat map[string]interface{}, sectionKey, flatKey string) interface{} {

@@ -15,20 +15,22 @@ type testBridge struct {
 		total   int
 	}
 	deleted []string
+	exists  map[string]bool
 }
 
 func (b *testBridge) PluginListDir(dir string) []plugin.FileEntry {
 	return append([]plugin.FileEntry(nil), b.tree[cleanAbs(dir)]...)
 }
-func (b *testBridge) MakeDir(path, owner, group string)                                   {}
+func (b *testBridge) MakeDir(path, owner, group string) error                             { return nil }
 func (b *testBridge) Symlink(linkPath, targetPath string) error                           { return nil }
+func (b *testBridge) VFSSymlink(linkPath, targetPath string) error                        { return nil }
 func (b *testBridge) Chmod(path string, mode uint32) error                                { return nil }
 func (b *testBridge) CreateSparseFile(path string, size int64, owner, group string) error { return nil }
 func (b *testBridge) DeleteFile(path string) error {
 	b.deleted = append(b.deleted, cleanAbs(path))
 	return nil
 }
-func (b *testBridge) RenameFile(from, toDir, toName string) {}
+func (b *testBridge) RenameFile(from, toDir, toName string) error { return nil }
 func (b *testBridge) RelocatePath(from, toDir, toName string) error {
 	b.deleted = append(b.deleted, cleanAbs(path.Join(toDir, toName)))
 	return nil
@@ -43,9 +45,10 @@ func (b *testBridge) ProbeMediaInfo(path, binary string, timeoutSeconds int) (ma
 	return nil, nil
 }
 func (b *testBridge) CacheMediaInfo(path string, fields map[string]string) {}
-func (b *testBridge) FileExists(path string) bool                          { return false }
+func (b *testBridge) FileExists(path string) bool                          { return b.exists[cleanAbs(path)] }
 func (b *testBridge) GetFileSize(path string) int64                        { return 0 }
 func (b *testBridge) GetSFVData(dirPath string) map[string]uint32          { return nil }
+func (b *testBridge) GetDirMediaInfo(dirPath string) map[string]string     { return nil }
 func (b *testBridge) PluginGetVFSRaceStats(dirPath string) ([]plugin.RaceUser, []plugin.RaceGroup, int64, int, int) {
 	stats := b.raceStats[cleanAbs(dirPath)]
 	return nil, nil, 0, stats.present, stats.total
@@ -149,6 +152,115 @@ func TestParseRulesRequiresThresholdsForArchiveOldest(t *testing.T) {
 	})
 	if len(rules) != 0 {
 		t.Fatalf("expected archive_oldest without thresholds to be rejected, got %d rule(s)", len(rules))
+	}
+}
+
+func TestParseRulesAcceptsDatedArchiveDestination(t *testing.T) {
+	rules := parseRules([]interface{}{
+		map[string]interface{}{
+			"name":                    "ebooks-archive",
+			"slave":                   "SLAVE1",
+			"action":                  "archive_oldest",
+			"destination":             "/ARCHiVE/EBOOKS",
+			"destination_dated":       true,
+			"destination_date_format": "MMDD",
+			"watch_mount_path":        "/",
+			"paths":                   []interface{}{"/EBOOKS/*/*"},
+			"trigger_free_gb":         float64(50),
+			"target_free_gb":          float64(80),
+		},
+	})
+	if len(rules) != 1 {
+		t.Fatalf("expected 1 rule, got %d", len(rules))
+	}
+	if !rules[0].DestinationDated {
+		t.Fatalf("expected destination_dated to be enabled")
+	}
+	if rules[0].DestinationDateFormat != "MMDD" {
+		t.Fatalf("unexpected date format: %q", rules[0].DestinationDateFormat)
+	}
+	if rules[0].WatchMountPath != "/" {
+		t.Fatalf("unexpected watch_mount_path: %q", rules[0].WatchMountPath)
+	}
+}
+
+func TestEffectiveFreeBytesUsesWatchedMountPath(t *testing.T) {
+	state := plugin.SlaveState{
+		Name:      "LOCAL",
+		FreeBytes: 300,
+		Roots: []plugin.SlaveRootState{
+			{Path: "/glftpd/site", MountPath: "/", FreeBytes: 50, TotalBytes: 100},
+			{Path: "/glftpd/DISK1", MountPath: "/ARCHiVE", FreeBytes: 100, TotalBytes: 200},
+			{Path: "/glftpd/DISK2", MountPath: "/ARCHiVE", FreeBytes: 150, TotalBytes: 300},
+		},
+	}
+	if got := effectiveFreeBytes(rule{WatchMountPath: "/"}, state); got != 50 {
+		t.Fatalf("effectiveFreeBytes(/) = %d, want 50", got)
+	}
+	if got := effectiveFreeBytes(rule{WatchMountPath: "/ARCHiVE"}, state); got != 250 {
+		t.Fatalf("effectiveFreeBytes(/ARCHiVE) = %d, want 250", got)
+	}
+	if got := effectiveFreeBytes(rule{WatchMountPath: "/OFFSITE"}, state); got != 300 {
+		t.Fatalf("effectiveFreeBytes(/OFFSITE fallback) = %d, want 300", got)
+	}
+}
+
+func TestArchiveDestinationDirUsesCandidateDate(t *testing.T) {
+	ts := time.Date(2026, time.May, 14, 12, 0, 0, 0, time.UTC).Unix()
+	r := rule{
+		Destination:           "/ARCHiVE/EBOOKS",
+		DestinationDated:      true,
+		DestinationDateFormat: "MMDD",
+	}
+	got := archiveDestinationDir(r, ts)
+	if got != "/ARCHiVE/EBOOKS/0514" {
+		t.Fatalf("unexpected archive destination dir: %s", got)
+	}
+}
+
+func TestArchiveVictimPatternUsesTwoLevelsForDatedDestinations(t *testing.T) {
+	r := rule{
+		Destination:      "/ARCHiVE/EBOOKS",
+		DestinationDated: true,
+	}
+	if got := archiveVictimPattern(r); got != "/ARCHiVE/EBOOKS/*/*" {
+		t.Fatalf("unexpected victim pattern: %s", got)
+	}
+}
+
+func TestEvaluateCandidateSkipsExistingDatedArchiveTarget(t *testing.T) {
+	now := time.Date(2026, time.May, 14, 12, 0, 0, 0, time.UTC)
+	modTime := now.Add(-2 * time.Hour).Unix()
+	bridge := &testBridge{
+		tree: map[string][]plugin.FileEntry{
+			"/EBOOKS/0514/release": {
+				{Name: "book.epub", Size: 123, Slave: "SLAVE1"},
+			},
+		},
+		raceStats: map[string]struct {
+			present int
+			total   int
+		}{
+			"/EBOOKS/0514/release": {present: 1, total: 1},
+		},
+		exists: map[string]bool{
+			"/ARCHiVE/EBOOKS/0514/release": true,
+		},
+	}
+	h := &Handler{
+		svc: &plugin.Services{Bridge: bridge},
+		inflight: map[string]time.Time{},
+	}
+	r := rule{
+		Action:                "archive_oldest",
+		Slave:                 "SLAVE1",
+		Destination:           "/ARCHiVE/EBOOKS",
+		DestinationDated:      true,
+		DestinationDateFormat: "MMDD",
+		SkipIncomplete:        true,
+	}
+	if _, ok := h.evaluateCandidate(r, "/EBOOKS/0514/release", modTime, now, nil); ok {
+		t.Fatalf("expected existing dated archive target to skip candidate")
 	}
 }
 

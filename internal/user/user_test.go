@@ -142,3 +142,173 @@ func TestResetTransferStatPeriodsIfDueUsesDedicatedPeriodAnchor(t *testing.T) {
 		t.Fatalf("LastLogin should remain unchanged")
 	}
 }
+
+func TestUpdateStatsWithCreditsMergesParallelSessions(t *testing.T) {
+	tmp := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join("etc", "users"), 0755); err != nil {
+		t.Fatalf("MkdirAll(users) error = %v", err)
+	}
+	passwd := "Finity:x:100:300:0:/site:/bin/false\n"
+	if err := os.WriteFile(filepath.Join("etc", "passwd"), []byte(passwd), 0600); err != nil {
+		t.Fatalf("WriteFile(passwd) error = %v", err)
+	}
+	input := strings.Join([]string{
+		"USER Added by goftpd",
+		"GENERAL 0,120 -1 0 0",
+		"LOGINS 16 0 6 10",
+		"TIMEFRAME 0 0",
+		"FLAGS 3",
+		"TAGLINE No Tagline Set",
+		"HOMEDIR /site",
+		"DIR /",
+		"ADDED 1712306777 goftpd",
+		"EXPIRES 0",
+		"CREDITS 0",
+		"RATIO 3",
+		"LOGINSLOTS 16",
+		"MAXSIM 0",
+		"UPLOADSLOTS 10",
+		"DOWNLOADSLOTS 6",
+		"WKLYALLOTMENT 0",
+		"GROUPSLOTS 0 0",
+		"ALLUP 0 0 0",
+		"ALLDN 0 0 0",
+		"WKUP 0 0 0",
+		"WKDN 0 0 0",
+		"DAYUP 0 0 0",
+		"DAYDN 0 0 0",
+		"MONTHUP 0 0 0",
+		"MONTHDN 0 0 0",
+		"NUKE 0 0 0",
+		"TIME 0 0 0 0 0",
+		"PRIMARY_GROUP iND",
+		"GROUP iND 0",
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join("etc", "users", "Finity"), []byte(input), 0600); err != nil {
+		t.Fatalf("WriteFile(user) error = %v", err)
+	}
+
+	u1, err := LoadUser("Finity", nil)
+	if err != nil {
+		t.Fatalf("LoadUser(u1) error = %v", err)
+	}
+	u2, err := LoadUser("Finity", nil)
+	if err != nil {
+		t.Fatalf("LoadUser(u2) error = %v", err)
+	}
+	u1.UpdateStatsWithCredits(100, true, true)
+	u2.UpdateStatsWithCredits(200, true, true)
+
+	saved, err := LoadUser("Finity", nil)
+	if err != nil {
+		t.Fatalf("LoadUser(saved) error = %v", err)
+	}
+	if saved.DayUp.Files != 2 || saved.DayUp.Bytes != 300 {
+		t.Fatalf("saved DayUp = %+v, want 2 files / 300 bytes", saved.DayUp)
+	}
+	if saved.AllUp.Files != 2 || saved.AllUp.Bytes != 300 {
+		t.Fatalf("saved AllUp = %+v, want 2 files / 300 bytes", saved.AllUp)
+	}
+	if saved.WkUp.Files != 2 || saved.WkUp.Bytes != 300 {
+		t.Fatalf("saved WkUp = %+v, want 2 files / 300 bytes", saved.WkUp)
+	}
+	if saved.MonthUp.Files != 2 || saved.MonthUp.Bytes != 300 {
+		t.Fatalf("saved MonthUp = %+v, want 2 files / 300 bytes", saved.MonthUp)
+	}
+	if saved.Credits != 900 {
+		t.Fatalf("saved Credits = %d, want 900", saved.Credits)
+	}
+}
+
+func TestUpdateDownloadStatsWithCreditsMergesParallelSessions(t *testing.T) {
+	tmp := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join("etc", "users"), 0755); err != nil {
+		t.Fatalf("MkdirAll(users) error = %v", err)
+	}
+	passwd := "Finity:x:100:300:0:/site:/bin/false\n"
+	if err := os.WriteFile(filepath.Join("etc", "passwd"), []byte(passwd), 0600); err != nil {
+		t.Fatalf("WriteFile(passwd) error = %v", err)
+	}
+	input := strings.Join([]string{
+		"USER Added by goftpd",
+		"GENERAL 0,120 -1 0 0",
+		"LOGINS 16 0 6 10",
+		"TIMEFRAME 0 0",
+		"FLAGS 3",
+		"TAGLINE No Tagline Set",
+		"HOMEDIR /site",
+		"DIR /",
+		"ADDED 1712306777 goftpd",
+		"EXPIRES 0",
+		"CREDITS 1000",
+		"RATIO 3",
+		"LOGINSLOTS 16",
+		"MAXSIM 0",
+		"UPLOADSLOTS 10",
+		"DOWNLOADSLOTS 6",
+		"WKLYALLOTMENT 0",
+		"GROUPSLOTS 0 0",
+		"ALLUP 0 0 0",
+		"ALLDN 0 0 0",
+		"WKUP 0 0 0",
+		"WKDN 0 0 0",
+		"DAYUP 0 0 0",
+		"DAYDN 0 0 0",
+		"MONTHUP 0 0 0",
+		"MONTHDN 0 0 0",
+		"NUKE 0 0 0",
+		"TIME 0 0 0 0 0",
+		"PRIMARY_GROUP iND",
+		"GROUP iND 0",
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join("etc", "users", "Finity"), []byte(input), 0600); err != nil {
+		t.Fatalf("WriteFile(user) error = %v", err)
+	}
+
+	u1, err := LoadUser("Finity", nil)
+	if err != nil {
+		t.Fatalf("LoadUser(u1) error = %v", err)
+	}
+	u2, err := LoadUser("Finity", nil)
+	if err != nil {
+		t.Fatalf("LoadUser(u2) error = %v", err)
+	}
+	u1.UpdateStatsWithCredits(100, false, true)
+	u2.UpdateStatsWithCredits(200, false, true)
+
+	saved, err := LoadUser("Finity", nil)
+	if err != nil {
+		t.Fatalf("LoadUser(saved) error = %v", err)
+	}
+	if saved.DayDn.Files != 2 || saved.DayDn.Bytes != 300 {
+		t.Fatalf("saved DayDn = %+v, want 2 files / 300 bytes", saved.DayDn)
+	}
+	if saved.WkDn.Files != 2 || saved.WkDn.Bytes != 300 {
+		t.Fatalf("saved WkDn = %+v, want 2 files / 300 bytes", saved.WkDn)
+	}
+	if saved.MonthDn.Files != 2 || saved.MonthDn.Bytes != 300 {
+		t.Fatalf("saved MonthDn = %+v, want 2 files / 300 bytes", saved.MonthDn)
+	}
+	if saved.AllDn.Files != 2 || saved.AllDn.Bytes != 300 {
+		t.Fatalf("saved AllDn = %+v, want 2 files / 300 bytes", saved.AllDn)
+	}
+	if saved.Credits != 700 {
+		t.Fatalf("saved Credits = %d, want 700", saved.Credits)
+	}
+}

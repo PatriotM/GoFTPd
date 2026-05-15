@@ -17,7 +17,10 @@ type rule struct {
 	Slave            string
 	Action           string
 	Paths            []string
+	WatchMountPath   string
 	Destination      string
+	DestinationDated bool
+	DestinationDateFormat string
 	TargetSlaves     []string
 	TriggerFreeBytes int64
 	TargetFreeBytes  int64
@@ -149,10 +152,11 @@ func (h *Handler) evaluate(now time.Time) {
 }
 
 func (h *Handler) applyDeleteRule(rule rule, state plugin.SlaveState, now time.Time, activeTransfers []string) {
-	if state.FreeBytes >= rule.TriggerFreeBytes {
+	currentFree := effectiveFreeBytes(rule, state)
+	if currentFree >= rule.TriggerFreeBytes {
 		return
 	}
-	estimatedFree := state.FreeBytes
+	estimatedFree := currentFree
 	actions := 0
 	for estimatedFree < rule.TargetFreeBytes && actions < rule.MaxActions {
 		cand, ok := h.findOldestCandidate(rule, now, activeTransfers)
@@ -178,17 +182,18 @@ func (h *Handler) applyDeleteRule(rule rule, state plugin.SlaveState, now time.T
 			cand.Path,
 			rule.Slave,
 			float64(cand.Bytes)/(1024.0*1024.0*1024.0),
-			float64(state.FreeBytes)/(1024.0*1024.0*1024.0),
+			float64(currentFree)/(1024.0*1024.0*1024.0),
 			float64(estimatedFree)/(1024.0*1024.0*1024.0),
 		)
 	}
 }
 
 func (h *Handler) applyArchiveRule(rule rule, state plugin.SlaveState, now time.Time, activeTransfers []string) {
-	if state.FreeBytes >= rule.TriggerFreeBytes {
+	currentFree := effectiveFreeBytes(rule, state)
+	if currentFree >= rule.TriggerFreeBytes {
 		return
 	}
-	estimatedFree := state.FreeBytes
+	estimatedFree := currentFree
 	actions := 0
 	for estimatedFree < rule.TargetFreeBytes && actions < rule.MaxActions {
 		cand, ok := h.findOldestCandidate(rule, now, activeTransfers)
@@ -226,9 +231,9 @@ func (h *Handler) archiveCandidate(fromPath, toDir, toName, targetSlave string) 
 }
 
 func (h *Handler) startArchiveJob(rule rule, state plugin.SlaveState, cand candidate) {
-	destDir := cleanAbs(rule.Destination)
+	destDir := archiveDestinationDir(rule, cand.ModTime)
 	destName := path.Base(cand.Path)
-	targetPlan, targetErr := h.chooseArchiveTarget(rule, cand.Bytes)
+	targetPlan, targetErr := h.chooseArchiveTarget(rule, cand)
 	h.wg.Add(1)
 	go func() {
 		defer h.wg.Done()
@@ -262,22 +267,18 @@ func (h *Handler) startArchiveJob(rule rule, state plugin.SlaveState, cand candi
 	}()
 }
 
-func (h *Handler) chooseArchiveTarget(rule rule, requiredBytes int64) (archiveTargetPlan, error) {
+func (h *Handler) chooseArchiveTarget(rule rule, cand candidate) (archiveTargetPlan, error) {
 	if len(rule.TargetSlaves) == 0 {
 		return archiveTargetPlan{}, nil
 	}
 	if h.svc == nil || h.svc.ListSlaveStates == nil {
 		return archiveTargetPlan{}, fmt.Errorf("archive target selection unavailable")
 	}
+	requiredBytes := cand.Bytes
 	states := h.svc.ListSlaveStates()
 	activeTransfers := h.activeTransferPaths()
 	now := time.Now()
-	destPattern := cleanAbs(rule.Destination)
-	if destPattern == "/" {
-		destPattern = "/*"
-	} else {
-		destPattern = strings.TrimRight(destPattern, "/") + "/*"
-	}
+	destPattern := archiveVictimPattern(rule)
 
 	bestImmediateIdx := -1
 	var bestImmediate plugin.SlaveState
@@ -487,7 +488,7 @@ func (h *Handler) evaluateCandidate(rule rule, dirPath string, modTime int64, no
 		return candidate{}, false
 	}
 	if strings.EqualFold(rule.Action, "archive_oldest") {
-		destDir := cleanAbs(rule.Destination)
+		destDir := archiveDestinationDir(rule, modTime)
 		destPath := cleanAbs(path.Join(destDir, path.Base(dirPath)))
 		if destDir == "" || destDir == "/" || h.svc.Bridge.FileExists(destPath) {
 			return candidate{}, false
@@ -621,7 +622,10 @@ func parseRules(raw interface{}) []rule {
 			Slave:            strings.TrimSpace(stringValue(cfg, "slave", "")),
 			Action:           strings.ToLower(strings.TrimSpace(stringValue(cfg, "action", "delete_oldest"))),
 			Paths:            paths,
+			WatchMountPath:   cleanAbs(stringValue(cfg, "watch_mount_path", "")),
 			Destination:      cleanAbs(stringValue(cfg, "destination", "")),
+			DestinationDated: boolValue(cfg, "destination_dated", false),
+			DestinationDateFormat: normalizeArchiveDateFormat(stringValue(cfg, "destination_date_format", stringValue(cfg, "date_format", "MMDD"))),
 			TargetSlaves:     stringSliceConfig(cfg["target_slaves"]),
 			TriggerFreeBytes: bytesFromRule(cfg, "trigger_free"),
 			TargetFreeBytes:  bytesFromRule(cfg, "target_free"),
@@ -651,6 +655,100 @@ func parseRules(raw interface{}) []rule {
 		out = append(out, r)
 	}
 	return out
+}
+
+func effectiveFreeBytes(rule rule, state plugin.SlaveState) int64 {
+	watch := cleanAbs(rule.WatchMountPath)
+	if watch == "" || watch == "/" {
+		if watch == "/" && len(state.Roots) > 0 {
+			var total int64
+			var matched bool
+			for _, root := range state.Roots {
+				if cleanAbs(root.MountPath) == "/" {
+					total += root.FreeBytes
+					matched = true
+				}
+			}
+			if matched {
+				return total
+			}
+		}
+		return state.FreeBytes
+	}
+	var total int64
+	var matched bool
+	for _, root := range state.Roots {
+		if cleanAbs(root.MountPath) == watch {
+			total += root.FreeBytes
+			matched = true
+		}
+	}
+	if matched {
+		return total
+	}
+	return state.FreeBytes
+}
+
+func archiveDestinationDir(rule rule, modTime int64) string {
+	destDir := cleanAbs(rule.Destination)
+	if !rule.DestinationDated || destDir == "" || destDir == "/" {
+		return destDir
+	}
+	var t time.Time
+	if modTime > 0 {
+		t = time.Unix(modTime, 0)
+	} else {
+		t = time.Now()
+	}
+	return cleanAbs(path.Join(destDir, formatArchiveDateDir(t, rule.DestinationDateFormat)))
+}
+
+func archiveVictimPattern(rule rule) string {
+	destDir := cleanAbs(rule.Destination)
+	if destDir == "/" {
+		if rule.DestinationDated {
+			return "/*/*"
+		}
+		return "/*"
+	}
+	destDir = strings.TrimRight(destDir, "/")
+	if rule.DestinationDated {
+		return destDir + "/*/*"
+	}
+	return destDir + "/*"
+}
+
+func normalizeArchiveDateFormat(format string) string {
+	if strings.TrimSpace(format) == "" {
+		return "MMDD"
+	}
+	return strings.TrimSpace(format)
+}
+
+func formatArchiveDateDir(t time.Time, format string) string {
+	format = normalizeArchiveDateFormat(format)
+	replacer := strings.NewReplacer(
+		"WW-YYYY", "{WEEK2}-{ISOYEAR4}",
+		"YYYY-WW", "{ISOYEAR4}-{WEEK2}",
+		"YYYY", "{YEAR4}",
+		"YY", "{YEAR2}",
+		"MM", "{MONTH2}",
+		"DD", "{DAY2}",
+		"WW", "{WEEK2}",
+	)
+	tokenized := replacer.Replace(format)
+	if tokenized == format {
+		tokenized = "{MONTH2}{DAY2}"
+	}
+	isoYear, isoWeek := t.ISOWeek()
+	return strings.NewReplacer(
+		"{YEAR4}", t.Format("2006"),
+		"{YEAR2}", t.Format("06"),
+		"{MONTH2}", t.Format("01"),
+		"{DAY2}", t.Format("02"),
+		"{WEEK2}", fmt.Sprintf("%02d", isoWeek),
+		"{ISOYEAR4}", fmt.Sprintf("%04d", isoYear),
+	).Replace(tokenized)
 }
 
 func bytesFromRule(cfg map[string]interface{}, key string) int64 {

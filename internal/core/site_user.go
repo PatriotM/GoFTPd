@@ -26,6 +26,26 @@ func deletedUserPasswdPath(username string) string {
 	return filepath.Join(deletedUsersDir, username+".passwd")
 }
 
+func listDeletedUsers() ([]string, error) {
+	entries, err := os.ReadDir(deletedUsersDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	users := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		name := strings.TrimSpace(entry.Name())
+		if name == "" || entry.IsDir() || strings.HasSuffix(name, ".passwd") {
+			continue
+		}
+		users = append(users, name)
+	}
+	sort.Strings(users)
+	return users, nil
+}
+
 func createUserFromArgs(s *Session, username, plaintextPassword, primaryGroup string, ipArgs []string) (*user.User, string, error) {
 	hashedPass, err := HashPassword(plaintextPassword)
 	if err != nil {
@@ -1310,7 +1330,20 @@ func (s *Session) HandleSiteReAdd(args []string) bool {
 		return false
 	}
 	if len(args) < 1 {
-		fmt.Fprintf(s.Conn, "501 Usage: SITE READD <user> [newpass]\r\n")
+		users, err := listDeletedUsers()
+		if err != nil {
+			fmt.Fprintf(s.Conn, "550 Failed to read deleted users: %v\r\n", err)
+			return false
+		}
+		if len(users) == 0 {
+			fmt.Fprintf(s.Conn, "200 No deleted users stored.\r\n")
+			return false
+		}
+		fmt.Fprintf(s.Conn, "200- Deleted users:\r\n")
+		for _, name := range users {
+			fmt.Fprintf(s.Conn, "200- %s\r\n", name)
+		}
+		fmt.Fprintf(s.Conn, "200 %d deleted user(s) stored.\r\n", len(users))
 		return false
 	}
 	if _, err := user.LoadUser(args[0], s.GroupMap); err == nil {

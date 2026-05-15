@@ -15,11 +15,16 @@
 #     target_free_*. If that destination path routes to another slave,
 #     spacekeeper will copy it there in the background and then remove the
 #     source when the copy finishes cleanly. You can also force one or more
-#     specific archive slaves with target_slaves.
+#     specific archive slaves with target_slaves. Optional destination_dated
+#     support can place archived releases in date buckets like /ARCHiVE/EBOOKS/0514.
 #
 # Rules are written in virtual FTP paths, not disk paths or devices.
 # Active transfers, incomplete races, and dated bucket dirs can be skipped
 # safely by the built-in candidate checks.
+# Optional watch_mount_path lets one slave monitor free space for a specific
+# virtual root only, such as "/" for the live site, "/ARCHiVE" for local
+# archive mounts, or "/OFFSITE" for offsite mounts exposed through
+# mounted_roots.
 # If target_slaves is set and none of them currently has enough free space,
 # spacekeeper deletes the oldest archived release(s) under destination on one
 # of those archive slaves until the incoming release fits there.
@@ -40,6 +45,10 @@ rules:
   - name: "0day-space"
     slave: "SLAVE1"
     action: "delete_oldest"
+    # Optional: watch free space only for this mount path on the slave.
+    # "/" is usually your live site root. If omitted, the whole slave total
+    # is used.
+    watch_mount_path: "/"
     # No destination here: delete rules only need paths + thresholds.
 
     # Candidate release directories. These are virtual paths, not disk paths.
@@ -71,9 +80,15 @@ rules:
   - name: "0day-archive"
     slave: "SLAVE1"
     action: "archive_oldest"
+    # Watch only the live site root for this decision.
+    watch_mount_path: "/"
     # Archive rules use destination because they move releases instead of
     # deleting them directly.
     destination: "/ARCHiVE/0DAY"
+    # Optional: append a dated subdir under destination based on the release
+    # mtime. Format tokens match dateddirs (MMDD, YYYYMMDD, YYYY-WW, etc).
+    destination_dated: true
+    destination_date_format: "MMDD"
     # Optional explicit archive pool. If omitted, normal upload routing for
     # destination decides where the archive lands.
     target_slaves: ["SLAVE2", "SLAVE3"]
@@ -85,5 +100,38 @@ rules:
     skip_incomplete: true
     skip_active_races: true
     max_actions_per_cycle: 3
+
+  # Example 2-tier flow on one slave with mounted_roots:
+  # 1. live site "/" archives into "/ARCHiVE"
+  # 2. local archive "/ARCHiVE" archives into "/OFFSITE"
+  # 3. offsite "/OFFSITE" deletes oldest when full
+  - name: "ebooks-local-to-offsite"
+    slave: "LOCAL"
+    action: "archive_oldest"
+    watch_mount_path: "/ARCHiVE"
+    destination: "/OFFSITE/EBOOKS"
+    destination_dated: true
+    destination_date_format: "MMDD"
+    paths:
+      - "/ARCHiVE/EBOOKS/*/*"
+    trigger_free_gb: 200
+    target_free_gb: 400
+    min_age_seconds: 86400
+    skip_incomplete: true
+    skip_active_races: true
+    max_actions_per_cycle: 5
+
+  - name: "ebooks-offsite-delete"
+    slave: "LOCAL"
+    action: "delete_oldest"
+    watch_mount_path: "/OFFSITE"
+    paths:
+      - "/OFFSITE/EBOOKS/*/*"
+    trigger_free_gb: 100
+    target_free_gb: 250
+    min_age_seconds: 86400
+    skip_incomplete: true
+    skip_active_races: true
+    max_actions_per_cycle: 5
 
 debug: false

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -79,6 +80,13 @@ type User struct {
 	RatioExtra    string            `yaml:"-"`
 	StatExtras    map[string]string `yaml:"-"`
 	TimeFields    []string          `yaml:"-"`
+}
+
+var userStatLocks sync.Map
+
+func userStatLock(name string) *sync.Mutex {
+	lock, _ := userStatLocks.LoadOrStore(name, &sync.Mutex{})
+	return lock.(*sync.Mutex)
 }
 
 // LoadUser reads user file - supports userfile format
@@ -575,45 +583,64 @@ func (u *User) ResetTransferStatPeriodsIfDue(now time.Time) bool {
 // not add upload credits or charge download credits.
 func (u *User) UpdateStatsWithCredits(bytes int64, isUpload bool, applyCredits bool) {
 	now := time.Now()
-	u.ResetTransferStatPeriodsIfDue(now)
-	if u.PeriodAnchor <= 0 {
-		u.PeriodAnchor = now.Unix()
+	lock := userStatLock(u.Name)
+	lock.Lock()
+	defer lock.Unlock()
+
+	current := u
+	if latest, err := LoadUser(u.Name, nil); err == nil && latest != nil {
+		current = latest
+	}
+	current.ResetTransferStatPeriodsIfDue(now)
+	if current.PeriodAnchor <= 0 {
+		current.PeriodAnchor = now.Unix()
 	}
 	if isUpload {
-		u.AllUp.Files++
-		u.AllUp.Bytes += bytes
-		u.WkUp.Files++
-		u.WkUp.Bytes += bytes
-		u.DayUp.Files++
-		u.DayUp.Bytes += bytes
-		u.MonthUp.Files++
-		u.MonthUp.Bytes += bytes
+		current.AllUp.Files++
+		current.AllUp.Bytes += bytes
+		current.WkUp.Files++
+		current.WkUp.Bytes += bytes
+		current.DayUp.Files++
+		current.DayUp.Bytes += bytes
+		current.MonthUp.Files++
+		current.MonthUp.Bytes += bytes
 
-		if applyCredits && u.Ratio > 0 {
-			u.Credits += (bytes * int64(u.Ratio))
+		if applyCredits && current.Ratio > 0 {
+			current.Credits += (bytes * int64(current.Ratio))
 		}
 	} else {
-		u.AllDn.Files++
-		u.AllDn.Bytes += bytes
-		u.WkDn.Files++
-		u.WkDn.Bytes += bytes
-		u.DayDn.Files++
-		u.DayDn.Bytes += bytes
-		u.MonthDn.Files++
-		u.MonthDn.Bytes += bytes
+		current.AllDn.Files++
+		current.AllDn.Bytes += bytes
+		current.WkDn.Files++
+		current.WkDn.Bytes += bytes
+		current.DayDn.Files++
+		current.DayDn.Bytes += bytes
+		current.MonthDn.Files++
+		current.MonthDn.Bytes += bytes
 
-		if applyCredits && u.Ratio > 0 {
-			u.Credits -= bytes
-			if u.Credits < 0 {
-				u.Credits = 0
+		if applyCredits && current.Ratio > 0 {
+			current.Credits -= bytes
+			if current.Credits < 0 {
+				current.Credits = 0
 			}
 		}
 	}
-	if err := u.Save(); err != nil {
+	if err := current.Save(); err != nil {
 		log.Printf("[USER] failed to persist stats for %s: %v", u.Name, err)
 	} else {
-		u.FileModTime = now.Unix()
+		current.FileModTime = now.Unix()
 	}
+	u.Credits = current.Credits
+	u.AllUp = current.AllUp
+	u.AllDn = current.AllDn
+	u.WkUp = current.WkUp
+	u.WkDn = current.WkDn
+	u.DayUp = current.DayUp
+	u.DayDn = current.DayDn
+	u.MonthUp = current.MonthUp
+	u.MonthDn = current.MonthDn
+	u.PeriodAnchor = current.PeriodAnchor
+	u.FileModTime = current.FileModTime
 }
 
 func (u *User) HasFlag(flag string) bool {

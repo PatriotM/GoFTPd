@@ -3,6 +3,8 @@ package top
 import (
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -27,5 +29,30 @@ func TestParseDayUploadSnapshotFallsBackToFileModTime(t *testing.T) {
 	}
 	if stat.User != "Tester" || stat.Group != "iND" || stat.Files != 12 || stat.Bytes != 3456 {
 		t.Fatalf("parseDayUploadSnapshot() = %+v", stat)
+	}
+}
+
+func TestBuildLinesShowsActualUploaderCount(t *testing.T) {
+	tmp := t.TempDir()
+	usersDir := filepath.Join(tmp, "users")
+	if err := os.MkdirAll(usersDir, 0755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	now := time.Now()
+	for _, name := range []string{"alpha", "beta", "gamma"} {
+		path := filepath.Join(usersDir, name)
+		content := "DAYUP 1 1048576 0\nTIME 0 0 0 0 " + strconv.FormatInt(now.Unix(), 10) + "\nPRIMARY_GROUP iND\n"
+		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", name, err)
+		}
+	}
+	p := New()
+	p.usersDir = usersDir
+	lines, err := p.buildLines(2, true)
+	if err != nil {
+		t.Fatalf("buildLines() error = %v", err)
+	}
+	if len(lines) == 0 || !strings.Contains(lines[0], "3 Users") {
+		t.Fatalf("header line = %q, want total uploader count", strings.Join(lines, "\n"))
 	}
 }

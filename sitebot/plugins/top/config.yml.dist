@@ -6,6 +6,9 @@
 #   !top 25
 users_dir: "../etc/users"
 
+# Uses sitebot/global timezone when set in the main config so daily cutover
+# matches the server stats reset.
+
 channels: ["#goftpd-chat"]
 
 # reply_target supports "channel", "notice", "pm", or a fixed "#channel".

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -116,9 +117,58 @@ func (p *Plugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 	waitText := fmt.Sprintf("Checking %s bandwidth, please wait ...", p.siteName)
 	outLines := []string{p.render("BW", map[string]string{"response": waitText, "sitename": p.siteName}, "BANDWiDTH: "+waitText)}
 	for _, line := range lines {
-		outLines = append(outLines, p.render("BW_LINE", map[string]string{"response": line, "sitename": p.siteName}, line))
+		colored := stylizeBandwidthLine(line)
+		outLines = append(outLines, p.render("BW_LINE", map[string]string{"response": colored, "sitename": p.siteName}, colored))
 	}
 	return p.replies(evt, outLines...), nil
+}
+
+var bwSummaryPattern = regexp.MustCompile(`^BANDWiDTH: \((\d+) uploading at ([^)]+)\) - \((\d+) downloading at ([^)]+)\) - \((\d+) browsing\) - \((\d+) idling\) - \[(\d+) users / (\d+) connections total at ([^\]]+)\]$`)
+var bwSlavePattern = regexp.MustCompile(`^BANDWiDTH: ([^-]+?) - \((\d+) uploading at ([^)]+)\) - \((\d+) downloading at ([^)]+)\) - \[(\d+) transfers at ([^\]]+)\]$`)
+var bwUserTransferPattern = regexp.MustCompile(`^BANDWiDTH: (.+?) is (uploading|downloading) (.+?) at (.+?)(?: via (.+))?$`)
+
+func stylizeBandwidthLine(line string) string {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return line
+	}
+	if m := bwSummaryPattern.FindStringSubmatch(line); m != nil {
+		return fmt.Sprintf(
+			"\x0301BANDWiDTH:\x0f (\x0303%s uploading at %s\x0f) - (\x0304%s downloading at %s\x0f) - (\x0312%s browsing\x0f) - (\x0314%s idling\x0f) - [\x0306%s users\x0f / \x0307%s connections\x0f total at %s]",
+			m[1], colorSpeed(m[2], "03"),
+			m[3], colorSpeed(m[4], "04"),
+			m[5], m[6],
+			m[7], m[8], colorSpeed(m[9], "07"),
+		)
+	}
+	if m := bwSlavePattern.FindStringSubmatch(line); m != nil {
+		return fmt.Sprintf(
+			"\x0301BANDWiDTH:\x0f \x0306%s\x0f - (\x0303%s uploading at %s\x0f) - (\x0304%s downloading at %s\x0f) - [\x0307%s transfers at %s\x0f]",
+			strings.TrimSpace(m[1]),
+			m[2], colorSpeed(m[3], "03"),
+			m[4], colorSpeed(m[5], "04"),
+			m[6], colorSpeed(m[7], "07"),
+		)
+	}
+	if m := bwUserTransferPattern.FindStringSubmatch(line); m != nil {
+		actionColor := "03"
+		if strings.EqualFold(m[2], "downloading") {
+			actionColor = "04"
+		}
+		via := ""
+		if len(m) > 5 && strings.TrimSpace(m[5]) != "" {
+			via = fmt.Sprintf(" via \x0306%s\x0f", strings.TrimSpace(m[5]))
+		}
+		return fmt.Sprintf(
+			"\x0301BANDWiDTH:\x0f \x0306%s\x0f is \x03%s%s\x0f \x0312%s\x0f at %s%s",
+			m[1], actionColor, m[2], m[3], colorSpeed(m[4], actionColor), via,
+		)
+	}
+	return "\x0301" + line + "\x0f"
+}
+
+func colorSpeed(speed string, color string) string {
+	return fmt.Sprintf("\x03%s%s\x0f", color, strings.TrimSpace(speed))
 }
 
 func (p *Plugin) query(args string) ([]string, error) {

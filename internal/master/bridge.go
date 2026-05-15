@@ -622,16 +622,7 @@ func (b *Bridge) DownloadFile(filePath string, clientData net.Conn, username, pr
 	}
 
 	// Bridge: slave -> client
-	var checksum uint32
-	var writer io.Writer = clientData
-	if position == 0 {
-		h := crc32.NewIEEE()
-		writer = io.MultiWriter(clientData, h)
-		defer func() {
-			checksum = h.Sum32()
-		}()
-	}
-	written, err := io.Copy(writer, slaveConn)
+	written, err := io.Copy(clientData, slaveConn)
 	slaveConn.Close()
 	status, statusErr := slave.WaitTransferStatus(transferResp.Info.TransferIndex, 2*time.Hour)
 
@@ -649,7 +640,7 @@ func (b *Bridge) DownloadFile(filePath string, clientData net.Conn, username, pr
 	}
 
 	log.Printf("[Bridge] Downloaded %s from slave %s (%d bytes, offset=%d)", filePath, slave.Name(), written, position)
-	return checksum, nil
+	return 0, nil
 }
 
 // DeleteFile deletes from all slaves and VFS.
