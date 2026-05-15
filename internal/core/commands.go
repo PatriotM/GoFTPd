@@ -1128,17 +1128,8 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					}
 				}
 
-				for _, marker := range incompleteMarkerEntriesWithOptions(bridge, s.Config, activeIncompleteIndicator(s.Config), targetPath, entries, false) {
-					ts := timeutil.FTPMachineUnix(marker.ModTime)
-					output.WriteString(fmt.Sprintf("Modify=%s;Perm=el;Type=%s; %s\r\n",
-						ts, mlsdSymlinkType(marker), marker.Name))
-				}
-
 				for _, e := range entries {
 					if strings.HasPrefix(e.Name, ".") {
-						continue
-					}
-					if isIncompleteMarkerName(activeIncompleteIndicator(s.Config), e.Name) {
 						continue
 					}
 					aclPath := path.Join(s.Config.ACLBasePath, targetPath, e.Name)
@@ -1267,19 +1258,11 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				if entry, found := bridge.GetPathEntry(targetPath); found && !entry.IsDir {
 					aclPath := path.Join(s.Config.ACLBasePath, targetPath)
 					if s.ACLEngine.CanPerform(s.User, "LIST", aclPath) && !strings.HasPrefix(entry.Name, ".") {
-						if !isIncompleteMarkerName(activeIncompleteIndicator(s.Config), entry.Name) {
-							output.WriteString(entry.Name + "\r\n")
-						}
+						output.WriteString(entry.Name + "\r\n")
 					}
 				} else {
 					for _, e := range bridge.ListDir(targetPath) {
 						if strings.HasPrefix(e.Name, ".") {
-							continue
-						}
-						if strings.HasSuffix(e.Name, "-missing") || strings.HasSuffix(e.Name, "-MISSING") {
-							continue
-						}
-						if isIncompleteMarkerName(activeIncompleteIndicator(s.Config), e.Name) {
 							continue
 						}
 						if strings.HasPrefix(e.Name, "[#") || strings.HasPrefix(e.Name, "[:") {
@@ -1400,21 +1383,8 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					}
 				}
 
-				for _, marker := range incompleteMarkerEntries(bridge, s.Config, activeIncompleteIndicator(s.Config), targetPath, entries) {
-					ts := timeutil.Unix(marker.ModTime).Format("Jan _2 15:04")
-					name := fmt.Sprintf("%s -> %s", marker.Name, marker.LinkTarget)
-					output.WriteString(fmt.Sprintf("%s   1 %-8s %-8s %10s %s %s\r\n",
-						ftpListMode(marker), marker.Owner, marker.Group, "0", ts, name))
-				}
-
 				for _, e := range entries {
 					if strings.HasPrefix(e.Name, ".") {
-						continue
-					}
-					if strings.HasSuffix(e.Name, "-missing") || strings.HasSuffix(e.Name, "-MISSING") {
-						continue
-					}
-					if isIncompleteMarkerName(activeIncompleteIndicator(s.Config), e.Name) {
 						continue
 					}
 					if strings.HasPrefix(e.Name, "[#") || strings.HasPrefix(e.Name, "[:") {
@@ -1455,24 +1425,6 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						mode, owner, group, size, ts, name))
 				}
 
-				if zipscript.ShowMissingFilesForDir(s.Config.Zipscript, targetPath) && total > 0 && present < total {
-					sfvMeta := bridge.GetSFVData(targetPath)
-					verifiedPresent := bridge.GetVerifiedSFVPresentFiles(targetPath)
-					if sfvMeta != nil {
-						for fileName := range sfvMeta {
-							key := raceCRCKey(fileName)
-							if verifiedPresent != nil {
-								if verifiedPresent[key] {
-									continue
-								}
-							} else if existingFiles[fileName] {
-								continue
-							}
-							output.WriteString(fmt.Sprintf("-rw-r--r--   1 %-8s %-8s %10s %s %s-MISSING\r\n",
-								"GoFTPd", "GoFTPd", "0", now, fileName))
-						}
-					}
-				}
 			}
 		} else {
 			// FALLBACK: Standalone mode directory listing for cbftp
@@ -2299,12 +2251,6 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					siteName = "GoFTPd"
 				}
 
-				_, present, total := dirRaceProgress(bridge, s.Config, target)
-				existingFiles := make(map[string]bool)
-				for _, e := range entries {
-					existingFiles[e.Name] = true
-				}
-
 				if zipscript.ShowStatusBarForDir(s.Config.Zipscript, target) {
 					if statusName := dirRaceStatusName(bridge, s.Config, target, siteName); strings.TrimSpace(statusName) != "" {
 						mode := "drwxr-xr-x"
@@ -2318,21 +2264,8 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					}
 				}
 
-				for _, marker := range incompleteMarkerEntries(bridge, s.Config, activeIncompleteIndicator(s.Config), target, entries) {
-					ts := timeutil.Unix(marker.ModTime).Format("Jan _2 15:04")
-					name := fmt.Sprintf("%s -> %s", marker.Name, marker.LinkTarget)
-					fmt.Fprintf(s.Conn, " %s   1 %-8s %-8s %10s %s %s\r\n",
-						ftpListMode(marker), marker.Owner, marker.Group, "0", ts, name)
-				}
-
 				for _, e := range entries {
 					if strings.HasPrefix(e.Name, ".") {
-						continue
-					}
-					if strings.HasSuffix(e.Name, "-missing") || strings.HasSuffix(e.Name, "-MISSING") {
-						continue
-					}
-					if isIncompleteMarkerName(activeIncompleteIndicator(s.Config), e.Name) {
 						continue
 					}
 					if strings.HasPrefix(e.Name, "[#") || strings.HasPrefix(e.Name, "[:") {
@@ -2372,24 +2305,6 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						mode, owner, group, size, ts, name)
 				}
 
-				if zipscript.ShowMissingFilesForDir(s.Config.Zipscript, target) && total > 0 && present < total {
-					sfvMeta := bridge.GetSFVData(target)
-					verifiedPresent := bridge.GetVerifiedSFVPresentFiles(target)
-					if sfvMeta != nil {
-						for fileName := range sfvMeta {
-							key := raceCRCKey(fileName)
-							if verifiedPresent != nil {
-								if verifiedPresent[key] {
-									continue
-								}
-							} else if existingFiles[fileName] {
-								continue
-							}
-							fmt.Fprintf(s.Conn, " -rw-r--r--   1 %-8s %-8s %10s %s %s-MISSING\r\n",
-								"GoFTPd", "GoFTPd", "0", now, fileName)
-						}
-					}
-				}
 			}
 		} else {
 			listPath := filepath.Join(s.Config.StoragePath, target)
@@ -2548,97 +2463,6 @@ func isIncompleteMarkerName(pattern, name string) bool {
 	}, name)
 }
 
-func incompleteMarkerEntries(bridge MasterBridge, cfg *Config, pattern, dirPath string, entries []MasterFileEntry) []MasterFileEntry {
-	return incompleteMarkerEntriesWithOptions(bridge, cfg, pattern, dirPath, entries, true)
-}
-
-func incompleteMarkerEntriesWithOptions(bridge MasterBridge, cfg *Config, pattern, dirPath string, entries []MasterFileEntry, allowExpensiveFallback bool) []MasterFileEntry {
-	pattern = strings.TrimSpace(pattern)
-	if pattern == "" || cfg == nil {
-		return nil
-	}
-	cleanDirPath := path.Clean("/" + strings.TrimSpace(dirPath))
-	if cleanDirPath == "/" {
-		return nil
-	}
-	bulkProgress := bridge.GetImmediateReleaseProgress(dirPath)
-	childFacts := bridge.GetImmediateReleaseChildFacts(dirPath)
-	existing := make(map[string]bool, len(entries))
-	for _, e := range entries {
-		existing[e.Name] = true
-	}
-	releases := make([]zipscript.StatusMarkerRelease, 0, len(entries))
-	for _, e := range entries {
-		if !e.IsDir || e.IsSymlink || strings.HasPrefix(e.Name, ".") || isIncompleteMarkerName(pattern, e.Name) {
-			continue
-		}
-		releasePath := markerLinkTarget(dirPath, e.Name)
-		if !zipscript.UsesReleaseCheckEntry(cfg.Zipscript, releasePath) {
-			continue
-		}
-		if zipscript.IsIgnoredReleaseSubdir(cfg.Zipscript, releasePath) {
-			continue
-		}
-		progress, hasProgress := bulkProgress[releasePath]
-		facts, hasFacts := childFacts[releasePath]
-		if !hasProgress {
-			continue
-		}
-		release := zipscript.StatusMarkerRelease{
-			Name:    e.Name,
-			Path:    releasePath,
-			ModTime: e.ModTime,
-			Present: progress.Present,
-			Total:   progress.Total,
-			HasSFV:  progress.HasSFV,
-		}
-		if hasFacts {
-			release.VisibleCount = facts.VisibleCount
-			release.HasNFO = facts.HasNFO
-			if !release.HasSFV {
-				release.HasSFV = facts.HasSFV
-			}
-		}
-		releases = append(releases, release)
-	}
-	out := make([]MasterFileEntry, 0, len(releases))
-	for _, marker := range zipscript.BuildStatusMarkerEntries(cfg.Zipscript, cleanDirPath, releases) {
-		if existing[marker.Name] {
-			continue
-		}
-		out = append(out, MasterFileEntry{
-			Name:       marker.Name,
-			IsSymlink:  true,
-			LinkTarget: marker.LinkTarget,
-			ModTime:    marker.ModTime,
-			Owner:      "GoFTPd",
-			Group:      "GoFTPd",
-		})
-		existing[marker.Name] = true
-	}
-	return out
-}
-
-func resolveIncompleteMarkerTarget(bridge MasterBridge, cfg *Config, pattern, parent, name string) string {
-	if !isIncompleteMarkerName(pattern, name) {
-		return ""
-	}
-	for _, marker := range incompleteMarkerEntries(bridge, cfg, pattern, parent, bridge.ListDir(parent)) {
-		if marker.Name == name && marker.LinkTarget != "" {
-			target := path.Clean("/" + strings.TrimSpace(marker.LinkTarget))
-			if bridge.FileExists(target) {
-				return target
-			}
-			rebased := markerLinkTarget(parent, path.Base(target))
-			if bridge.FileExists(rebased) {
-				return rebased
-			}
-			return target
-		}
-	}
-	return ""
-}
-
 func resolveKnownMarkerTarget(bridge MasterBridge, cfg *Config, parent, name string) string {
 	if bridge == nil || cfg == nil {
 		return ""
@@ -2659,8 +2483,16 @@ func resolveKnownMarkerTarget(bridge MasterBridge, cfg *Config, parent, name str
 			continue
 		}
 		seen[pattern] = struct{}{}
-		if resolved := resolveIncompleteMarkerTarget(bridge, cfg, pattern, parent, name); resolved != "" {
-			return resolved
+		if !isIncompleteMarkerName(pattern, name) {
+			continue
+		}
+		markerPath := path.Clean(path.Join("/", strings.TrimSpace(parent), strings.TrimSpace(name)))
+		if entry, found := bridge.GetPathEntry(markerPath); found && entry.IsSymlink && strings.TrimSpace(entry.LinkTarget) != "" {
+			target := path.Clean("/" + strings.TrimSpace(entry.LinkTarget))
+			if bridge.FileExists(target) {
+				return target
+			}
+			return target
 		}
 	}
 	return ""
@@ -3104,10 +2936,13 @@ func buildReleaseUploadPipelineState(s *Session, bridge MasterBridge, in release
 		if sfvEntries, err := bridge.GetSFVInfo(in.FilePath); err == nil {
 			log.Printf("[MASTER-ZS] Parsed SFV %s: %d entries", in.FileName, len(sfvEntries))
 			bridge.CacheSFV(in.UploadDir, in.FileName, sfvEntries)
-			syncMasterSFVMissingMarkers(s.Config, bridge, in.UploadDir)
 		}
 	}
 	state.SFVEntries = bridge.GetSFVData(in.UploadDir)
+	if state.SFVEntries != nil {
+		syncMasterSFVMissingMarkers(s.Config, bridge, in.UploadDir)
+		bridge.SyncStatusMarkersForPath(in.UploadDir, true)
+	}
 
 	if err := refreshZipDIZFromArchive(bridge, in.UploadDir, in.FilePath, in.FileName); err != nil && s.Config.Debug {
 		log.Printf("[MASTER-ZS] zip diz refresh skipped for %s: %v", in.FilePath, err)

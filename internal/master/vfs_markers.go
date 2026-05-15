@@ -2,6 +2,7 @@ package master
 
 import (
 	"path"
+	"sort"
 	"strings"
 
 	"goftpd/internal/zipscript"
@@ -139,5 +140,26 @@ func (sm *SlaveManager) syncStatusMarkersForDir(dirPath string) {
 			continue
 		}
 		sm.vfs.AddSymlink(markerPath, targetPath)
+	}
+}
+
+func (sm *SlaveManager) rebuildAllStatusMarkers() {
+	if sm == nil || sm.vfs == nil {
+		return
+	}
+	files := sm.vfs.GetAllFiles()
+	if len(files) == 0 {
+		return
+	}
+	dirs := make([]string, 0, len(files))
+	for filePath, entry := range files {
+		if entry == nil || !entry.IsDir || entry.IsSymlink {
+			continue
+		}
+		dirs = append(dirs, filePath)
+	}
+	sort.Strings(dirs)
+	for _, dirPath := range dirs {
+		sm.syncStatusMarkersForDir(dirPath)
 	}
 }

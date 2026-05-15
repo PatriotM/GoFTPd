@@ -1055,6 +1055,7 @@ func (b *Bridge) MakeDir(dirPath, owner, group string) error {
 		return err
 	}
 	b.sm.MakeDirectoryOnSlave(dirPath, owner, group, slave.Name())
+	b.sm.SyncStatusMarkersForPath(dirPath, true)
 	return nil
 }
 

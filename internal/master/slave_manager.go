@@ -17,6 +17,7 @@ import (
 
 	"goftpd/internal/core"
 	"goftpd/internal/protocol"
+	"goftpd/internal/zipscript"
 )
 
 // SlaveManager listens for slave connections and manages all RemoteSlave objects.
@@ -1229,6 +1230,7 @@ func (sm *SlaveManager) initializeSlaveRemerge(rs *RemoteSlave, basePath string,
 	if !scoped {
 		if _, useCachedVFS := sm.startupCachedSlaves.LoadAndDelete(rs.name); useCachedVFS {
 			log.Printf("[SlaveManager] Reusing cached VFS for slave %s on startup; skipping initial remerge", rs.name)
+			sm.rebuildAllStatusMarkers()
 			rs.remerging.Store(false)
 			rs.SetAvailable(true)
 			sm.publishDiskStatus(rs)
@@ -1317,6 +1319,9 @@ func (sm *SlaveManager) ProcessRemerge(rs *RemoteSlave, resp *protocol.AsyncResp
 			fullPath = resp.Path + "/" + inode.Name
 		}
 		if sm.vfs.IsExcludedPath(fullPath) {
+			continue
+		}
+		if zipscript.IsStatusMarkerName(sm.statusMarkerConfig().Zipscript, inode.Name) {
 			continue
 		}
 

@@ -1018,7 +1018,11 @@ func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
 			partialRemerge = false
 		}
 	}
-	excludePaths := normalizeExcludeVFSPaths(ac.Args[6:])
+	excludePathsStart := 5
+	if len(ac.Args) > 5 {
+		excludePathsStart = 6
+	}
+	excludePaths := normalizeExcludeVFSPaths(ac.Args[excludePathsStart:])
 
 	scanTargets := s.scanTargetsForBase(basePath, rootsOnly)
 	log.Printf("[Slave] Starting remerge from %s across %d roots (rootsOnly=%v)", basePath, len(scanTargets), rootsOnly)
