@@ -115,6 +115,44 @@ func TestMarkFileMissingRefreshesStatusMarkers(t *testing.T) {
 	}
 }
 
+func TestCacheZipProgressRefreshesStatusMarkers(t *testing.T) {
+	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
+	sm.SetStatusMarkerConfig(zipscript.Config{
+		Enabled: true,
+		Sections: zipscript.SectionsConfig{
+			Zip: []string{"/0DAY/*"},
+		},
+		Incomplete: zipscript.IncompleteConfig{
+			Enabled:        true,
+			Indicator:      "[incomplete]-%0",
+			NoSFVIndicator: "[no-sfv]-%0",
+			NFOIndicator:   "[no-nfo]-%0",
+		},
+	})
+
+	sm.vfs.AddFile("/0DAY", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.AddFile("/0DAY/release", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.AddFile("/0DAY/release/file.zip", VFSFile{Size: 100, Seen: true, SlaveName: "LOCAL"})
+
+	bridge := &Bridge{sm: sm}
+	bridge.CacheReleaseProgress("/0DAY/release", 1, 2, true)
+	sm.SyncStatusMarkersForPath("/0DAY/release", true)
+
+	got := sm.vfs.GetFile("/0DAY/[incomplete]-release")
+	if got == nil || !got.IsSymlink || got.LinkTarget != "/0DAY/release" {
+		t.Fatalf("expected zip incomplete marker to target release, got %+v", got)
+	}
+	if got := sm.vfs.GetFile("/0DAY/[no-sfv]-release"); got != nil {
+		t.Fatalf("did not expect no-sfv marker for zip manifest progress, got %+v", got)
+	}
+
+	bridge.CacheReleaseProgress("/0DAY/release", 2, 2, true)
+	sm.SyncStatusMarkersForPath("/0DAY/release", true)
+	if got := sm.vfs.GetFile("/0DAY/[incomplete]-release"); got != nil {
+		t.Fatalf("did not expect zip incomplete marker after completion, got %+v", got)
+	}
+}
+
 func TestSetRemergeFlowControlNormalizesThresholds(t *testing.T) {
 	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
 	sm.SetRemergeFlowControl(0, 999)

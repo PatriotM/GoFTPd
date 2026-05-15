@@ -93,33 +93,29 @@ func (s *Session) HandleSiteNuke(args []string) bool {
 	nukeeLine := FormatNukees(BuildNukeUserStats(uploaderBytes), []string{"goftpd", s.User.Name})
 
 	for username, bytes := range uploaderBytes {
-		// Load user
-		u, err := user.LoadUser(username, s.GroupMap)
-		if err != nil {
+		var nukedCredits int64
+		var ratio int
+		var timesNuked int64
+		if _, err := user.MutateAndSave(username, s.GroupMap, func(u *user.User) error {
+			// User normally gets: bytes * ratio. Nuke removes that times multiplier.
+			ratio = u.Ratio
+			baseCredits := bytes * int64(u.Ratio)
+			nukedCredits = baseCredits * int64(multiplier)
+			u.Credits -= nukedCredits
+			if u.Credits < 0 {
+				u.Credits = 0
+			}
+			u.NukeStat.Meta = now
+			u.NukeStat.Files++
+			u.NukeStat.Bytes += bytes
+			timesNuked = u.NukeStat.Files
+			return nil
+		}); err != nil {
 			continue
 		}
-
-		// Calculate credits to remove using user's ratio
-		// User normally gets: bytes * ratio
-		// Nuke removes: (bytes * ratio) * multiplier
-		baseCredits := bytes * int64(u.Ratio)
-		nukedCredits := baseCredits * int64(multiplier)
-
-		// Remove credits
-		u.Credits -= nukedCredits
-		if u.Credits < 0 {
-			u.Credits = 0
-		}
-
-		// Update NUKE stats
-		u.NukeStat.Meta = now     // Last nuke timestamp
-		u.NukeStat.Files += 1     // Times nuked
-		u.NukeStat.Bytes += bytes // Total bytes nuked
-
-		// Save user
-		if err := u.Save(); err == nil && s.Config.Debug {
+		if s.Config.Debug {
 			log.Printf("[NUKE] Updated %s: -%d credits (ratio %d), %d times nuked",
-				username, nukedCredits, u.Ratio, u.NukeStat.Files)
+				username, nukedCredits, ratio, timesNuked)
 		}
 
 		totalNuked += nukedCredits
@@ -136,16 +132,16 @@ func (s *Session) HandleSiteNuke(args []string) bool {
 	}
 	if db, err := GetNukeHistoryDB(s.Config.Debug); err == nil {
 		if err := db.RecordNuke(NukeHistoryEntry{
-			OriginalPath:         targetPath,
-			CurrentPath:          newSitePath,
-			ReleaseName:          dirName,
-			Multiplier:           multiplier,
-			Reason:               reason,
-			NukedBy:              s.User.Name,
-			UsersAffected:        len(uploaderBytes),
-			TotalBytes:           SumBytes(uploaderBytes),
-			TotalCreditsRemoved:  totalNuked,
-			Nukees:               nukeeLine,
+			OriginalPath:        targetPath,
+			CurrentPath:         newSitePath,
+			ReleaseName:         dirName,
+			Multiplier:          multiplier,
+			Reason:              reason,
+			NukedBy:             s.User.Name,
+			UsersAffected:       len(uploaderBytes),
+			TotalBytes:          SumBytes(uploaderBytes),
+			TotalCreditsRemoved: totalNuked,
+			Nukees:              nukeeLine,
 		}); err != nil && s.Config.Debug {
 			log.Printf("[NUKE-DB] record local nuke failed for %s: %v", targetPath, err)
 		}
@@ -231,22 +227,20 @@ func (s *Session) HandleSiteUnnuke(args []string) bool {
 	}
 
 	for username, bytes := range uploaderBytes {
-		u, err := user.LoadUser(username, s.GroupMap)
-		if err != nil {
+		var nukedCredits int64
+		var ratio int
+		if _, err := user.MutateAndSave(username, s.GroupMap, func(u *user.User) error {
+			ratio = u.Ratio
+			baseCredits := bytes * int64(u.Ratio)
+			nukedCredits = baseCredits * int64(restoreMultiplier)
+			u.Credits += nukedCredits
+			u.NukeStat = user.StatLine{}
+			return nil
+		}); err != nil {
 			continue
 		}
-
-		// Restore the exact recorded nuke multiplier when known.
-		baseCredits := bytes * int64(u.Ratio)
-		nukedCredits := baseCredits * int64(restoreMultiplier)
-
-		u.Credits += nukedCredits
-
-		// Update NUKE stats - clear them
-		u.NukeStat = user.StatLine{}
-
-		if err := u.Save(); err == nil && s.Config.Debug {
-			log.Printf("[UNNUKE] Restored %s: +%d credits (ratio %d)", username, nukedCredits, u.Ratio)
+		if s.Config.Debug {
+			log.Printf("[UNNUKE] Restored %s: +%d credits (ratio %d)", username, nukedCredits, ratio)
 		}
 
 		totalRestored += nukedCredits
@@ -374,16 +368,16 @@ func (s *Session) handleSiteNukeVFS(bridge MasterBridge, target string, multipli
 	}
 	if db, err := GetNukeHistoryDB(s.Config.Debug); err == nil {
 		if err := db.RecordNuke(NukeHistoryEntry{
-			OriginalPath:         dirPath,
-			CurrentPath:          result.NewPath,
-			ReleaseName:          result.ReleaseName,
-			Multiplier:           multiplier,
-			Reason:               reason,
-			NukedBy:              s.User.Name,
-			UsersAffected:        result.UsersAffected,
-			TotalBytes:           SumBytes(uploaderBytes),
-			TotalCreditsRemoved:  result.TotalCreditsRemoved,
-			Nukees:               nukeeLine,
+			OriginalPath:        dirPath,
+			CurrentPath:         result.NewPath,
+			ReleaseName:         result.ReleaseName,
+			Multiplier:          multiplier,
+			Reason:              reason,
+			NukedBy:             s.User.Name,
+			UsersAffected:       result.UsersAffected,
+			TotalBytes:          SumBytes(uploaderBytes),
+			TotalCreditsRemoved: result.TotalCreditsRemoved,
+			Nukees:              nukeeLine,
 		}); err != nil && s.Config.Debug {
 			log.Printf("[NUKE-DB] record master nuke failed for %s: %v", dirPath, err)
 		}

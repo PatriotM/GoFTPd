@@ -54,20 +54,20 @@ type User struct {
 	NukeStat StatLine `yaml:"nukestat"`
 
 	// Slot Configuration
-	LoginSlots       int  `yaml:"login_slots"`      // Max concurrent logins
-	MaxSim           int  `yaml:"max_sim"`          // Max total concurrent transfers
-	UploadSlots      int  `yaml:"upload_slots"`   // Max concurrent uploads
-	DownloadSlots    int  `yaml:"download_slots"` // Max concurrent downloads
-	WeeklyAllotment  int64 `yaml:"weekly_allotment"`
-	GroupSlots       int  `yaml:"group_slots"`
-	LeechSlots       int  `yaml:"leech_slots"`
-	LoginSlotsSet    bool `yaml:"-"`
-	MaxSimSet        bool `yaml:"-"`
-	UploadSlotsSet   bool `yaml:"-"`
-	DownloadSlotsSet bool `yaml:"-"`
-	WeeklyAllotmentSet bool `yaml:"-"`
-	GroupSlotsSet    bool `yaml:"-"`
-	LeechSlotsSet    bool `yaml:"-"`
+	LoginSlots         int   `yaml:"login_slots"`    // Max concurrent logins
+	MaxSim             int   `yaml:"max_sim"`        // Max total concurrent transfers
+	UploadSlots        int   `yaml:"upload_slots"`   // Max concurrent uploads
+	DownloadSlots      int   `yaml:"download_slots"` // Max concurrent downloads
+	WeeklyAllotment    int64 `yaml:"weekly_allotment"`
+	GroupSlots         int   `yaml:"group_slots"`
+	LeechSlots         int   `yaml:"leech_slots"`
+	LoginSlotsSet      bool  `yaml:"-"`
+	MaxSimSet          bool  `yaml:"-"`
+	UploadSlotsSet     bool  `yaml:"-"`
+	DownloadSlotsSet   bool  `yaml:"-"`
+	WeeklyAllotmentSet bool  `yaml:"-"`
+	GroupSlotsSet      bool  `yaml:"-"`
+	LeechSlotsSet      bool  `yaml:"-"`
 
 	// Raw userfile fields we preserve across load/save so imported glFTPD
 	// accounts keep their original shape instead of being flattened.
@@ -87,6 +87,34 @@ var userStatLocks sync.Map
 func userStatLock(name string) *sync.Mutex {
 	lock, _ := userStatLocks.LoadOrStore(name, &sync.Mutex{})
 	return lock.(*sync.Mutex)
+}
+
+func WithFileLock(name string, fn func() error) error {
+	lock := userStatLock(name)
+	lock.Lock()
+	defer lock.Unlock()
+	return fn()
+}
+
+func MutateAndSave(name string, groupMap map[string]int, mutate func(*User) error) (*User, error) {
+	var updated *User
+	err := WithFileLock(name, func() error {
+		u, err := LoadUser(name, groupMap)
+		if err != nil {
+			return err
+		}
+		if mutate != nil {
+			if err := mutate(u); err != nil {
+				return err
+			}
+		}
+		if err := u.saveLocked(); err != nil {
+			return err
+		}
+		updated = u
+		return nil
+	})
+	return updated, err
 }
 
 // LoadUser reads user file - supports userfile format
@@ -415,6 +443,13 @@ func (u *User) syncLoginsLine() {
 
 // Save writes user back to userfile-format file
 func (u *User) Save() error {
+	lock := userStatLock(u.Name)
+	lock.Lock()
+	defer lock.Unlock()
+	return u.saveLocked()
+}
+
+func (u *User) saveLocked() error {
 	// Use exact case
 	path := filepath.Join("etc", "users", u.Name)
 	if u.HomeRoot == "" {
@@ -459,11 +494,21 @@ func (u *User) Save() error {
 		os.MkdirAll(dir, 0755)
 	}
 
-	file, err := os.Create(path)
+	mode := os.FileMode(0600)
+	if st, err := os.Stat(path); err == nil {
+		mode = st.Mode().Perm()
+	}
+	file, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	tmpPath := file.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
 
 	fmt.Fprintf(file, "USER %s\n", u.UserLine)
 	fmt.Fprintf(file, "GENERAL %s\n", u.GeneralLine)
@@ -513,6 +558,20 @@ func (u *User) Save() error {
 		fmt.Fprintf(file, "IP %s\n", ip)
 	}
 
+	if err := file.Chmod(mode); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		_ = os.Remove(path)
+		if renameErr := os.Rename(tmpPath, path); renameErr != nil {
+			return err
+		}
+	}
+	cleanup = false
 	return nil
 }
 
@@ -625,7 +684,7 @@ func (u *User) UpdateStatsWithCredits(bytes int64, isUpload bool, applyCredits b
 			}
 		}
 	}
-	if err := current.Save(); err != nil {
+	if err := current.saveLocked(); err != nil {
 		log.Printf("[USER] failed to persist stats for %s: %v", u.Name, err)
 	} else {
 		current.FileModTime = now.Unix()

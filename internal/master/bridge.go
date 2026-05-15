@@ -1980,6 +1980,25 @@ func (b *Bridge) SyncReleaseRaceStats(dirPath string) error {
 	return b.raceDB.ReplaceReleaseFiles(cleanDirPath, meta.SFVName, meta.SFVEntries, files)
 }
 
+func (b *Bridge) CacheReleaseProgress(dirPath string, present, total int, hasManifest bool) {
+	if b == nil || b.sm == nil || total <= 0 {
+		return
+	}
+	cleanDirPath := filepath.Clean(dirPath)
+	parent := filepath.Clean(filepath.Dir(cleanDirPath))
+	facts := b.sm.GetVFS().GetImmediateChildDirFacts(parent)[cleanDirPath]
+	snapshot := &vfsReleaseSnapshot{
+		VisibleCount: facts.VisibleCount,
+		HasSFV:       facts.HasSFV || hasManifest,
+		HasNFO:       facts.HasNFO,
+		Present:      present,
+		Total:        total,
+	}
+	b.sm.releaseStateMu.Lock()
+	b.sm.setReleaseFactLocked(cleanDirPath, snapshot)
+	b.sm.releaseStateMu.Unlock()
+}
+
 // GetSFVData returns cached SFV entries for a directory.
 func (b *Bridge) GetSFVData(dirPath string) map[string]uint32 {
 	meta := b.sm.GetVFS().GetSFVData(dirPath)

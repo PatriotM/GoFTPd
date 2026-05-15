@@ -1498,6 +1498,8 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		restOffset := s.RestOffset
 		s.RestOffset = 0
 		var existingNames []string
+		var masterUploadEntries []MasterFileEntry
+		masterUploadEntriesLoaded := false
 		uploadDir := s.CurrentDir
 		uploadPath := path.Clean(path.Join(s.CurrentDir, fileName))
 		if path.IsAbs(strings.TrimSpace(fileName)) {
@@ -1510,6 +1512,13 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		}
 		uploadDir = path.Dir(uploadPath)
 		fileName = path.Base(uploadPath)
+		getMasterUploadEntries := func(bridge MasterBridge) []MasterFileEntry {
+			if !masterUploadEntriesLoaded {
+				masterUploadEntries = bridge.ListDir(uploadDir)
+				masterUploadEntriesLoaded = true
+			}
+			return masterUploadEntries
+		}
 
 		aclPath := path.Join(s.Config.ACLBasePath, uploadPath)
 		if !s.ACLEngine.CanPerform(s.User, "UPLOAD", aclPath) {
@@ -1527,7 +1536,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				}
 				fileExists = bridge.FileExists(uploadPath)
 				if s.Config.XdupeEnabled {
-					xdupeNames = existingFileNamesForXDupe(bridge.ListDir(uploadDir))
+					xdupeNames = existingFileNamesForXDupe(getMasterUploadEntries(bridge))
 				}
 			}
 			if fileExists && restOffset == 0 {
@@ -1563,8 +1572,9 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		}
 		if s.Config.Mode == "master" && s.MasterManager != nil {
 			if bridge, ok := s.MasterManager.(MasterBridge); ok {
-				existingNames = zipscriptExistingNames(bridge, uploadDir)
-				existingDirs := zipscriptExistingDirNames(bridge, uploadDir)
+				entries := getMasterUploadEntries(bridge)
+				existingNames = zipscriptExistingNamesFromEntries(entries)
+				existingDirs := zipscriptExistingDirNamesFromEntries(entries)
 				if shouldBlockZipDIZUpload(s.Config, uploadDir, fileName) {
 					fmt.Fprintf(s.Conn, "550 zipscript: upload file_id.diz inside the zip, not as a standalone file\r\n")
 					return false
@@ -2725,12 +2735,6 @@ func listStatusAudioExtra(bridge MasterBridge, cfg *Config, dirPath string) stri
 	}
 	info := bridge.GetDirMediaInfo(dirPath)
 	if !zipscript.AudioInfoLooksUsable(info) {
-		if _, fields, ok := findFirstUsableAudioInfo(bridge, cfg, dirPath); ok {
-			bridge.CacheMediaInfo(dirPath, fields)
-			info = fields
-		}
-	}
-	if !zipscript.AudioInfoLooksUsable(info) {
 		return ""
 	}
 	genre := firstNonEmptyMap(info, "genre", "g_genre")
@@ -2877,6 +2881,10 @@ type releaseUploadPipelineState struct {
 	ShouldAnnounceNR bool
 }
 
+type releaseProgressCacheBridge interface {
+	CacheReleaseProgress(dirPath string, present, total int, hasManifest bool)
+}
+
 func runReleaseUploadPipeline(s *Session, bridge MasterBridge, in releaseUploadPipelineInput) {
 	if s == nil || s.Config == nil || bridge == nil {
 		return
@@ -2940,8 +2948,14 @@ func buildReleaseUploadPipelineState(s *Session, bridge MasterBridge, in release
 	}
 	state.SFVEntries = bridge.GetSFVData(in.UploadDir)
 	if state.SFVEntries != nil {
-		syncMasterSFVMissingMarkers(s.Config, bridge, in.UploadDir)
-		bridge.SyncStatusMarkersForPath(in.UploadDir, true)
+		if state.SFVUpload {
+			syncMasterSFVMissingMarkers(s.Config, bridge, in.UploadDir)
+			bridge.SyncStatusMarkersForPath(in.UploadDir, true)
+		} else {
+			// Payload uploads only need their own marker cleared; full SFV rebuilds
+			// are O(files in release) and run when the SFV is parsed or rescanned.
+			clearMasterSFVMissingMarker(bridge, in.UploadDir, in.FileName)
+		}
 	}
 
 	if err := refreshZipDIZFromArchive(bridge, in.UploadDir, in.FilePath, in.FileName); err != nil && s.Config.Debug {
@@ -3060,7 +3074,10 @@ func queueMasterUploadPostHooks(s *Session, bridge MasterBridge, uploadDir, medi
 }
 
 func zipscriptExistingNames(bridge MasterBridge, dirPath string) []string {
-	entries := bridge.ListDir(dirPath)
+	return zipscriptExistingNamesFromEntries(bridge.ListDir(dirPath))
+}
+
+func zipscriptExistingNamesFromEntries(entries []MasterFileEntry) []string {
 	out := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		out = append(out, entry.Name)
@@ -3069,7 +3086,10 @@ func zipscriptExistingNames(bridge MasterBridge, dirPath string) []string {
 }
 
 func zipscriptExistingDirNames(bridge MasterBridge, dirPath string) []string {
-	entries := bridge.ListDir(dirPath)
+	return zipscriptExistingDirNamesFromEntries(bridge.ListDir(dirPath))
+}
+
+func zipscriptExistingDirNamesFromEntries(entries []MasterFileEntry) []string {
 	out := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir {
@@ -4418,6 +4438,16 @@ func zipDirCompleteAfterUpload(bridge MasterBridge, dirPath, fileName string, en
 	return false
 }
 
+func cacheZipReleaseProgress(bridge MasterBridge, dirPath string, present, total int) {
+	if bridge == nil || total <= 0 {
+		return
+	}
+	if cacher, ok := bridge.(releaseProgressCacheBridge); ok {
+		cacher.CacheReleaseProgress(dirPath, present, total, true)
+	}
+	bridge.SyncStatusMarkersForPath(dirPath, true)
+}
+
 func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName string, fileSize int64, data map[string]string) ([]VFSRaceUser, []VFSRaceGroup, int64, int, int64, bool) {
 	type freshRaceStatsBridge interface {
 		GetVFSRaceStatsFresh(dirPath string) (users []VFSRaceUser, groups []VFSRaceGroup, totalBytes int64, present int, total int)
@@ -4436,6 +4466,7 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 		expected := zipExpectedPartsFromDIZ(bridge, dirPath)
 		entries := bridge.ListDir(dirPath)
 		users, totalBytes, total := zipDirRaceStats(bridge, dirPath, entries, expected)
+		cacheZipReleaseProgress(bridge, dirPath, total, expected)
 		raceComplete := zipDirCompleteAfterUpload(bridge, dirPath, fileName, entries, expected)
 		if raceComplete && expected > 0 && total < expected {
 			for _, entry := range entries {

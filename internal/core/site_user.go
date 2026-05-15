@@ -189,13 +189,13 @@ func (s *Session) HandleSiteGrpAdd(args []string) bool {
 		}
 	}
 	groupCfg := &GroupFile{
-		Name:         groupName,
-		Slots:        -1,
-		LeechSlots:   0,
+		Name:           groupName,
+		Slots:          -1,
+		LeechSlots:     0,
 		AllotmentSlots: 0,
-		MaxAllotment: 0,
-		GroupNFO:     desc,
-		Simult:       0,
+		MaxAllotment:   0,
+		GroupNFO:       desc,
+		Simult:         0,
 	}
 	if err := groupCfg.Save(); err != nil {
 		fmt.Fprintf(s.Conn, "550 Failed to create group %s: %v\r\n", groupName, err)
@@ -684,7 +684,10 @@ func (s *Session) HandleSiteAddIP(args []string) bool {
 		}
 	}
 
-	u.Save()
+	if err := saveUserIPsOnly(u.Name, u.IPs); err != nil {
+		fmt.Fprintf(s.Conn, "550 Failed to save IPs for %s: %v\r\n", args[0], err)
+		return false
+	}
 	fmt.Fprintf(s.Conn, "200 Added %d IP(s) to %s (total: %d).\r\n", added, args[0], len(u.IPs))
 	return false
 }
@@ -721,7 +724,10 @@ func (s *Session) HandleSiteDelIP(args []string) bool {
 		}
 	}
 
-	u.Save()
+	if err := saveUserIPsOnly(u.Name, u.IPs); err != nil {
+		fmt.Fprintf(s.Conn, "550 Failed to save IPs for %s: %v\r\n", args[0], err)
+		return false
+	}
 	fmt.Fprintf(s.Conn, "200 Removed %d IP(s) from %s (remaining: %d).\r\n", removed, args[0], len(u.IPs))
 	return false
 }
@@ -771,7 +777,10 @@ func (s *Session) HandleSiteSelfIP(args []string) bool {
 			targetUser.IPs = append(targetUser.IPs, ip)
 			added++
 		}
-		targetUser.Save()
+		if err := saveUserIPsOnly(targetUser.Name, targetUser.IPs); err != nil {
+			fmt.Fprintf(s.Conn, "550 Failed to save IPs for %s: %v\r\n", targetUser.Name, err)
+			return false
+		}
 		if added > 0 {
 			s.emitSelfIPChange(targetUser.Name, "ADD", "", strings.Join(args[3:], ", "), added)
 		}
@@ -793,7 +802,10 @@ func (s *Session) HandleSiteSelfIP(args []string) bool {
 				}
 			}
 		}
-		targetUser.Save()
+		if err := saveUserIPsOnly(targetUser.Name, targetUser.IPs); err != nil {
+			fmt.Fprintf(s.Conn, "550 Failed to save IPs for %s: %v\r\n", targetUser.Name, err)
+			return false
+		}
 		if removed > 0 {
 			s.emitSelfIPChange(targetUser.Name, "DEL", strings.Join(args[3:], ", "), "", removed)
 		}
@@ -822,7 +834,10 @@ func (s *Session) HandleSiteSelfIP(args []string) bool {
 			fmt.Fprintf(s.Conn, "550 IP %s not found on %s.\r\n", oldIP, targetUser.Name)
 			return false
 		}
-		targetUser.Save()
+		if err := saveUserIPsOnly(targetUser.Name, targetUser.IPs); err != nil {
+			fmt.Fprintf(s.Conn, "550 Failed to save IPs for %s: %v\r\n", targetUser.Name, err)
+			return false
+		}
 		s.emitSelfIPChange(targetUser.Name, "CHG", oldIP, newIP, 1)
 		fmt.Fprintf(s.Conn, "200 Changed IP for %s: %s -> %s.\r\n", targetUser.Name, oldIP, newIP)
 		return false
@@ -830,6 +845,106 @@ func (s *Session) HandleSiteSelfIP(args []string) bool {
 		fmt.Fprintf(s.Conn, "501 Usage: SITE SELFIP <LIST|ADD|DEL|CHG> <user> <pass> [args]\r\n")
 		return false
 	}
+}
+
+func saveUserIPsOnly(username string, ips []string) error {
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return fmt.Errorf("empty username")
+	}
+	normalized := make([]string, 0, len(ips))
+	seen := make(map[string]struct{}, len(ips))
+	for _, ip := range ips {
+		ip = strings.TrimSpace(ip)
+		if ip == "" {
+			continue
+		}
+		if _, ok := seen[ip]; ok {
+			continue
+		}
+		seen[ip] = struct{}{}
+		normalized = append(normalized, ip)
+	}
+	sort.Strings(normalized)
+
+	return user.WithFileLock(username, func() error {
+		userPath := filepath.Join("etc", "users", username)
+		data, err := os.ReadFile(userPath)
+		if err != nil {
+			return err
+		}
+		mode := os.FileMode(0600)
+		if st, statErr := os.Stat(userPath); statErr == nil {
+			mode = st.Mode().Perm()
+		}
+
+		text := strings.ReplaceAll(string(data), "\r\n", "\n")
+		hadTrailingNewline := strings.HasSuffix(text, "\n")
+		lines := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
+		if len(lines) == 1 && lines[0] == "" {
+			lines = nil
+		}
+
+		out := make([]string, 0, len(lines)+len(normalized))
+		insertedIPs := false
+		appendIPs := func() {
+			if insertedIPs {
+				return
+			}
+			for _, ip := range normalized {
+				out = append(out, "IP "+ip)
+			}
+			insertedIPs = true
+		}
+		for _, line := range lines {
+			fields := strings.Fields(strings.TrimSpace(line))
+			if len(fields) > 0 && strings.EqualFold(fields[0], "IP") {
+				appendIPs()
+				continue
+			}
+			out = append(out, line)
+		}
+		if !insertedIPs {
+			appendIPs()
+		}
+
+		result := strings.Join(out, "\n")
+		if hadTrailingNewline || result != "" {
+			result += "\n"
+		}
+
+		dir := filepath.Dir(userPath)
+		tmp, err := os.CreateTemp(dir, "."+filepath.Base(userPath)+".tmp-*")
+		if err != nil {
+			return err
+		}
+		tmpPath := tmp.Name()
+		cleanup := true
+		defer func() {
+			if cleanup {
+				_ = os.Remove(tmpPath)
+			}
+		}()
+		if _, err := tmp.WriteString(result); err != nil {
+			_ = tmp.Close()
+			return err
+		}
+		if err := tmp.Chmod(mode); err != nil {
+			_ = tmp.Close()
+			return err
+		}
+		if err := tmp.Close(); err != nil {
+			return err
+		}
+		if err := os.Rename(tmpPath, userPath); err != nil {
+			_ = os.Remove(userPath)
+			if renameErr := os.Rename(tmpPath, userPath); renameErr != nil {
+				return err
+			}
+		}
+		cleanup = false
+		return nil
+	})
 }
 
 func (s *Session) authenticateSelfIPUser(username, password string) (*user.User, string) {

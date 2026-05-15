@@ -132,19 +132,20 @@ func ApplyNukeCredits(groupMap map[string]int, uploaderBytes map[string]int64, m
 	now := time.Now().Unix()
 	totalNuked := int64(0)
 	for username, bytes := range uploaderBytes {
-		u, err := user.LoadUser(username, groupMap)
-		if err != nil {
+		var nukedCredits int64
+		if _, err := user.MutateAndSave(username, groupMap, func(u *user.User) error {
+			nukedCredits = bytes * int64(u.Ratio) * int64(multiplier)
+			u.Credits -= nukedCredits
+			if u.Credits < 0 {
+				u.Credits = 0
+			}
+			u.NukeStat.Meta = now
+			u.NukeStat.Files++
+			u.NukeStat.Bytes += bytes
+			return nil
+		}); err != nil {
 			continue
 		}
-		nukedCredits := bytes * int64(u.Ratio) * int64(multiplier)
-		u.Credits -= nukedCredits
-		if u.Credits < 0 {
-			u.Credits = 0
-		}
-		u.NukeStat.Meta = now
-		u.NukeStat.Files++
-		u.NukeStat.Bytes += bytes
-		_ = u.Save()
 		totalNuked += nukedCredits
 	}
 	return totalNuked
@@ -153,14 +154,15 @@ func ApplyNukeCredits(groupMap map[string]int, uploaderBytes map[string]int64, m
 func ApplyUnnukeCredits(groupMap map[string]int, uploaderBytes map[string]int64, maxMultiplier int) int64 {
 	totalRestored := int64(0)
 	for username, bytes := range uploaderBytes {
-		u, err := user.LoadUser(username, groupMap)
-		if err != nil {
+		var restored int64
+		if _, err := user.MutateAndSave(username, groupMap, func(u *user.User) error {
+			restored = bytes * int64(u.Ratio) * int64(maxMultiplier)
+			u.Credits += restored
+			u.NukeStat = user.StatLine{}
+			return nil
+		}); err != nil {
 			continue
 		}
-		restored := bytes * int64(u.Ratio) * int64(maxMultiplier)
-		u.Credits += restored
-		u.NukeStat = user.StatLine{}
-		_ = u.Save()
 		totalRestored += restored
 	}
 	return totalRestored
