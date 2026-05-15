@@ -90,6 +90,7 @@ rules:
         - HELP
         - RULES
         - BW
+        - STAT
         - USER
         - SEEN
         - LASTLOGIN
@@ -100,6 +101,7 @@ rules:
         - SEARCH
         - RACE
         - RESCAN
+        - RESCANSTATUS
         - XDUPE
         - INVITE
         - BLOWFISH
