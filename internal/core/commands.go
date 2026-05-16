@@ -2,7 +2,6 @@ package core
 
 import (
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"hash"
 	"hash/crc32"
@@ -409,17 +408,10 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					}
 				}
 			}
-			now := time.Now()
-			if err := applyWeeklyAllotmentIfDue(s.User, now); err != nil {
-				if s.Config.Debug {
-					log.Printf("[WEEKLYALLOTMENT] apply failed for %s: %v", s.User.Name, err)
-				}
-			}
-
 			if strings.TrimSpace(s.User.CurrentDir) != "" {
 				s.CurrentDir = path.Clean(s.User.CurrentDir)
 			}
-			s.User.LastLogin = now.Unix()
+			s.User.LastLogin = time.Now().Unix()
 			s.IsLogged = true
 			s.PendingUser = ""
 			s.PendingReason = ""
@@ -428,6 +420,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 
 			s.showGlobalStats("230", false)
 			fmt.Fprintf(s.Conn, "230 User logged in.\r\n")
+			s.persistLoginStateAsync(s.User.Name, s.User.LastLogin)
 
 		} else {
 			remoteIP, _, _ := net.SplitHostPort(s.Conn.RemoteAddr().String())
@@ -2408,100 +2401,23 @@ func (s *Session) showGlobalStats(code string, final bool) {
 	}
 }
 
-func (s *Session) checkLoginStorageSpace() error {
-	for _, target := range []string{"userdata", filepath.Join("etc", "users")} {
-		statPath := nearestExistingPath(target)
-		if statPath == "" {
-			continue
+func (s *Session) persistLoginStateAsync(username string, lastLogin int64) {
+	username = strings.TrimSpace(username)
+	if username == "" || lastLogin <= 0 {
+		return
+	}
+	groupMap := s.GroupMap
+	debug := s.Config != nil && s.Config.Debug
+	go func() {
+		_, err := user.MutateAndSave(username, groupMap, func(current *user.User) error {
+			current.LastLogin = lastLogin
+			current.ResetTransferStatPeriodsIfDue(time.Unix(lastLogin, 0))
+			return nil
+		})
+		if err != nil && debug {
+			log.Printf("[USER] skipped login-state save for %s: %v", username, err)
 		}
-		var stat syscall.Statfs_t
-		if err := syscall.Statfs(statPath, &stat); err != nil {
-			continue
-		}
-		if stat.Bfree == 0 {
-			return fmt.Errorf("disk full at %s", statPath)
-		}
-		if stat.Files > 0 && stat.Ffree == 0 {
-			return fmt.Errorf("no free inodes at %s", statPath)
-		}
-	}
-	return nil
-}
-
-func nearestExistingPath(target string) string {
-	target = strings.TrimSpace(target)
-	if target == "" {
-		return ""
-	}
-	for {
-		if _, err := os.Stat(target); err == nil {
-			return target
-		}
-		parent := filepath.Dir(target)
-		if parent == target || parent == "" {
-			return ""
-		}
-		target = parent
-	}
-}
-
-func (s *Session) failLoginStorageWrite(remoteIP, action string, err error) bool {
-	if s == nil || s.User == nil {
-		return false
-	}
-	reason := loginStorageFailureReason(err)
-	if s.Config != nil && s.Config.Debug {
-		log.Printf("[PASS] User %s login rejected: %s during %s: %v", s.User.Name, reason, action, err)
-	}
-	extra := map[string]string{
-		"action": action,
-	}
-	if err != nil {
-		extra["error"] = err.Error()
-	}
-	s.emitLoginFailureWithData(s.User.Name, remoteIP, reason, extra)
-	detail := cleanLoginStorageError(err)
-	if reason == "disk_full" {
-		fmt.Fprintf(s.Conn, "530 Login temporarily unavailable: disk full.\r\n")
-	} else if detail != "" {
-		fmt.Fprintf(s.Conn, "530 Login temporarily unavailable: storage write failed during %s: %s\r\n", action, detail)
-	} else {
-		fmt.Fprintf(s.Conn, "530 Login temporarily unavailable: storage write failed.\r\n")
-	}
-	return false
-}
-
-func loginStorageFailureReason(err error) string {
-	if isDiskFullError(err) {
-		return "disk_full"
-	}
-	return "storage_error"
-}
-
-func cleanLoginStorageError(err error) string {
-	if err == nil {
-		return ""
-	}
-	msg := strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(err.Error(), "\r", " "), "\n", " "))
-	msg = strings.Join(strings.Fields(msg), " ")
-	if len(msg) > 180 {
-		msg = msg[:177] + "..."
-	}
-	return msg
-}
-
-func isDiskFullError(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, syscall.ENOSPC) {
-		return true
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "no space left on device") ||
-		strings.Contains(msg, "disk full") ||
-		strings.Contains(msg, "not enough space") ||
-		strings.Contains(msg, "no free inodes")
+	}()
 }
 
 func mbString(size int64) string { return fmt.Sprintf("%.0fMB", float64(size)/1024.0/1024.0) }
