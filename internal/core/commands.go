@@ -57,6 +57,24 @@ func isSceneSubfolder(name string) bool {
 	return false
 }
 
+func shouldStartRaceWindowForDir(cfg *Config, dirPath string) bool {
+	if cfg == nil || !zipscript.UsesRaceEntry(cfg.Zipscript, dirPath) {
+		return false
+	}
+	base := path.Base(path.Clean("/" + strings.TrimSpace(dirPath)))
+	return !isSceneSubfolder(base)
+}
+
+func startReleaseRaceWindow(bridge MasterBridge, dirPath string, startMs int64) {
+	starter, ok := bridge.(interface {
+		StartReleaseRaceWindow(dirPath string, startMs int64)
+	})
+	if !ok {
+		return
+	}
+	starter.StartReleaseRaceWindow(dirPath, startMs)
+}
+
 // processCommand handles the core RFC 959 FTP and FXP commands.
 func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Config) bool {
 	switch cmd {
@@ -676,6 +694,9 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				if err := bridge.MakeDir(targetPath, s.User.Name, s.User.PrimaryGroup); err != nil {
 					fmt.Fprintf(s.Conn, "550 MKD failed: %v\r\n", err)
 					return false
+				}
+				if shouldStartRaceWindowForDir(s.Config, targetPath) {
+					startReleaseRaceWindow(bridge, targetPath, time.Now().UnixMilli())
 				}
 			}
 		}
@@ -4017,6 +4038,9 @@ func ensureUploadDirsForEvent(s *Session, bridge MasterBridge, uploadDir string)
 		return err
 	}
 	if needNew {
+		if shouldStartRaceWindowForDir(s.Config, releaseDir) {
+			startReleaseRaceWindow(bridge, releaseDir, time.Now().UnixMilli())
+		}
 		s.emitEvent(EventMKDir, releaseDir, path.Base(releaseDir), 0, 0, nil)
 	}
 	return nil

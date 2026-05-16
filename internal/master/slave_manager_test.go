@@ -76,6 +76,16 @@ func TestShouldRefreshRemergeChecksumDisabledByDefault(t *testing.T) {
 	}
 }
 
+func TestReleaseRaceWindowStartsAtMkdir(t *testing.T) {
+	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
+	sm.StartReleaseRaceWindowAt("/X265/release", 1000)
+	sm.NoteRacePayloadTransferAt("/X265/release", 100, 2500)
+
+	if got := sm.GetReleaseRaceWindowMilliseconds("/X265/release"); got != 1500 {
+		t.Fatalf("race window = %dms, want 1500ms", got)
+	}
+}
+
 func TestMarkFileMissingRefreshesStatusMarkers(t *testing.T) {
 	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
 	sm.SetStatusMarkerConfig(zipscript.Config{

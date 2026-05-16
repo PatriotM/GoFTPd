@@ -874,6 +874,36 @@ func (sm *SlaveManager) ResetReleaseRaceWindow(dirPath string) {
 	delete(sm.releaseRaceWindows, cleanDirPath)
 }
 
+func (sm *SlaveManager) StartReleaseRaceWindowAt(dirPath string, startMs int64) {
+	if sm == nil {
+		return
+	}
+	if startMs <= 0 {
+		startMs = time.Now().UnixMilli()
+	}
+	cleanDirPath := filepath.Clean(dirPath)
+	sm.releaseStateMu.Lock()
+	defer sm.releaseStateMu.Unlock()
+	window := sm.releaseRaceWindows[cleanDirPath]
+	if window == nil {
+		sm.releaseRaceWindows[cleanDirPath] = &releaseRaceWindow{
+			StartMs:     startMs,
+			EndMs:       startMs,
+			UpdatedAtMs: startMs,
+		}
+		return
+	}
+	if window.StartMs <= 0 {
+		window.StartMs = startMs
+	}
+	if window.EndMs < window.StartMs {
+		window.EndMs = window.StartMs
+	}
+	if window.UpdatedAtMs < startMs {
+		window.UpdatedAtMs = startMs
+	}
+}
+
 func (sm *SlaveManager) NoteRacePayloadTransferAt(dirPath string, durationMs int64, endMs int64) {
 	if sm == nil || durationMs <= 0 {
 		return

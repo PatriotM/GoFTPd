@@ -60,3 +60,18 @@ func TestFinalUploadFileSizeFallsBackToResumeOffset(t *testing.T) {
 		t.Fatalf("expected transferred plus offset fallback, got %d", got)
 	}
 }
+
+func TestCacheSFVKeepsLiveRaceWindow(t *testing.T) {
+	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60)
+	bridge := &Bridge{sm: sm}
+	sm.StartReleaseRaceWindowAt("/X265/release", 1000)
+
+	bridge.CacheSFV("/X265/release", "release.sfv", core.SFVInfo{
+		Entries: []core.SFVEntryInfo{{FileName: "file.r00", CRC32: 1}},
+	})
+	sm.NoteRacePayloadTransferAt("/X265/release", 100, 3000)
+
+	if got := sm.GetReleaseRaceWindowMilliseconds("/X265/release"); got != 2000 {
+		t.Fatalf("race window after SFV cache = %dms, want 2000ms", got)
+	}
+}

@@ -578,14 +578,6 @@ func chooseRaceDurationMs(raceDurationMs int64, users []VFSRaceUser, xferMs int6
 		}
 	}
 
-	// When reused/incomplete releases leak older DB timestamps into COMPLETE,
-	// the persisted wall-clock can become wildly larger than the active upload
-	// span we just observed from the current racers. Clamp those pathological
-	// cases back to the live uploader span so COMPLETE tracks the current race
-	// more like drftpd/pzs-ng instead of historical leftovers.
-	if raceDurationMs > 0 && maxUserDurationMs > 0 && raceDurationMs > maxUserDurationMs*2 {
-		raceDurationMs = maxUserDurationMs
-	}
 	if raceDurationMs == 0 {
 		raceDurationMs = maxUserDurationMs
 	}
