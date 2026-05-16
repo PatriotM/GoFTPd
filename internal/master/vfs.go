@@ -585,6 +585,26 @@ func (vfs *VirtualFileSystem) GetImmediateChildDirProgress(parentDir string) map
 	return out
 }
 
+func (vfs *VirtualFileSystem) GetReleaseStatusSnapshot(dirPath string) (*vfsReleaseSnapshot, int64, bool) {
+	vfs.mu.RLock()
+	defer vfs.mu.RUnlock()
+
+	dirPath = cleanVFSPath(dirPath)
+	if vfs.isHiddenPathLocked(dirPath) {
+		return nil, 0, false
+	}
+	entry := vfs.files[dirPath]
+	if entry == nil || !entry.IsDir || entry.IsSymlink {
+		return nil, 0, false
+	}
+	snapshot := vfs.computeReleaseSnapshotLocked(dirPath)
+	if snapshot == nil {
+		return nil, entry.LastModified, true
+	}
+	copyState := *snapshot
+	return &copyState, entry.LastModified, true
+}
+
 // GetVerifiedSFVPresentFiles returns the SFV-tracked filenames that are
 // currently present and checksum-valid in dirPath, keyed by normalized base
 // filename.

@@ -47,9 +47,16 @@ type namedGroup struct {
 	Paths      []string
 }
 
+var rememberedStatusStore = struct {
+	sync.RWMutex
+	slaves map[string]diskStatus
+}{
+	slaves: map[string]diskStatus{},
+}
+
 func New() *Plugin {
 	return &Plugin{
-		slaves:      map[string]diskStatus{},
+		slaves:      rememberedDiskStatuses(),
 		replyTarget: "channel",
 		staleAfter:  10 * time.Minute,
 	}
@@ -105,9 +112,7 @@ func (p *Plugin) update(evt *event.Event) {
 		sections = []string{"*"}
 	}
 	roots := parseRootStatuses(evt.Data["roots_json"])
-
-	p.mu.Lock()
-	p.slaves[name] = diskStatus{
+	status := diskStatus{
 		Name:      name,
 		Free:      freeBytes,
 		Total:     totalBytes,
@@ -117,7 +122,11 @@ func (p *Plugin) update(evt *event.Event) {
 		Roots:     roots,
 		Updated:   time.Now(),
 	}
+
+	p.mu.Lock()
+	p.slaves[name] = cloneDiskStatus(status)
 	p.mu.Unlock()
+	rememberDiskStatus(status)
 }
 
 func (p *Plugin) show(evt *event.Event) []plugin.Output {
@@ -219,18 +228,18 @@ func diskVars(st diskStatus, state string, now time.Time) map[string]string {
 		stateColored = "\x0307" + state + "\x03"
 	}
 	return map[string]string{
-		"slave":       st.Name,
-		"name":        st.Name,
-		"free":        humanBytes(st.Free),
-		"total":       humanBytes(st.Total),
-		"free_pct":    fmt.Sprintf("%.1f", percentFree(st.Free, st.Total)),
-		"used_pct":    fmt.Sprintf("%.1f", 100-percentFree(st.Free, st.Total)),
-		"state":       state,
+		"slave":         st.Name,
+		"name":          st.Name,
+		"free":          humanBytes(st.Free),
+		"total":         humanBytes(st.Total),
+		"free_pct":      fmt.Sprintf("%.1f", percentFree(st.Free, st.Total)),
+		"used_pct":      fmt.Sprintf("%.1f", 100-percentFree(st.Free, st.Total)),
+		"state":         state,
 		"state_colored": stateColored,
-		"sections":    strings.Join(st.Sections, ","),
-		"age":         formatAge(now.Sub(st.Updated)),
-		"free_bytes":  strconv.FormatInt(st.Free, 10),
-		"total_bytes": strconv.FormatInt(st.Total, 10),
+		"sections":      strings.Join(st.Sections, ","),
+		"age":           formatAge(now.Sub(st.Updated)),
+		"free_bytes":    strconv.FormatInt(st.Free, 10),
+		"total_bytes":   strconv.FormatInt(st.Total, 10),
 	}
 }
 
@@ -457,6 +466,28 @@ func matchesNamedGroup(group namedGroup, filter string) bool {
 		}
 	}
 	return false
+}
+
+func rememberedDiskStatuses() map[string]diskStatus {
+	rememberedStatusStore.RLock()
+	defer rememberedStatusStore.RUnlock()
+	out := make(map[string]diskStatus, len(rememberedStatusStore.slaves))
+	for name, status := range rememberedStatusStore.slaves {
+		out[name] = cloneDiskStatus(status)
+	}
+	return out
+}
+
+func rememberDiskStatus(status diskStatus) {
+	rememberedStatusStore.Lock()
+	defer rememberedStatusStore.Unlock()
+	rememberedStatusStore.slaves[status.Name] = cloneDiskStatus(status)
+}
+
+func cloneDiskStatus(status diskStatus) diskStatus {
+	status.Sections = append([]string(nil), status.Sections...)
+	status.Roots = append([]diskRootStatus(nil), status.Roots...)
+	return status
 }
 
 func configValue(section, flat map[string]interface{}, sectionKey, flatKey string) interface{} {

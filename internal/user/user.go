@@ -515,9 +515,9 @@ func (u *User) saveLocked() error {
 		os.MkdirAll(dir, 0755)
 	}
 
-	mode := os.FileMode(0600)
-	if st, err := os.Stat(path); err == nil {
-		mode = st.Mode().Perm()
+	currentBytes, mode, currentExists, err := readExistingUserfileForSave(path)
+	if err != nil {
+		return err
 	}
 	var buf bytes.Buffer
 	fmt.Fprintf(&buf, "USER %s\n", u.UserLine)
@@ -568,10 +568,10 @@ func (u *User) saveLocked() error {
 		fmt.Fprintf(&buf, "IP %s\n", ip)
 	}
 
-	if err := validateUserfileRewrite(path, buf.String()); err != nil {
+	if err := validateUserfileRewrite(path, currentBytes, currentExists, buf.String()); err != nil {
 		return err
 	}
-	if err := backupExistingUserfile(path, mode); err != nil {
+	if err := backupExistingUserfile(path, currentBytes, currentExists, mode); err != nil {
 		return err
 	}
 
@@ -605,6 +605,23 @@ func (u *User) saveLocked() error {
 	return nil
 }
 
+func readExistingUserfileForSave(path string) ([]byte, os.FileMode, bool, error) {
+	mode := os.FileMode(0600)
+	st, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, mode, false, nil
+		}
+		return nil, mode, false, err
+	}
+	mode = st.Mode().Perm()
+	currentBytes, err := os.ReadFile(path)
+	if err != nil {
+		return nil, mode, false, err
+	}
+	return currentBytes, mode, true, nil
+}
+
 type userfileSafety struct {
 	groups       int
 	ips          int
@@ -617,13 +634,9 @@ type userfileSafety struct {
 	primaryGroup string
 }
 
-func validateUserfileRewrite(path, next string) error {
-	currentBytes, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
+func validateUserfileRewrite(path string, currentBytes []byte, currentExists bool, next string) error {
+	if !currentExists {
+		return nil
 	}
 	current := inspectUserfileSafety(string(currentBytes))
 	if current.hasTraffic && current.groups == 0 && current.ips == 0 && current.primaryGroup == "" && current.ratio == 0 && current.credits == 0 {
@@ -670,15 +683,11 @@ func statIncreased(next, current StatLine) bool {
 	return next.Files > current.Files || next.Bytes > current.Bytes || next.Meta > current.Meta
 }
 
-func backupExistingUserfile(path string, mode os.FileMode) error {
-	currentBytes, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
+func backupExistingUserfile(path string, currentBytes []byte, currentExists bool, mode os.FileMode) error {
+	if !currentExists {
+		return nil
 	}
-	if strings.TrimSpace(string(currentBytes)) == "" {
+	if len(bytes.TrimSpace(currentBytes)) == 0 {
 		return fmt.Errorf("refusing to back up empty userfile %s", filepath.Base(path))
 	}
 

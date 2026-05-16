@@ -1,6 +1,9 @@
 package free
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestAggregateNamedGroupSumsMatchingMountPaths(t *testing.T) {
 	statuses := []diskStatus{
@@ -48,5 +51,37 @@ func TestAggregateNamedGroupSumsMatchingPaths(t *testing.T) {
 	}
 	if freeBytes != 120 || totalBytes != 500 {
 		t.Fatalf("aggregateNamedGroup() = %d/%d, want 120/500", freeBytes, totalBytes)
+	}
+}
+
+func TestNewKeepsDiskStatusAcrossPluginReload(t *testing.T) {
+	rememberedStatusStore.Lock()
+	rememberedStatusStore.slaves = map[string]diskStatus{}
+	rememberedStatusStore.Unlock()
+	t.Cleanup(func() {
+		rememberedStatusStore.Lock()
+		rememberedStatusStore.slaves = map[string]diskStatus{}
+		rememberedStatusStore.Unlock()
+	})
+
+	first := New()
+	first.slaves["LOCAL"] = diskStatus{
+		Name:    "LOCAL",
+		Free:    10,
+		Total:   100,
+		Updated: time.Now(),
+		Roots: []diskRootStatus{
+			{Path: "/glftpd/site", MountPath: "/", Free: 10, Total: 100},
+		},
+	}
+	rememberDiskStatus(first.slaves["LOCAL"])
+
+	reloaded := New()
+	got, ok := reloaded.slaves["LOCAL"]
+	if !ok {
+		t.Fatalf("expected reloaded plugin to keep disk status")
+	}
+	if got.Free != 10 || got.Total != 100 || len(got.Roots) != 1 {
+		t.Fatalf("unexpected remembered status: %+v", got)
 	}
 }
