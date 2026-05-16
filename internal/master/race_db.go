@@ -241,6 +241,8 @@ func (r *RaceDB) RecordUpload(filePath, owner, group string, size int64, duratio
             is_present = 1,
             updated_at = strftime('%s','now')
         WHERE release_files.is_present = 0
+           OR trim(release_files.uploader) = ''
+           OR lower(trim(release_files.uploader)) IN ('goftpd', 'ftp', 'root', '0')
     `, releaseID, fileName, owner, group, size, durationMs, int64(checksum))
 	return err
 }
@@ -270,6 +272,11 @@ func (r *RaceDB) ReplaceReleaseFiles(dirPath, sfvName string, entries map[string
 
 	var releaseID int64
 	if err := tx.QueryRow(`SELECT id FROM releases WHERE path = ?`, dirPath).Scan(&releaseID); err != nil {
+		return err
+	}
+
+	existingFiles, err := existingReleaseFilesTx(tx, releaseID)
+	if err != nil {
 		return err
 	}
 
@@ -308,6 +315,9 @@ func (r *RaceDB) ReplaceReleaseFiles(dirPath, sfvName string, entries map[string
 			}
 			continue
 		}
+		if existing, ok := existingFiles[fileName]; ok {
+			record = mergeRaceFileRecord(record, existing)
+		}
 		if _, err := tx.Exec(`
             INSERT INTO release_files(
                 release_id, filename, uploader, grp, size_bytes, duration_ms,
@@ -319,6 +329,55 @@ func (r *RaceDB) ReplaceReleaseFiles(dirPath, sfvName string, entries map[string
 	}
 
 	return tx.Commit()
+}
+
+func existingReleaseFilesTx(tx *sql.Tx, releaseID int64) (map[string]ReleaseFileRecord, error) {
+	rows, err := tx.Query(`
+        SELECT filename, uploader, grp, size_bytes, duration_ms, checksum
+        FROM release_files
+        WHERE release_id = ? AND is_present = 1
+    `, releaseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string]ReleaseFileRecord)
+	for rows.Next() {
+		var rec ReleaseFileRecord
+		var checksum int64
+		if err := rows.Scan(&rec.FileName, &rec.Owner, &rec.Group, &rec.SizeBytes, &rec.DurationMs, &checksum); err != nil {
+			return nil, err
+		}
+		rec.FileName = raceDBFileKey(rec.FileName)
+		rec.Checksum = uint32(checksum)
+		if rec.FileName != "" {
+			out[rec.FileName] = rec
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func mergeRaceFileRecord(next, existing ReleaseFileRecord) ReleaseFileRecord {
+	if isWeakMetadataValue(next.Owner) && !isWeakMetadataValue(existing.Owner) {
+		next.Owner = existing.Owner
+	}
+	if isWeakMetadataValue(next.Group) && !isWeakMetadataValue(existing.Group) {
+		next.Group = existing.Group
+	}
+	if next.SizeBytes <= 0 && existing.SizeBytes > 0 {
+		next.SizeBytes = existing.SizeBytes
+	}
+	if next.DurationMs <= 0 && existing.DurationMs > 0 {
+		next.DurationMs = existing.DurationMs
+	}
+	if next.Checksum == 0 && existing.Checksum != 0 {
+		next.Checksum = existing.Checksum
+	}
+	return next
 }
 
 func (r *RaceDB) DeletePath(path string, isDir bool) error {

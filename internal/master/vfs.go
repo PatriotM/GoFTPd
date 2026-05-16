@@ -159,15 +159,22 @@ func (vfs *VirtualFileSystem) AddFile(path string, file VFSFile) {
 			file.IsDir = true
 		}
 	}
-	if existing := vfs.files[path]; existing != nil &&
-		!file.IsDir && !file.IsSymlink &&
-		!existing.IsDir && !existing.IsSymlink &&
-		existing.Size == file.Size {
-		if file.Checksum == 0 {
-			file.Checksum = existing.Checksum
+	if existing := vfs.files[path]; existing != nil {
+		if isWeakMetadataValue(file.Owner) && !isWeakMetadataValue(existing.Owner) {
+			file.Owner = existing.Owner
 		}
-		if file.XferTime == 0 {
-			file.XferTime = existing.XferTime
+		if isWeakMetadataValue(file.Group) && !isWeakMetadataValue(existing.Group) {
+			file.Group = existing.Group
+		}
+		if !file.IsDir && !file.IsSymlink &&
+			!existing.IsDir && !existing.IsSymlink &&
+			existing.Size == file.Size {
+			if file.Checksum == 0 {
+				file.Checksum = existing.Checksum
+			}
+			if file.XferTime == 0 {
+				file.XferTime = existing.XferTime
+			}
 		}
 	}
 
@@ -674,11 +681,11 @@ func (vfs *VirtualFileSystem) HydrateRaceFile(path, owner, group string, xferTim
 	changed := false
 	currentOwner := strings.TrimSpace(file.Owner)
 	currentGroup := strings.TrimSpace(file.Group)
-	if (currentOwner == "" || strings.EqualFold(currentOwner, "GoFTPd") || strings.EqualFold(currentOwner, "ftp")) && strings.TrimSpace(owner) != "" {
+	if isWeakMetadataValue(currentOwner) && !isWeakMetadataValue(owner) {
 		file.Owner = owner
 		changed = true
 	}
-	if (currentGroup == "" || strings.EqualFold(currentGroup, "GoFTPd") || strings.EqualFold(currentGroup, "ftp")) && strings.TrimSpace(group) != "" {
+	if isWeakMetadataValue(currentGroup) && !isWeakMetadataValue(group) {
 		file.Group = group
 		changed = true
 	}
@@ -694,6 +701,15 @@ func (vfs *VirtualFileSystem) HydrateRaceFile(path, owner, group string, xferTim
 		vfs.markPersistDirtyLocked()
 	}
 	return changed
+}
+
+func isWeakMetadataValue(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "goftpd", "ftp", "root", "0":
+		return true
+	default:
+		return false
+	}
 }
 
 // FileExists checks if a path exists in the VFS

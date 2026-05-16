@@ -1217,7 +1217,7 @@ func (sm *SlaveManager) ProcessRemerge(rs *RemoteSlave, resp *protocol.AsyncResp
 		if existingFile := sm.vfs.GetFile(fullPath); existingFile != nil {
 			// ALWAYS trust the Master's VFS owner over the Slave's physical OS owner.
 			// This prevents the Slave OS (GoFTPd/ftp) from wiping out real FTP users (N0pe) on restart.
-			if existingFile.Owner != "" && existingFile.Owner != "GoFTPd" && existingFile.Owner != "ftp" {
+			if !isWeakMetadataValue(existingFile.Owner) {
 				owner = existingFile.Owner
 				group = existingFile.Group
 			}

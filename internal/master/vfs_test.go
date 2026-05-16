@@ -532,6 +532,39 @@ func TestVFSAddFilePreservesVerifiedTransferDataAcrossRemerge(t *testing.T) {
 	}
 }
 
+func TestVFSAddFilePreservesStrongOwnerAcrossRescan(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+
+	vfs.AddFile("/X265/release/file.r00", VFSFile{
+		Size:      476800000,
+		Seen:      true,
+		SlaveName: "LOCAL",
+		Owner:     "Neptun",
+		Group:     "iND",
+		Checksum:  12345,
+		XferTime:  5000,
+	})
+
+	vfs.AddFile("/X265/release/file.r00", VFSFile{
+		Size:      476800000,
+		Seen:      true,
+		SlaveName: "LOCAL",
+		Owner:     "GoFTPd",
+		Group:     "root",
+	})
+
+	got := vfs.GetFile("/X265/release/file.r00")
+	if got == nil {
+		t.Fatalf("expected file to remain present")
+	}
+	if got.Owner != "Neptun" || got.Group != "iND" {
+		t.Fatalf("expected strong owner/group to survive rescan, got %s/%s", got.Owner, got.Group)
+	}
+	if got.Checksum != 12345 || got.XferTime != 5000 {
+		t.Fatalf("expected transfer metadata to survive rescan, checksum=%d xfer=%d", got.Checksum, got.XferTime)
+	}
+}
+
 func TestVFSAddFilePreservesVerifiedTransferDataAcrossRemergeMtimeChange(t *testing.T) {
 	vfs := NewVirtualFileSystem()
 
