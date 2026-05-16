@@ -369,6 +369,41 @@ func TestValidateUploadBlocksConfiguredRaceContainers(t *testing.T) {
 	}
 }
 
+func TestValidateUploadBlocksExactSectionRootRaceContainer(t *testing.T) {
+	cfg := Config{
+		Enabled: true,
+		Sections: SectionsConfig{
+			SFV: []string{"/TV-1080P"},
+		},
+		AllowedFiles: AllowedFilesConfig{
+			AllowedTypes: []string{"sfv", "nfo", "rar"},
+		},
+	}
+
+	if err := ValidateUpload(cfg, nil, "/TV-1080P", "release.r00", nil, nil, nil); err == nil {
+		t.Fatalf("expected upload into exact section root to be blocked")
+	}
+	if err := ValidateUpload(cfg, nil, "/TV-1080P/Real.Release-GRP", "release.r00", nil, nil, nil); err != nil {
+		t.Fatalf("expected upload into release dir to be allowed, got %v", err)
+	}
+}
+
+func TestValidateUploadAllowsRequestWrapperContainer(t *testing.T) {
+	cfg := Config{
+		Enabled: true,
+		Sections: SectionsConfig{
+			SFV: []string{"/REQUESTS/*/*"},
+		},
+		AllowedFiles: AllowedFilesConfig{
+			AllowedTypes: []string{"sfv", "nfo", "rar"},
+		},
+	}
+
+	if err := ValidateUpload(cfg, nil, "/REQUESTS/REQ-Direct.Release-GRP", "release.r00", nil, nil, nil); err != nil {
+		t.Fatalf("expected direct request wrapper upload to remain allowed, got %v", err)
+	}
+}
+
 func TestRequestMixedZipAndSFVSectionsAllowAudioAndZip(t *testing.T) {
 	cfg := Config{
 		Enabled: true,

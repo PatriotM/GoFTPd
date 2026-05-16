@@ -373,6 +373,9 @@ func MarkEmptyDirsOnRescan(cfg Config) bool {
 }
 
 func ValidateUpload(cfg Config, uploadUser *user.User, dirPath, fileName string, existingNames []string, existingDirs []string, sfvEntries map[string]uint32) error {
+	if isConfiguredRaceContainerUpload(cfg, dirPath, fileName) {
+		return errors.New("zipscript: upload files inside a release directory, not the section or dated folder")
+	}
 	if !UsesRace(cfg, dirPath) {
 		if isConfiguredRaceContainerDir(cfg, dirPath) {
 			return errors.New("zipscript: upload files inside a release directory, not the section or dated folder")
@@ -436,6 +439,14 @@ func ValidateUpload(cfg Config, uploadUser *user.User, dirPath, fileName string,
 	return nil
 }
 
+func isConfiguredRaceContainerUpload(cfg Config, dirPath, fileName string) bool {
+	if !isConfiguredRaceContainerDir(cfg, dirPath) {
+		return false
+	}
+	ext := normalizedExt(fileName)
+	return ext != "" && !IsIgnoredType(cfg, fileName)
+}
+
 func isRaceReleaseChildUploadDir(cfg Config, dirPath string) bool {
 	cleanPath := normalizePath(dirPath)
 	parent := path.Dir(cleanPath)
@@ -450,8 +461,11 @@ func isConfiguredRaceContainerDir(cfg Config, dirPath string) bool {
 		return false
 	}
 	cleanPath := normalizePath(dirPath)
-	if UsesRaceEntry(cfg, cleanPath) {
+	if isRequestContainerPath(cleanPath) {
 		return false
+	}
+	if isTopLevelPath(cleanPath) && UsesRace(cfg, cleanPath) {
+		return true
 	}
 	candidates := []string{
 		path.Join(cleanPath, "_release_"),
@@ -466,6 +480,11 @@ func isConfiguredRaceContainerDir(cfg Config, dirPath string) bool {
 		}
 	}
 	return false
+}
+
+func isTopLevelPath(dirPath string) bool {
+	clean := strings.Trim(path.Clean("/"+strings.TrimSpace(dirPath)), "/")
+	return clean != "" && !strings.Contains(clean, "/")
 }
 
 func sfvFirstAppliesToUpload(cfg Config, uploadUser *user.User, dirPath string) bool {
