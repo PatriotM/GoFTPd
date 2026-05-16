@@ -486,6 +486,10 @@ announce.REQUESTCMD_LINE = "%c02{REQUEST:} %c05{%line}"
 announce.REQUESTCMD_ERROR = "%c02{REQUEST:} %c04{SITE %command failed:} %c05{%response}"
 announce.REQUESTCMD_DENIED = "%c02{REQUEST:} %c04{%response}"
 announce.REQUESTCMD_USAGE = "%c02{REQUEST:} %c01{Usage:} %c05{%response}"
+announce.REQTOPCMD_HEADER = "%c03{REQTOP FILLERS:} %c14{[ }%c01{%count} %c01{Users ]}"
+announce.REQTOPCMD_ENTRY = "%c14{[}%c03{%rank}%c14{]} %c06{%user} %c01{- (}%c03{%fills} %c01{Fills)}"
+announce.REQTOPCMD_TOTAL = "%c03{TOTAL REQUEST FILLS:} %c01{( }%c01{%fills} %c01{Fills )}"
+announce.REQTOPCMD_EMPTY = "%c03{REQTOP:} %c05{No filled requests recorded yet.}"
 
 
 

@@ -372,7 +372,7 @@ Built-in daemon plugins:
 | `mediainfo` | Emits audio/video metadata events after uploads |
 | `pre` | Provides SITE PRE and affil management commands |
 | `releaseguard` | Blocks bad release dir names before MKD creates them and provides `SITE BANNED` |
-| `request` | Provides SITE REQUEST/REQUESTS/REQFILL/REQDEL/REQWIPE |
+| `request` | Provides SITE REQUEST/REQUESTS/REQFILL/REQTOP/REQDEL/REQWIPE |
 | `speedtest` | Creates speedtest files and emits SPEEDTEST events |
 | `slowkick` | Monitors live uploads and downloads and aborts/kicks users whose speed stays below a configured floor long enough to block slots |
 | `spacekeeper` | Watches slave free space and deletes the oldest eligible releases from configured virtual paths when a slave drops below its threshold |
@@ -403,13 +403,16 @@ SITE commands:
 | `REQUEST` | `<release> [-for:<user>]` |
 | `REQUESTS` | show current requests |
 | `REQFILL` / `REQFILLED` | `<number|release>` |
+| `REQTOP` | `[limit]` show request fill leaderboard |
 | `REQDEL` | `<number|release>` |
 | `REQWIPE` | `<number|release>` |
 
 `REQDEL` is owner-safe. A user can delete their own request. Privileged users
 can wipe requests with `REQWIPE`. The sitebot request plugin can pass the IRC
 nick through using `-by:<nick>` only when the FTP login is listed in
-`request.proxy_users`.
+`request.proxy_users`. Filled requests are tracked in the configured
+`fill_stats_file`, by default `/REQUESTS/.reqfills`, and `REQTOP` ranks users by
+filled request count.
 
 ### Slowkick
 
@@ -519,7 +522,7 @@ Implemented daemon SITE commands include:
 | Search/rescan | `SEARCH`, `RACE`, `RESCAN`, `XDUPE` |
 | Stats/traffic | `ALLUP`, `ALLDN`, `WKUP`, `WKDN`, `DAYUP`, `DAYDN`, `MONTHUP`, `MONTHDN` |
 | IRC/sitebot | `INVITE`, `BLOWFISH`, `IRC` |
-| Plugins | `PRE`, `ADDAFFIL`, `DELAFFIL`, `AFFILS`, `REQUEST`, `REQUESTS`, `REQFILL`, `REQFILLED`, `REQDEL`, `REQWIPE`, `BANNED`, `SELFIP` |
+| Plugins | `PRE`, `ADDAFFIL`, `DELAFFIL`, `AFFILS`, `REQUEST`, `REQUESTS`, `REQFILL`, `REQFILLED`, `REQTOP`, `REQDEL`, `REQWIPE`, `BANNED`, `SELFIP` |
 
 Command access is controlled through `sitecmd` ACL rules in
 `etc/permissions.yml`.

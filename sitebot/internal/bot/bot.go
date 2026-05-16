@@ -986,6 +986,7 @@ func (b *Bot) defaultHelpLines() []string {
 		lines = append(lines, "!request <release> - add a request")
 		lines = append(lines, "!requests - list requests")
 		lines = append(lines, "!reqfill <id|release> - mark a request filled")
+		lines = append(lines, "!reqtop [count] - show top request fillers")
 		lines = append(lines, "!reqdel <id|release> - delete your own request")
 	}
 	if enabled["Free"] {

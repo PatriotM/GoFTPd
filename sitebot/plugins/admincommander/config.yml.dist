@@ -65,6 +65,7 @@ allowed_commands:
   - REQUESTS
   - REQFILL
   - REQFILLED
+  - REQTOP
   - REQDEL
   - REQWIPE
 
