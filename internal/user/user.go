@@ -613,6 +613,7 @@ type userfileSafety struct {
 	hasRatio     bool
 	hasCredits   bool
 	hasTraffic   bool
+	stats        map[string]StatLine
 	primaryGroup string
 }
 
@@ -644,10 +645,29 @@ func validateUserfileRewrite(path, next string) error {
 	if current.hasRatio && current.ratio > 0 && (!replacement.hasRatio || replacement.ratio == 0) {
 		return fmt.Errorf("refusing unsafe userfile save for %s: would reset RATIO from %d to 0", filepath.Base(path), current.ratio)
 	}
-	if current.hasCredits && current.credits > 0 && (!replacement.hasCredits || replacement.credits == 0) {
+	if current.hasCredits && current.credits > 0 && (!replacement.hasCredits || (replacement.credits == 0 && !statIncreased(replacement.stats["ALLDN"], current.stats["ALLDN"]))) {
 		return fmt.Errorf("refusing unsafe userfile save for %s: would reset CREDITS from %d to 0", filepath.Base(path), current.credits)
 	}
+	for key, currentStat := range current.stats {
+		if currentStat.Files == 0 && currentStat.Bytes == 0 && currentStat.Meta == 0 {
+			continue
+		}
+		replacementStat, ok := replacement.stats[key]
+		if !ok {
+			return fmt.Errorf("refusing unsafe userfile save for %s: would remove %s", filepath.Base(path), key)
+		}
+		switch key {
+		case "ALLUP", "ALLDN":
+			if replacementStat.Files < currentStat.Files || replacementStat.Bytes < currentStat.Bytes {
+				return fmt.Errorf("refusing unsafe userfile save for %s: would reduce %s from %d/%d to %d/%d", filepath.Base(path), key, currentStat.Files, currentStat.Bytes, replacementStat.Files, replacementStat.Bytes)
+			}
+		}
+	}
 	return nil
+}
+
+func statIncreased(next, current StatLine) bool {
+	return next.Files > current.Files || next.Bytes > current.Bytes || next.Meta > current.Meta
 }
 
 func backupExistingUserfile(path string, mode os.FileMode) error {
@@ -726,7 +746,7 @@ func copyUserfileBackup(currentBytes []byte, backupDir, backupPath, name string,
 }
 
 func inspectUserfileSafety(text string) userfileSafety {
-	var out userfileSafety
+	out := userfileSafety{stats: make(map[string]StatLine)}
 	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
 	for _, line := range lines {
 		fields := strings.Fields(strings.TrimSpace(line))
@@ -761,11 +781,15 @@ func inspectUserfileSafety(text string) userfileSafety {
 				}
 			}
 		case "ALLUP", "ALLDN", "WKUP", "WKDN", "DAYUP", "DAYDN", "MONTHUP", "MONTHDN":
-			if len(fields) >= 3 {
+			if len(fields) >= 4 {
 				files, filesErr := parseFirstInt64(fields[1])
 				bytes, bytesErr := parseFirstInt64(fields[2])
+				meta, metaErr := parseFirstInt64(fields[3])
 				if (filesErr == nil && files > 0) || (bytesErr == nil && bytes > 0) {
 					out.hasTraffic = true
+				}
+				if filesErr == nil && bytesErr == nil && metaErr == nil {
+					out.stats[fields[0]] = StatLine{Files: files, Bytes: bytes, Meta: meta}
 				}
 			}
 		}

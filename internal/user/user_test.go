@@ -194,6 +194,68 @@ func TestSaveRefusesToStripAccountFields(t *testing.T) {
 	}
 }
 
+func TestSaveRefusesToReduceAllTimeStats(t *testing.T) {
+	tmp := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join("etc", "users"), 0755); err != nil {
+		t.Fatalf("MkdirAll(users) error = %v", err)
+	}
+	userPath := filepath.Join("etc", "users", "Finity")
+	input := strings.Join([]string{
+		"USER Added by goftpd",
+		"GENERAL 0,120 -1 0 0",
+		"LOGINS 16 0 6 10",
+		"TIMEFRAME 0 0",
+		"FLAGS 3",
+		"TAGLINE No Tagline Set",
+		"HOMEDIR /site",
+		"DIR /",
+		"ADDED 1712306777 goftpd",
+		"EXPIRES 0",
+		"CREDITS 245752440015 0",
+		"RATIO 3 -1",
+		"ALLUP 236 24605139109 0",
+		"ALLDN 10 1000 0",
+		"WKUP 236 24605139109 0",
+		"WKDN 10 1000 0",
+		"DAYUP 236 24605139109 0",
+		"DAYDN 10 1000 0",
+		"MONTHUP 236 24605139109 0",
+		"MONTHDN 10 1000 0",
+		"NUKE 0 0 0",
+		"TIME 0 0 0 0 1712306777",
+		"PRIMARY_GROUP iND",
+		"GROUP iND 0",
+		"IP *@1.2.3.4",
+	}, "\n") + "\n"
+	if err := os.WriteFile(userPath, []byte(input), 0600); err != nil {
+		t.Fatalf("WriteFile(user) error = %v", err)
+	}
+
+	u, err := LoadUser("Finity", nil)
+	if err != nil {
+		t.Fatalf("LoadUser() error = %v", err)
+	}
+	u.AllUp = StatLine{Files: 1, Bytes: 1}
+	if err := u.Save(); err == nil {
+		t.Fatalf("Save() succeeded while reducing ALLUP")
+	}
+	out, err := os.ReadFile(userPath)
+	if err != nil {
+		t.Fatalf("ReadFile(user) error = %v", err)
+	}
+	if string(out) != input {
+		t.Fatalf("unsafe stat save changed the original file\n%s", string(out))
+	}
+}
+
 func TestLoadUserRejectsEmptyUserfile(t *testing.T) {
 	tmp := t.TempDir()
 	oldWD, err := os.Getwd()
