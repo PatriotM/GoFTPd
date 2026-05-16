@@ -425,45 +425,6 @@ func (r *RaceDB) Reconcile(vfs *VirtualFileSystem) error {
 		}
 	}
 
-	sfvRows, err := r.db.Query(`
-        SELECT rel.path, rel.sfv_name, rf.filename, rf.expected_crc32
-        FROM releases rel
-        JOIN release_files rf ON rf.release_id = rel.id
-        WHERE rel.sfv_name <> ''
-          AND rf.is_expected = 1
-        ORDER BY rel.path, rf.filename
-    `)
-	if err != nil {
-		return err
-	}
-	defer sfvRows.Close()
-
-	sfvNameByPath := make(map[string]string)
-	sfvByPath := make(map[string]map[string]uint32)
-	for sfvRows.Next() {
-		var dirPath, sfvName, fileName string
-		var expectedCRC int64
-		if err := sfvRows.Scan(&dirPath, &sfvName, &fileName, &expectedCRC); err != nil {
-			return err
-		}
-		if sfvByPath[dirPath] == nil {
-			sfvByPath[dirPath] = make(map[string]uint32)
-		}
-		sfvNameByPath[dirPath] = sfvName
-		fileName = raceDBFileKey(fileName)
-		if fileName != "" {
-			sfvByPath[dirPath][fileName] = uint32(expectedCRC)
-		}
-	}
-	if err := sfvRows.Err(); err != nil {
-		return err
-	}
-	for dirPath, entries := range sfvByPath {
-		if len(entries) > 0 {
-			vfs.SetSFVData(dirPath, sfvNameByPath[dirPath], entries)
-		}
-	}
-
 	return nil
 }
 
@@ -756,64 +717,6 @@ func (r *RaceDB) HasRelease(dirPath string) bool {
 	var one int
 	err := r.db.QueryRow(`SELECT 1 FROM releases WHERE path = ? LIMIT 1`, dirPath).Scan(&one)
 	return err == nil && one == 1
-}
-
-func (r *RaceDB) GetImmediateReleaseProgress(parentDir string) map[string]core.ReleaseProgressStat {
-	if r == nil || r.db == nil {
-		return nil
-	}
-	parentDir = filepath.Clean(parentDir)
-	if parentDir == "." || parentDir == "" || parentDir == "/" {
-		return nil
-	}
-
-	rows, err := r.db.Query(`
-        WITH present_counts AS (
-            SELECT e.release_id AS release_id, COUNT(*) AS present
-            FROM release_files e
-            JOIN release_files p
-              ON p.release_id = e.release_id
-             AND p.is_present = 1
-             AND p.filename = e.filename
-             AND p.checksum = e.expected_crc32
-            WHERE e.is_expected = 1
-            GROUP BY e.release_id
-        )
-        SELECT rel.path, rel.total_expected, COALESCE(pc.present, 0), CASE WHEN rel.sfv_name <> '' THEN 1 ELSE 0 END
-        FROM releases rel
-        LEFT JOIN present_counts pc ON pc.release_id = rel.id
-        WHERE rel.path LIKE ?
-          AND rel.path NOT LIKE ?
-    `, parentDir+"/%", parentDir+"/%/%")
-	if err != nil {
-		log.Printf("[RaceDB] immediate release progress query failed for %s: %v", parentDir, err)
-		return nil
-	}
-	defer rows.Close()
-
-	out := map[string]core.ReleaseProgressStat{}
-	for rows.Next() {
-		var path string
-		var total, present, hasSFVInt int
-		if err := rows.Scan(&path, &total, &present, &hasSFVInt); err != nil {
-			log.Printf("[RaceDB] immediate release progress row scan failed for %s: %v", parentDir, err)
-			return nil
-		}
-		out[path] = core.ReleaseProgressStat{
-			Path:    path,
-			Present: present,
-			Total:   total,
-			HasSFV:  hasSFVInt != 0,
-		}
-	}
-	if err := rows.Err(); err != nil {
-		log.Printf("[RaceDB] immediate release progress iteration failed for %s: %v", parentDir, err)
-		return nil
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }
 
 func raceDBFileKey(name string) string {

@@ -126,9 +126,15 @@ func (s *Session) HandleSiteAddUser(args []string) bool {
 		fmt.Fprintf(s.Conn, "550 Failed to hash password: %v\r\n", err)
 		return false
 	}
-	newUser.Save()
+	if err := newUser.Save(); err != nil {
+		fmt.Fprintf(s.Conn, "550 Failed to save user %s: %v\r\n", args[0], err)
+		return false
+	}
 
-	AddUserToPasswd(args[0], hashedPass, s.Config.PasswdFile)
+	if err := AddUserToPasswd(args[0], hashedPass, s.Config.PasswdFile); err != nil {
+		fmt.Fprintf(s.Conn, "550 Failed to update passwd for %s: %v\r\n", args[0], err)
+		return false
+	}
 
 	fmt.Fprintf(s.Conn, "200 User %s added with %d IP(s).\r\n", args[0], len(newUser.IPs))
 	return false
@@ -162,8 +168,14 @@ func (s *Session) HandleSiteGAddUser(args []string) bool {
 		fmt.Fprintf(s.Conn, "550 Failed to hash password: %v\r\n", err)
 		return false
 	}
-	newUser.Save()
-	AddUserToPasswd(args[0], hashedPass, s.Config.PasswdFile)
+	if err := newUser.Save(); err != nil {
+		fmt.Fprintf(s.Conn, "550 Failed to save user %s: %v\r\n", args[0], err)
+		return false
+	}
+	if err := AddUserToPasswd(args[0], hashedPass, s.Config.PasswdFile); err != nil {
+		fmt.Fprintf(s.Conn, "550 Failed to update passwd for %s: %v\r\n", args[0], err)
+		return false
+	}
 	fmt.Fprintf(s.Conn, "200 User %s added to group %s with %d IP(s).\r\n", args[0], args[2], len(newUser.IPs))
 	return false
 }
@@ -249,7 +261,10 @@ func (s *Session) HandleSiteChGrp(args []string) bool {
 			added = append(added, grp)
 		}
 	}
-	targetUser.Save()
+	if err := targetUser.Save(); err != nil {
+		fmt.Fprintf(s.Conn, "550 Failed to save user %s: %v\r\n", args[0], err)
+		return false
+	}
 
 	msg := fmt.Sprintf("200 %s:", args[0])
 	if len(added) > 0 {
@@ -313,7 +328,10 @@ func (s *Session) HandleSiteFlags(args []string) bool {
 		}
 	}
 
-	targetUser.Save()
+	if err := targetUser.Save(); err != nil {
+		fmt.Fprintf(s.Conn, "550 Failed to save flags for %s: %v\r\n", args[0], err)
+		return false
+	}
 	fmt.Fprintf(s.Conn, "200 Flags for %s: %s\r\n", args[0], targetUser.Flags)
 	return false
 }
@@ -336,7 +354,10 @@ func (s *Session) HandleSiteChPGrp(args []string) bool {
 	if gid, ok := s.GroupMap[args[1]]; ok {
 		targetUser.GID = gid
 	}
-	targetUser.Save()
+	if err := targetUser.Save(); err != nil {
+		fmt.Fprintf(s.Conn, "550 Failed to save primary group for %s: %v\r\n", args[0], err)
+		return false
+	}
 	fmt.Fprintf(s.Conn, "200 Primary group changed.\r\n")
 	return false
 }
@@ -356,7 +377,10 @@ func (s *Session) HandleSiteGAdmin(args []string) bool {
 		return false
 	}
 	targetUser.Groups[args[0]] = 1
-	targetUser.Save()
+	if err := targetUser.Save(); err != nil {
+		fmt.Fprintf(s.Conn, "550 Failed to save gadmin for %s: %v\r\n", args[1], err)
+		return false
+	}
 	fmt.Fprintf(s.Conn, "200 Gadmin set.\r\n")
 	return false
 }
@@ -386,8 +410,14 @@ func (s *Session) HandleSiteChPass(args []string) bool {
 	}
 
 	u.Password = hashedPass
-	u.Save()
-	AddUserToPasswd(args[0], hashedPass, s.Config.PasswdFile)
+	if err := u.Save(); err != nil {
+		fmt.Fprintf(s.Conn, "550 Failed to save password for %s: %v\r\n", args[0], err)
+		return false
+	}
+	if err := AddUserToPasswd(args[0], hashedPass, s.Config.PasswdFile); err != nil {
+		fmt.Fprintf(s.Conn, "550 Failed to update passwd for %s: %v\r\n", args[0], err)
+		return false
+	}
 
 	fmt.Fprintf(s.Conn, "200 Password changed for %s.\r\n", args[0])
 	return false
@@ -1492,7 +1522,10 @@ func (s *Session) HandleSiteReAdd(args []string) bool {
 		fmt.Fprintf(s.Conn, "550 No stored password available. Use SITE READD <user> <newpass>.\r\n")
 		return false
 	}
-	AddUserToPasswd(args[0], hash, s.Config.PasswdFile)
+	if err := AddUserToPasswd(args[0], hash, s.Config.PasswdFile); err != nil {
+		fmt.Fprintf(s.Conn, "550 Failed to restore passwd entry for %s: %v\r\n", args[0], err)
+		return false
+	}
 	fmt.Fprintf(s.Conn, "200 User %s restored.\r\n", args[0])
 	return false
 }

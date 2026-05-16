@@ -62,7 +62,7 @@ type MasterBridge interface {
 	CheckZipIntegrity(archivePath string) (bool, error)
 
 	// GetSFVInfo asks a slave to parse an SFV file and return filename→CRC32 entries.
-	GetSFVInfo(sfvPath string) ([]SFVEntryInfo, error)
+	GetSFVInfo(sfvPath string) (SFVInfo, error)
 
 	// WriteFile writes a small file to a slave (for .message generation).
 	WriteFile(filePath string, content []byte) error
@@ -85,19 +85,10 @@ type MasterBridge interface {
 	SyncReleaseRaceStats(dirPath string) error
 
 	// CacheSFV caches parsed SFV entries on a VFS directory for race tracking.
-	CacheSFV(dirPath string, sfvName string, entries []SFVEntryInfo)
+	CacheSFV(dirPath string, sfvName string, info SFVInfo)
 
 	// GetVFSRaceStats returns race statistics computed from VFS metadata.
 	GetVFSRaceStats(dirPath string) (users []VFSRaceUser, groups []VFSRaceGroup, totalBytes int64, present int, total int)
-
-	// GetImmediateReleaseProgress returns completion metadata for direct child
-	// release directories below dirPath, keyed by absolute release path.
-	GetImmediateReleaseProgress(dirPath string) map[string]ReleaseProgressStat
-
-	// GetImmediateReleaseChildFacts returns direct-child release metadata that
-	// can be derived from the current VFS in one pass, keyed by absolute
-	// release path.
-	GetImmediateReleaseChildFacts(dirPath string) map[string]ReleaseChildFacts
 
 	// GetRaceWallClockMilliseconds returns the wall-clock race duration (first
 	// file start to last file end) in milliseconds. Used for accurate aggregate
@@ -228,6 +219,7 @@ type ReleaseProgressStat struct {
 type ReleaseChildFacts struct {
 	Path         string
 	VisibleCount int
+	FileCount    int
 	HasSFV       bool
 	HasNFO       bool
 }
@@ -236,6 +228,12 @@ type ReleaseChildFacts struct {
 type SFVEntryInfo struct {
 	FileName string
 	CRC32    uint32
+}
+
+// SFVInfo is parsed SFV metadata plus the checksum of the SFV file itself.
+type SFVInfo struct {
+	Entries  []SFVEntryInfo
+	Checksum uint32
 }
 
 // VFSRaceUser holds per-user race stats from VFS.

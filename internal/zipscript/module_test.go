@@ -41,6 +41,97 @@ func TestUsesReleaseCheckEntryRequiresExactReleaseDepth(t *testing.T) {
 	}
 }
 
+func TestRequestContainerMatchesConfiguredRequestChildPattern(t *testing.T) {
+	cfg := Config{
+		Enabled: true,
+		Sections: SectionsConfig{
+			SFV:          []string{"/REQUESTS/*/*"},
+			Zip:          []string{"/REQUESTS/*/*"},
+			ReleaseCheck: []string{"/REQUESTS/*/*"},
+		},
+	}
+	dirPath := "/REQUESTS/REQ-Space.Haven.Linux-rG"
+
+	if !UsesSFV(cfg, dirPath) || !UsesSFVEntry(cfg, dirPath) {
+		t.Fatalf("expected request container to inherit SFV mode from /REQUESTS/*/*")
+	}
+	if !UsesZip(cfg, dirPath) || !UsesZipEntry(cfg, dirPath) {
+		t.Fatalf("expected request container to inherit ZIP mode from /REQUESTS/*/*")
+	}
+	if !UsesReleaseCheck(cfg, dirPath) || !UsesReleaseCheckEntry(cfg, dirPath) {
+		t.Fatalf("expected request container to inherit release-check mode from /REQUESTS/*/*")
+	}
+	if !UsesReleaseCheck(cfg, "/REQUESTS/FILLED-Space.Haven.Linux-rG") {
+		t.Fatalf("expected filled request container to keep release-check mode")
+	}
+}
+
+func TestStatusMarkersRequireRealContentForNoSFVAndNoNFO(t *testing.T) {
+	cfg := Config{
+		Enabled: true,
+		Sections: SectionsConfig{
+			ReleaseCheck: []string{"/REQUESTS/*/*"},
+		},
+		Incomplete: IncompleteConfig{
+			Enabled:        true,
+			NoSFVIndicator: "[no-sfv]-%0",
+			NFOIndicator:   "[no-nfo]-%0",
+		},
+	}
+
+	empty := BuildStatusMarkerEntries(cfg, "/REQUESTS", []StatusMarkerRelease{{
+		Name: "REQ-Space.Haven.Linux-rG",
+		Path: "/REQUESTS/REQ-Space.Haven.Linux-rG",
+	}})
+	if len(empty) != 0 {
+		t.Fatalf("did not expect empty request placeholder markers, got %#v", empty)
+	}
+
+	withFile := BuildStatusMarkerEntries(cfg, "/REQUESTS", []StatusMarkerRelease{{
+		Name:      "REQ-Space.Haven.Linux-rG",
+		Path:      "/REQUESTS/REQ-Space.Haven.Linux-rG",
+		FileCount: 1,
+	}})
+	if len(withFile) != 2 {
+		t.Fatalf("expected no-sfv and no-nfo markers once files exist, got %#v", withFile)
+	}
+}
+
+func TestStatusMarkersIgnoreProgressWithoutCurrentContent(t *testing.T) {
+	cfg := Config{
+		Enabled: true,
+		Sections: SectionsConfig{
+			SFV: []string{"/X265/*"},
+		},
+		Incomplete: IncompleteConfig{
+			Enabled:        true,
+			Indicator:      "[incomplete]-%0",
+			NoSFVIndicator: "[no-sfv]-%0",
+			NFOIndicator:   "[no-nfo]-%0",
+		},
+	}
+
+	stale := BuildStatusMarkerEntries(cfg, "/X265", []StatusMarkerRelease{{
+		Name:  "Old.Release-GRP",
+		Path:  "/X265/Old.Release-GRP",
+		Total: 10,
+	}})
+	if len(stale) != 0 {
+		t.Fatalf("did not expect stale total-only progress markers, got %#v", stale)
+	}
+
+	current := BuildStatusMarkerEntries(cfg, "/X265", []StatusMarkerRelease{{
+		Name:    "Current.Release-GRP",
+		Path:    "/X265/Current.Release-GRP",
+		HasSFV:  true,
+		Present: 1,
+		Total:   10,
+	}})
+	if len(current) != 2 {
+		t.Fatalf("expected current incomplete/no-nfo markers, got %#v", current)
+	}
+}
+
 func TestAudioSortLinksSeparateBySectionByDefault(t *testing.T) {
 	cfg := Config{
 		Enabled: true,
@@ -250,6 +341,31 @@ func TestValidateUploadRestrictFilesHonorsSetting(t *testing.T) {
 	cfg.SFV.RestrictFiles = boolPtr(true)
 	if err := ValidateUpload(cfg, nil, "/X265/Some.Release-GRP", "bad.rar", []string{"release.sfv"}, nil, sfvEntries); err == nil {
 		t.Fatalf("expected unlisted payload to be denied when restrict_files is enabled")
+	}
+}
+
+func TestValidateUploadBlocksConfiguredRaceContainers(t *testing.T) {
+	cfg := Config{
+		Enabled: true,
+		Sections: SectionsConfig{
+			SFV: []string{"/TV-1080P/*", "/0DAY/*/*"},
+			Zip: []string{"/EBOOKS/*/*"},
+		},
+		AllowedFiles: AllowedFilesConfig{
+			AllowedTypes: []string{"sfv", "nfo", "rar", "zip"},
+		},
+	}
+
+	for _, dirPath := range []string{"/TV-1080P", "/0DAY", "/0DAY/0516", "/EBOOKS", "/EBOOKS/0516"} {
+		if err := ValidateUpload(cfg, nil, dirPath, "release.r00", nil, nil, nil); err == nil {
+			t.Fatalf("expected upload into configured container %s to be blocked", dirPath)
+		}
+	}
+	if err := ValidateUpload(cfg, nil, "/TV-1080P/Real.Release-GRP", "release.r00", nil, nil, nil); err != nil {
+		t.Fatalf("expected upload into release dir to be allowed, got %v", err)
+	}
+	if err := ValidateUpload(cfg, nil, "/TV-1080P/Real.Release-GRP/Sample", "sample.r00", nil, nil, nil); err != nil {
+		t.Fatalf("expected upload into release subdir to be allowed, got %v", err)
 	}
 }
 

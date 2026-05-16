@@ -246,6 +246,9 @@ func (p *Plugin) handleRequest(ctx plugin.SiteContext, args []string) bool {
 		return true
 	}
 	added := p.numberedEntry(entries[len(entries)-1])
+	if byUser == "" {
+		p.emitRequestCreated(entries[len(entries)-1], added)
+	}
 	if p.showOnRequest {
 		return p.replyStatus(ctx)
 	}
@@ -707,6 +710,35 @@ func (p *Plugin) saveRequests(entries []requestEntry) error {
 		}
 	}
 	return nil
+}
+
+func (p *Plugin) emitRequestCreated(entry requestEntry, numbered string) {
+	if p == nil || p.svc == nil || p.svc.EmitEvent == nil {
+		return
+	}
+	release := strings.TrimSpace(entry.Release)
+	if release == "" {
+		return
+	}
+	requester := strings.TrimSpace(entry.By)
+	if requester == "" {
+		requester = "unknown"
+	}
+	message := fmt.Sprintf("REQUEST: %s %s created by %s", strings.TrimSpace(numbered), release, requester)
+	data := map[string]string{
+		"template":      "REQUESTADD",
+		"announce_type": "REQUESTADD",
+		"request":       release,
+		"relname":       release,
+		"requester":     requester,
+		"requested_by":  requester,
+		"number":        strconv.Itoa(entry.Num),
+		"numbered":      strings.TrimSpace(numbered),
+		"date":          entry.Date,
+		"for_user":      entry.For,
+		"message":       message,
+	}
+	p.svc.EmitEvent("CUSTOM", p.requestDir(release), release, "REQUESTS", 0, 0, data)
 }
 
 func (p *Plugin) ensureBaseDir(ctx plugin.SiteContext) error {

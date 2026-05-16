@@ -506,33 +506,33 @@ func TestVFSAddFilePreservesVerifiedTransferDataAcrossRemerge(t *testing.T) {
 	}
 }
 
-func TestVFSImmediateChildDirProgressUsesLiveVerifiedFiles(t *testing.T) {
+func TestVFSSFVMetadataRequiresCurrentSFVFileWhenStrict(t *testing.T) {
 	vfs := NewVirtualFileSystem()
 	vfs.AddFile("/X265/release", VFSFile{IsDir: true, Seen: true})
-	vfs.SetSFVData("/X265/release", "release.sfv", map[string]uint32{
-		"good.r00": 1,
-		"bad.r01":  2,
-	})
-	vfs.AddFile("/X265/release/good.r00", VFSFile{
-		Size:         100,
-		Seen:         true,
-		Checksum:     1,
-		LastModified: 100,
-	})
-	vfs.AddFile("/X265/release/bad.r01", VFSFile{
-		Size:         100,
-		Seen:         true,
-		Checksum:     0,
-		LastModified: 100,
+	vfs.SetSFVDataWithChecksum("/X265/release", "release.sfv", 123, map[string]uint32{
+		"file.r00": 1,
 	})
 
-	progress := vfs.GetImmediateChildDirProgress("/X265")
-	stat, ok := progress["/X265/release"]
-	if !ok {
-		t.Fatalf("expected release progress entry, got %+v", progress)
+	if meta := vfs.GetSFVData("/X265/release"); meta != nil {
+		t.Fatalf("expected strict sfv metadata without current sfv file to be ignored, got %+v", meta)
 	}
-	if stat.Present != 1 || stat.Total != 2 || !stat.HasSFV {
-		t.Fatalf("expected live verified progress 1/2 with sfv, got %+v", stat)
+
+	vfs.AddFile("/X265/release/release.sfv", VFSFile{Seen: true, Checksum: 123})
+	if meta := vfs.GetSFVData("/X265/release"); meta == nil || len(meta.SFVEntries) != 1 {
+		t.Fatalf("expected metadata to become valid when current sfv file exists, got %+v", meta)
+	}
+}
+
+func TestVFSSFVMetadataRejectsMismatchedSFVChecksum(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/X265/release", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/X265/release/release.sfv", VFSFile{Seen: true, Checksum: 999})
+	vfs.SetSFVDataWithChecksum("/X265/release", "release.sfv", 123, map[string]uint32{
+		"file.r00": 1,
+	})
+
+	if meta := vfs.GetSFVData("/X265/release"); meta != nil {
+		t.Fatalf("expected mismatched sfv checksum metadata to be ignored, got %+v", meta)
 	}
 }
 

@@ -27,6 +27,7 @@ type StatusMarkerRelease struct {
 	Path         string
 	ModTime      int64
 	VisibleCount int
+	FileCount    int
 	HasSFV       bool
 	HasNFO       bool
 	Present      int
@@ -87,7 +88,7 @@ func UsesSFV(cfg Config, dirPath string) bool {
 	if len(cfg.Sections.SFV) == 0 {
 		return true
 	}
-	return pathMatchesAny(dirPath, cfg.Sections.SFV)
+	return pathMatchesAny(dirPath, cfg.Sections.SFV) || requestContainerMatchesChildPattern(dirPath, cfg.Sections.SFV)
 }
 
 func UsesZip(cfg Config, dirPath string) bool {
@@ -97,7 +98,7 @@ func UsesZip(cfg Config, dirPath string) bool {
 	if pathMatchesAny(dirPath, cfg.Sections.NoCheck) {
 		return false
 	}
-	return pathMatchesAny(dirPath, cfg.Sections.Zip)
+	return pathMatchesAny(dirPath, cfg.Sections.Zip) || requestContainerMatchesChildPattern(dirPath, cfg.Sections.Zip)
 }
 
 func UsesRace(cfg Config, dirPath string) bool {
@@ -114,7 +115,7 @@ func UsesReleaseCheck(cfg Config, dirPath string) bool {
 	if len(cfg.Sections.ReleaseCheck) == 0 {
 		return UsesRace(cfg, dirPath)
 	}
-	return pathMatchesAny(dirPath, cfg.Sections.ReleaseCheck)
+	return pathMatchesAny(dirPath, cfg.Sections.ReleaseCheck) || requestContainerMatchesChildPattern(dirPath, cfg.Sections.ReleaseCheck)
 }
 
 // UsesReleaseCheckEntry reports whether dirPath matches a configured
@@ -130,7 +131,7 @@ func UsesReleaseCheckEntry(cfg Config, dirPath string) bool {
 	if len(cfg.Sections.ReleaseCheck) == 0 {
 		return UsesRaceEntry(cfg, dirPath)
 	}
-	return pathMatchesAnyExact(dirPath, cfg.Sections.ReleaseCheck)
+	return pathMatchesAnyExact(dirPath, cfg.Sections.ReleaseCheck) || requestContainerMatchesChildPattern(dirPath, cfg.Sections.ReleaseCheck)
 }
 
 func UsesCleanup(cfg Config, dirPath string) bool {
@@ -151,7 +152,7 @@ func UsesSFVEntry(cfg Config, dirPath string) bool {
 	if len(cfg.Sections.SFV) == 0 {
 		return true
 	}
-	return pathMatchesAnyExact(dirPath, cfg.Sections.SFV)
+	return pathMatchesAnyExact(dirPath, cfg.Sections.SFV) || requestContainerMatchesChildPattern(dirPath, cfg.Sections.SFV)
 }
 
 func UsesZipEntry(cfg Config, dirPath string) bool {
@@ -161,7 +162,7 @@ func UsesZipEntry(cfg Config, dirPath string) bool {
 	if pathMatchesAny(dirPath, cfg.Sections.NoCheck) {
 		return false
 	}
-	return pathMatchesAnyExact(dirPath, cfg.Sections.Zip)
+	return pathMatchesAnyExact(dirPath, cfg.Sections.Zip) || requestContainerMatchesChildPattern(dirPath, cfg.Sections.Zip)
 }
 
 func AnnounceReleaseSubdirs(cfg Config) bool {
@@ -280,10 +281,14 @@ func BuildStatusMarkerEntries(cfg Config, parentDir string, releases []StatusMar
 			continue
 		}
 
-		if noSFVPattern != "" && !rel.HasSFV {
+		hasContent := rel.FileCount > 0 || rel.Present > 0 || rel.HasSFV || rel.HasNFO
+		if !hasContent && !isRequestContainerPath(releasePath) {
+			hasContent = rel.VisibleCount > 0
+		}
+		if hasContent && noSFVPattern != "" && !rel.HasSFV {
 			appendStatusMarker(&out, seen, statusMarkerName(noSFVPattern, name), releasePath, rel.ModTime)
 		}
-		if nfoPattern != "" && !rel.HasNFO {
+		if hasContent && nfoPattern != "" && !rel.HasNFO {
 			appendStatusMarker(&out, seen, statusMarkerName(nfoPattern, name), releasePath, rel.ModTime)
 		}
 
@@ -297,7 +302,7 @@ func BuildStatusMarkerEntries(cfg Config, parentDir string, releases []StatusMar
 			}
 		}
 
-		if rel.Total > 0 && rel.Present < rel.Total && incompletePattern != "" {
+		if hasContent && rel.Total > 0 && rel.Present < rel.Total && incompletePattern != "" {
 			appendStatusMarker(&out, seen, statusMarkerName(incompletePattern, name), releasePath, rel.ModTime)
 		}
 		if cdPattern != "" && isDiscDirName(name) && rel.Total > 0 && rel.Present < rel.Total {
@@ -369,7 +374,13 @@ func MarkEmptyDirsOnRescan(cfg Config) bool {
 
 func ValidateUpload(cfg Config, uploadUser *user.User, dirPath, fileName string, existingNames []string, existingDirs []string, sfvEntries map[string]uint32) error {
 	if !UsesRace(cfg, dirPath) {
+		if isConfiguredRaceContainerDir(cfg, dirPath) {
+			return errors.New("zipscript: upload files inside a release directory, not the section or dated folder")
+		}
 		return nil
+	}
+	if !UsesRaceEntry(cfg, dirPath) && !isRaceReleaseChildUploadDir(cfg, dirPath) {
+		return errors.New("zipscript: upload files inside a release directory, not the section or dated folder")
 	}
 
 	lowerName := strings.ToLower(strings.TrimSpace(fileName))
@@ -423,6 +434,38 @@ func ValidateUpload(cfg Config, uploadUser *user.User, dirPath, fileName string,
 	}
 
 	return nil
+}
+
+func isRaceReleaseChildUploadDir(cfg Config, dirPath string) bool {
+	cleanPath := normalizePath(dirPath)
+	parent := path.Dir(cleanPath)
+	return parent != "." && parent != "/" && UsesRaceEntry(cfg, parent)
+}
+
+func isConfiguredRaceContainerDir(cfg Config, dirPath string) bool {
+	if !cfg.Enabled {
+		return false
+	}
+	if pathMatchesAny(dirPath, cfg.Sections.NoCheck) {
+		return false
+	}
+	cleanPath := normalizePath(dirPath)
+	if UsesRaceEntry(cfg, cleanPath) {
+		return false
+	}
+	candidates := []string{
+		path.Join(cleanPath, "_release_"),
+		path.Join(cleanPath, "_date_", "_release_"),
+	}
+	for _, candidate := range candidates {
+		if len(cfg.Sections.SFV) > 0 && pathMatchesAnyExact(candidate, cfg.Sections.SFV) {
+			return true
+		}
+		if len(cfg.Sections.Zip) > 0 && pathMatchesAnyExact(candidate, cfg.Sections.Zip) {
+			return true
+		}
+	}
+	return false
 }
 
 func sfvFirstAppliesToUpload(cfg Config, uploadUser *user.User, dirPath string) bool {
@@ -666,7 +709,28 @@ func isRequestReleasePath(dirPath string) bool {
 		return false
 	}
 	parts := strings.Split(clean, "/")
-	return len(parts) >= 3 && strings.EqualFold(parts[0], "REQUESTS") && strings.HasPrefix(strings.ToUpper(parts[1]), "REQ-")
+	return len(parts) >= 2 && strings.EqualFold(parts[0], "REQUESTS") && isRequestWrapperName(parts[1])
+}
+
+func requestContainerMatchesChildPattern(dirPath string, patterns []string) bool {
+	if len(patterns) == 0 || !isRequestContainerPath(dirPath) {
+		return false
+	}
+	return pathMatchesAnyExact(path.Join(normalizePath(dirPath), "_request_payload_"), patterns)
+}
+
+func isRequestContainerPath(dirPath string) bool {
+	clean := strings.Trim(path.Clean("/"+strings.TrimSpace(dirPath)), "/")
+	if clean == "" {
+		return false
+	}
+	parts := strings.Split(clean, "/")
+	return len(parts) == 2 && strings.EqualFold(parts[0], "REQUESTS") && isRequestWrapperName(parts[1])
+}
+
+func isRequestWrapperName(name string) bool {
+	upper := strings.ToUpper(strings.TrimSpace(name))
+	return strings.HasPrefix(upper, "REQ-") || strings.HasPrefix(upper, "FILLED-")
 }
 
 func ExpectedFileLabel(cfg Config, dirPath string) string {

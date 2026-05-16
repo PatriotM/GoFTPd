@@ -2,7 +2,6 @@ package master
 
 import (
 	"crypto/tls"
-	"encoding/gob"
 	"fmt"
 	"log"
 	"net"
@@ -24,13 +23,8 @@ import (
 //
 
 const (
-	vfsFilePath             = "userdata/vfs.dat"
-	releaseSnapshotFilePath = "userdata/release_snapshot.dat"
+	vfsFilePath = "userdata/vfs.dat"
 )
-
-type releaseSnapshotFile struct {
-	Releases map[string]*vfsReleaseSnapshot
-}
 
 type releaseRaceWindow struct {
 	StartMs     int64
@@ -387,9 +381,6 @@ func (sm *SlaveManager) getPolicy(name string) (SlaveRoutePolicy, bool) {
 func (sm *SlaveManager) Start() error {
 	// Load saved VFS from disk (if exists)
 	sm.vfs.LoadFromDisk(vfsFilePath)
-	if err := sm.loadReleaseSnapshotFromDisk(releaseSnapshotFilePath); err != nil {
-		log.Printf("[SlaveManager] release snapshot load failed: %v", err)
-	}
 	for _, slaveName := range sm.vfs.SlaveNames() {
 		sm.startupCachedSlaves.Store(slaveName, struct{}{})
 	}
@@ -859,14 +850,6 @@ func (sm *SlaveManager) setReleaseFactLocked(dirPath string, snapshot *vfsReleas
 	sm.releaseFactsByParent[parent][dirPath] = copyState
 }
 
-func (sm *SlaveManager) rebuildReleaseFactsLocked(snapshots map[string]*vfsReleaseSnapshot) {
-	sm.releaseFacts = make(map[string]*vfsReleaseSnapshot)
-	sm.releaseFactsByParent = make(map[string]map[string]*vfsReleaseSnapshot)
-	for dirPath, snapshot := range snapshots {
-		sm.setReleaseFactLocked(dirPath, snapshot)
-	}
-}
-
 func (sm *SlaveManager) SetReleaseMediaInfo(dirPath string, fields map[string]string) {
 	if sm == nil {
 		return
@@ -1111,107 +1094,6 @@ func (sm *SlaveManager) GetImmediateReleaseProgress(dirPath string) map[string]c
 	return out
 }
 
-func (sm *SlaveManager) GetImmediateReleaseChildFacts(dirPath string) map[string]core.ReleaseChildFacts {
-	if sm == nil {
-		return nil
-	}
-	cleanDirPath := filepath.Clean(dirPath)
-	sm.releaseStateMu.RLock()
-	byParent := sm.releaseFactsByParent[cleanDirPath]
-	if len(byParent) == 0 {
-		sm.releaseStateMu.RUnlock()
-		return nil
-	}
-	out := make(map[string]core.ReleaseChildFacts, len(byParent))
-	for childPath, snapshot := range byParent {
-		if snapshot == nil {
-			continue
-		}
-		out[childPath] = core.ReleaseChildFacts{
-			Path:         childPath,
-			VisibleCount: snapshot.VisibleCount,
-			HasSFV:       snapshot.HasSFV,
-			HasNFO:       snapshot.HasNFO,
-		}
-	}
-	sm.releaseStateMu.RUnlock()
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-func (sm *SlaveManager) saveReleaseSnapshotToDisk(filePath string) error {
-	if sm == nil {
-		return nil
-	}
-	snapshots := sm.vfs.SnapshotReleaseFacts()
-	sm.releaseStateMu.Lock()
-	sm.rebuildReleaseFactsLocked(snapshots)
-	sm.releaseStateMu.Unlock()
-
-	snapshotFile := releaseSnapshotFile{
-		Releases: make(map[string]*vfsReleaseSnapshot, len(snapshots)),
-	}
-	for dirPath, snapshot := range snapshots {
-		if snapshot == nil {
-			continue
-		}
-		snapshotFile.Releases[dirPath] = cloneReleaseSnapshot(snapshot)
-	}
-
-	dir := filepath.Dir(filePath)
-	if dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return fmt.Errorf("create release snapshot dir: %w", err)
-		}
-	}
-
-	tmpPattern := filepath.Base(filePath) + ".*.tmp"
-	f, err := os.CreateTemp(dir, tmpPattern)
-	if err != nil {
-		return fmt.Errorf("create release snapshot file: %w", err)
-	}
-	tmpPath := f.Name()
-	enc := gob.NewEncoder(f)
-	if err := enc.Encode(snapshotFile); err != nil {
-		f.Close()
-		os.Remove(tmpPath)
-		return fmt.Errorf("encode release snapshot: %w", err)
-	}
-	f.Close()
-	if err := os.Rename(tmpPath, filePath); err != nil {
-		return fmt.Errorf("rename release snapshot file: %w", err)
-	}
-	return nil
-}
-
-func (sm *SlaveManager) loadReleaseSnapshotFromDisk(filePath string) error {
-	if sm == nil {
-		return nil
-	}
-	f, err := os.Open(filePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("open release snapshot file: %w", err)
-	}
-	defer f.Close()
-
-	var snapshotFile releaseSnapshotFile
-	dec := gob.NewDecoder(f)
-	if err := dec.Decode(&snapshotFile); err != nil {
-		return fmt.Errorf("decode release snapshot: %w", err)
-	}
-
-	sm.releaseStateMu.Lock()
-	defer sm.releaseStateMu.Unlock()
-	sm.rebuildReleaseFactsLocked(snapshotFile.Releases)
-	sm.vfs.LoadStartupReleaseFacts(snapshotFile.Releases)
-	return nil
-}
-
 // initializeSlaveAfterConnect triggers remerge and marks slave available.
 // Uses "instant online" approach : slave is marked available
 // immediately and remerge runs in the background. Files appear in LIST
@@ -1230,7 +1112,6 @@ func (sm *SlaveManager) initializeSlaveRemerge(rs *RemoteSlave, basePath string,
 	if !scoped {
 		if _, useCachedVFS := sm.startupCachedSlaves.LoadAndDelete(rs.name); useCachedVFS {
 			log.Printf("[SlaveManager] Reusing cached VFS for slave %s on startup; skipping initial remerge", rs.name)
-			sm.rebuildAllStatusMarkers()
 			rs.remerging.Store(false)
 			rs.SetAvailable(true)
 			sm.publishDiskStatus(rs)
@@ -1293,9 +1174,6 @@ func (sm *SlaveManager) initializeSlaveRemerge(rs *RemoteSlave, basePath string,
 			if err := sm.vfs.SaveToDisk(vfsFilePath); err != nil {
 				log.Printf("[SlaveManager] Error saving VFS after remerge: %v", err)
 			}
-			if err := sm.saveReleaseSnapshotToDisk(releaseSnapshotFilePath); err != nil {
-				log.Printf("[SlaveManager] Error saving release snapshot after remerge: %v", err)
-			}
 		}
 	}
 	rs.remerging.Store(false)
@@ -1310,7 +1188,10 @@ func (sm *SlaveManager) ProcessRemerge(rs *RemoteSlave, resp *protocol.AsyncResp
 	log.Printf("[SlaveManager] Remerge from %s: dir=%s files=%d", rs.name, resp.Path, len(resp.Files))
 
 	sfvPaths := make([]string, 0, 1)
-	touchedDirs := make(map[string]struct{}, 8)
+	touchedReleases := make(map[string]struct{}, 8)
+	touchedParents := make(map[string]struct{}, 2)
+	statusCfg := sm.statusMarkerConfig().Zipscript
+	sm.noteTouchedStatusMarkerRelease(statusCfg, resp.Path, true, touchedReleases)
 	for _, inode := range resp.Files {
 		fullPath := resp.Path
 		if fullPath == "/" {
@@ -1349,10 +1230,8 @@ func (sm *SlaveManager) ProcessRemerge(rs *RemoteSlave, resp *protocol.AsyncResp
 			Group:        group,
 			Seen:         true,
 		})
-		touchedDirs[path.Dir(fullPath)] = struct{}{}
-		if inode.IsDir {
-			touchedDirs[fullPath] = struct{}{}
-		}
+		touchedParents[path.Dir(fullPath)] = struct{}{}
+		sm.noteTouchedStatusMarkerRelease(statusCfg, fullPath, inode.IsDir, touchedReleases)
 		if !inode.IsDir && strings.HasSuffix(strings.ToLower(inode.Name), ".sfv") {
 			sfvPaths = append(sfvPaths, fullPath)
 		}
@@ -1368,8 +1247,12 @@ func (sm *SlaveManager) ProcessRemerge(rs *RemoteSlave, resp *protocol.AsyncResp
 	// stale unseen children in that directory so clients do not try to download
 	// ghost files while the rest of the slave remerge is still running.
 	sm.vfs.PurgeUnseenChildren(rs.name, resp.Path)
-	for dirPath := range touchedDirs {
-		sm.syncStatusMarkersForDir(dirPath)
+	touchedParents[path.Clean(resp.Path)] = struct{}{}
+	for dirPath := range touchedParents {
+		sm.pruneStaleStatusMarkersForDir(dirPath)
+	}
+	for releasePath := range touchedReleases {
+		sm.syncStatusMarkersForRelease(releasePath)
 	}
 }
 
@@ -1461,9 +1344,9 @@ func (sm *SlaveManager) scheduleRemergeSFVParse(rs *RemoteSlave, sfvPath string)
 		for _, entry := range sfvResp.Entries {
 			sfvMap[strings.ToLower(path.Base(entry.FileName))] = entry.CRC32
 		}
-		sm.vfs.SetSFVData(dirPath, sfvName, sfvMap)
+		sm.vfs.SetSFVDataWithChecksum(dirPath, sfvName, sfvResp.Checksum, sfvMap)
 		sm.cleanupStaleMissingMarkersAfterRemerge(rs, dirPath, sfvMap)
-		sm.syncStatusMarkersForDir(dirPath)
+		sm.syncStatusMarkersForRelease(dirPath)
 
 		for _, child := range sm.vfs.ListDirectory(dirPath) {
 			if child == nil || child.IsDir || child.Size <= 0 {
@@ -1903,9 +1786,6 @@ func (sm *SlaveManager) Stop() {
 	if err := sm.vfs.SaveToDisk(vfsFilePath); err != nil {
 		log.Printf("[SlaveManager] Error saving VFS: %v", err)
 	}
-	if err := sm.saveReleaseSnapshotToDisk(releaseSnapshotFilePath); err != nil {
-		log.Printf("[SlaveManager] Error saving release snapshot: %v", err)
-	}
 
 	if sm.listener != nil {
 		sm.listener.Close()
@@ -1932,9 +1812,6 @@ func (sm *SlaveManager) vfsPersistLoop() {
 		if sm.vfs.Count() > 0 {
 			if err := sm.vfs.SaveToDisk(vfsFilePath); err != nil {
 				log.Printf("[SlaveManager] Error saving VFS: %v", err)
-			}
-			if err := sm.saveReleaseSnapshotToDisk(releaseSnapshotFilePath); err != nil {
-				log.Printf("[SlaveManager] Error saving release snapshot: %v", err)
 			}
 		}
 	}

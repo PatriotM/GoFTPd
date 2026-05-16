@@ -109,9 +109,12 @@ func TestMarkFileMissingRefreshesStatusMarkers(t *testing.T) {
 		t.Fatalf("MarkFileMissing() error = %v", err)
 	}
 
-	got := sm.vfs.GetFile("/X265/[incomplete]-release")
-	if got == nil || !got.IsSymlink || got.LinkTarget != "/X265/release" {
+	got, ok := bridge.GetPathEntry("/X265/[incomplete]-release")
+	if !ok || !got.IsSymlink || got.LinkTarget != "/X265/release" {
 		t.Fatalf("expected incomplete marker to target release, got %+v", got)
+	}
+	if got := sm.vfs.GetFile("/X265/[incomplete]-release"); got == nil || !got.IsSymlink {
+		t.Fatalf("expected marker to be stored in VFS, got %+v", got)
 	}
 }
 
@@ -138,17 +141,20 @@ func TestCacheZipProgressRefreshesStatusMarkers(t *testing.T) {
 	bridge.CacheReleaseProgress("/0DAY/release", 1, 2, true)
 	sm.SyncStatusMarkersForPath("/0DAY/release", true)
 
-	got := sm.vfs.GetFile("/0DAY/[incomplete]-release")
-	if got == nil || !got.IsSymlink || got.LinkTarget != "/0DAY/release" {
+	got, ok := bridge.GetPathEntry("/0DAY/[incomplete]-release")
+	if !ok || !got.IsSymlink || got.LinkTarget != "/0DAY/release" {
 		t.Fatalf("expected zip incomplete marker to target release, got %+v", got)
 	}
-	if got := sm.vfs.GetFile("/0DAY/[no-sfv]-release"); got != nil {
-		t.Fatalf("did not expect no-sfv marker for zip manifest progress, got %+v", got)
+	if got := sm.vfs.GetFile("/0DAY/[incomplete]-release"); got == nil || !got.IsSymlink {
+		t.Fatalf("expected marker to be stored in VFS, got %+v", got)
+	}
+	if noSFV, ok := bridge.GetPathEntry("/0DAY/[no-sfv]-release"); ok {
+		t.Fatalf("did not expect no-sfv marker for zip manifest progress, got %+v", noSFV)
 	}
 
 	bridge.CacheReleaseProgress("/0DAY/release", 2, 2, true)
 	sm.SyncStatusMarkersForPath("/0DAY/release", true)
-	if got := sm.vfs.GetFile("/0DAY/[incomplete]-release"); got != nil {
+	if got, ok := bridge.GetPathEntry("/0DAY/[incomplete]-release"); ok {
 		t.Fatalf("did not expect zip incomplete marker after completion, got %+v", got)
 	}
 }
@@ -175,14 +181,59 @@ func TestFileStatusMarkerSyncUpdatesOnlyTouchedRelease(t *testing.T) {
 	})
 	sm.vfs.AddFile("/X265/release/file.r00", VFSFile{Size: 100, Seen: true, SlaveName: "LOCAL", Checksum: 1})
 	sm.SyncStatusMarkersForPath("/X265/release", true)
-	if got := sm.vfs.GetFile("/X265/[incomplete]-release"); got == nil {
+	bridge := &Bridge{sm: sm}
+	if got, ok := bridge.GetPathEntry("/X265/[incomplete]-release"); !ok || !got.IsSymlink {
 		t.Fatalf("expected incomplete marker before final file")
 	}
 
 	sm.vfs.AddFile("/X265/release/file.r01", VFSFile{Size: 100, Seen: true, SlaveName: "LOCAL", Checksum: 2})
 	sm.SyncStatusMarkersForPath("/X265/release/file.r01", false)
-	if got := sm.vfs.GetFile("/X265/[incomplete]-release"); got != nil {
+	if got, ok := bridge.GetPathEntry("/X265/[incomplete]-release"); ok {
 		t.Fatalf("did not expect incomplete marker after touched release completed, got %+v", got)
+	}
+}
+
+func TestStatusMarkersListAndResolveLikeSymlinks(t *testing.T) {
+	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
+	sm.SetStatusMarkerConfig(zipscript.Config{
+		Enabled: true,
+		Incomplete: zipscript.IncompleteConfig{
+			Enabled:        true,
+			Indicator:      "[incomplete]-%0",
+			NoSFVIndicator: "[no-sfv]-%0",
+			NFOIndicator:   "[no-nfo]-%0",
+		},
+	})
+
+	sm.vfs.AddFile("/X265", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.AddFile("/X265/release", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.AddFile("/X265/release/release.sfv", VFSFile{Size: 10, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.AddFile("/X265/release/release.nfo", VFSFile{Size: 10, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.AddFile("/X265/release/file.r00", VFSFile{Size: 100, Seen: true, SlaveName: "LOCAL", Checksum: 1})
+	sm.vfs.SetSFVData("/X265/release", "release.sfv", map[string]uint32{
+		"file.r00": 1,
+		"file.r01": 2,
+	})
+	sm.SyncStatusMarkersForPath("/X265/release", true)
+
+	bridge := &Bridge{sm: sm}
+	found := false
+	for _, entry := range bridge.ListDir("/X265") {
+		if entry.Name == "[incomplete]-release" {
+			found = true
+			if !entry.IsSymlink || entry.LinkTarget != "/X265/release" {
+				t.Fatalf("expected marker symlink to release, got %+v", entry)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected incomplete marker in ListDir")
+	}
+	if got := sm.vfs.GetFile("/X265/[incomplete]-release"); got == nil || !got.IsSymlink {
+		t.Fatalf("expected marker to be persisted in VFS, got %+v", got)
+	}
+	if resolved := bridge.ResolvePath("/X265/[incomplete]-release/file.r00"); resolved != "/X265/release/file.r00" {
+		t.Fatalf("expected marker path to resolve through target, got %s", resolved)
 	}
 }
 
@@ -208,6 +259,94 @@ func TestStatusMarkerSyncDeletesRemovedReleaseMarker(t *testing.T) {
 	sm.SyncStatusMarkersForPath("/X265/release", true)
 	if got := sm.vfs.GetFile("/X265/[incomplete]-release"); got != nil {
 		t.Fatalf("expected marker for removed release to be deleted, got %+v", got)
+	}
+}
+
+func TestStatusMarkerSyncIgnoresStaleCachedIncompleteFacts(t *testing.T) {
+	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
+	sm.SetStatusMarkerConfig(zipscript.Config{
+		Enabled: true,
+		Incomplete: zipscript.IncompleteConfig{
+			Enabled:        true,
+			Indicator:      "[incomplete]-%0",
+			NoSFVIndicator: "[no-sfv]-%0",
+			NFOIndicator:   "[no-nfo]-%0",
+		},
+	})
+
+	sm.vfs.AddFile("/X265", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.AddFile("/X265/old.release", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	stale := &vfsReleaseSnapshot{HasSFV: true, Total: 20, Present: 0}
+	sm.releaseStateMu.Lock()
+	sm.setReleaseFactLocked("/X265/old.release", stale)
+	sm.releaseStateMu.Unlock()
+	sm.vfs.SetSFVData("/X265/old.release", "old.release.sfv", map[string]uint32{"file.r00": 1})
+	sm.vfs.AddSymlink("/X265/[incomplete]-old.release", "/X265/old.release")
+
+	sm.SyncStatusMarkersForPath("/X265", true)
+	if got := sm.vfs.GetFile("/X265/[incomplete]-old.release"); got != nil {
+		t.Fatalf("expected stale cached incomplete marker to be removed, got %+v", got)
+	}
+}
+
+func TestStatusMarkerSyncDeletesMarkerPointingOutsideParent(t *testing.T) {
+	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
+	sm.SetStatusMarkerConfig(zipscript.Config{
+		Enabled: true,
+		Incomplete: zipscript.IncompleteConfig{
+			Enabled:        true,
+			Indicator:      "[incomplete]-%0",
+			NoSFVIndicator: "[no-sfv]-%0",
+			NFOIndicator:   "[no-nfo]-%0",
+		},
+	})
+
+	sm.vfs.AddFile("/X265", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.AddFile("/ARCHiVE", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.AddFile("/ARCHiVE/old.release", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.AddSymlink("/X265/[incomplete]-old.release", "/ARCHiVE/old.release")
+
+	sm.SyncStatusMarkersForPath("/X265", true)
+	if got := sm.vfs.GetFile("/X265/[incomplete]-old.release"); got != nil {
+		t.Fatalf("expected cross-parent stale marker to be removed, got %+v", got)
+	}
+}
+
+func TestRequestStatusMarkersWorkBeforeReqFill(t *testing.T) {
+	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
+	sm.SetStatusMarkerConfig(zipscript.Config{
+		Enabled: true,
+		Sections: zipscript.SectionsConfig{
+			ReleaseCheck: []string{"/REQUESTS/*/*"},
+		},
+		Incomplete: zipscript.IncompleteConfig{
+			Enabled:        true,
+			NoSFVIndicator: "[no-sfv]-%0",
+			NFOIndicator:   "[no-nfo]-%0",
+		},
+	})
+
+	sm.vfs.AddFile("/REQUESTS", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.AddFile("/REQUESTS/REQ-Space.Haven.Linux-rG", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.AddFile("/REQUESTS/REQ-Space.Haven.Linux-rG/Space.Haven.Linux-rG", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.AddFile("/REQUESTS/REQ-Space.Haven.Linux-rG/Space.Haven.Linux-rG/file.r00", VFSFile{Size: 100, Seen: true, SlaveName: "LOCAL"})
+
+	sm.SyncStatusMarkersForPath("/REQUESTS/REQ-Space.Haven.Linux-rG/Space.Haven.Linux-rG/file.r00", false)
+	bridge := &Bridge{sm: sm}
+	got, ok := bridge.GetPathEntry("/REQUESTS/REQ-Space.Haven.Linux-rG/[no-sfv]-Space.Haven.Linux-rG")
+	if !ok || !got.IsSymlink || got.LinkTarget != "/REQUESTS/REQ-Space.Haven.Linux-rG/Space.Haven.Linux-rG" {
+		t.Fatalf("expected open request child marker before reqfill, got %+v", got)
+	}
+	if got, ok := bridge.GetPathEntry("/REQUESTS/[no-sfv]-REQ-Space.Haven.Linux-rG"); ok {
+		t.Fatalf("did not expect wrapper marker for request containing a release dir, got %+v", got)
+	}
+
+	sm.vfs.AddFile("/REQUESTS/REQ-Direct.Release-GRP", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.AddFile("/REQUESTS/REQ-Direct.Release-GRP/direct.r00", VFSFile{Size: 100, Seen: true, SlaveName: "LOCAL"})
+	sm.SyncStatusMarkersForPath("/REQUESTS/REQ-Direct.Release-GRP/direct.r00", false)
+	got, ok = bridge.GetPathEntry("/REQUESTS/[no-sfv]-REQ-Direct.Release-GRP")
+	if !ok || !got.IsSymlink || got.LinkTarget != "/REQUESTS/REQ-Direct.Release-GRP" {
+		t.Fatalf("expected direct request marker before reqfill, got %+v", got)
 	}
 }
 

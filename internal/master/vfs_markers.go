@@ -2,10 +2,9 @@ package master
 
 import (
 	"path"
-	"path/filepath"
-	"sort"
 	"strings"
 
+	"goftpd/internal/core"
 	"goftpd/internal/zipscript"
 )
 
@@ -85,6 +84,37 @@ func (sm *SlaveManager) syncStatusMarkersForTouchedDir(cfg zipscript.Config, cle
 	sm.syncStatusMarkersForDir(cleanPath)
 }
 
+func (sm *SlaveManager) noteTouchedStatusMarkerRelease(cfg zipscript.Config, cleanPath string, isDir bool, touched map[string]struct{}) {
+	if touched == nil {
+		return
+	}
+	cleanPath = path.Clean("/" + strings.TrimSpace(cleanPath))
+	if cleanPath == "/" || cleanPath == "." {
+		return
+	}
+	if isDir {
+		if zipscript.UsesReleaseCheckEntry(cfg, cleanPath) && !zipscript.IsIgnoredReleaseSubdir(cfg, cleanPath) {
+			touched[cleanPath] = struct{}{}
+			return
+		}
+		parentDir := path.Dir(cleanPath)
+		if parentDir != "/" && parentDir != "." && (zipscript.IsIgnoredReleaseSubdir(cfg, cleanPath) || zipscript.UsesReleaseCheckEntry(cfg, parentDir)) {
+			touched[parentDir] = struct{}{}
+		}
+		return
+	}
+
+	dirPath := path.Dir(cleanPath)
+	if zipscript.UsesReleaseCheckEntry(cfg, dirPath) && !zipscript.IsIgnoredReleaseSubdir(cfg, dirPath) {
+		touched[dirPath] = struct{}{}
+		return
+	}
+	parentDir := path.Dir(dirPath)
+	if parentDir != "/" && parentDir != "." && (zipscript.IsIgnoredReleaseSubdir(cfg, dirPath) || zipscript.UsesReleaseCheckEntry(cfg, parentDir)) {
+		touched[parentDir] = struct{}{}
+	}
+}
+
 func (sm *SlaveManager) syncStatusMarkersForRelease(releasePath string) {
 	if sm == nil || sm.vfs == nil {
 		return
@@ -94,96 +124,114 @@ func (sm *SlaveManager) syncStatusMarkersForRelease(releasePath string) {
 		return
 	}
 	releasePath = path.Clean("/" + strings.TrimSpace(releasePath))
-	if releasePath == "/" || releasePath == "." || zipscript.IsIgnoredReleaseSubdir(cfg, releasePath) {
-		return
-	}
-	if !zipscript.UsesReleaseCheckEntry(cfg, releasePath) {
+	if releasePath == "/" || releasePath == "." {
 		return
 	}
 
 	parentDir := path.Dir(releasePath)
 	relName := path.Base(releasePath)
-	snapshot, modTime, exists := sm.vfs.GetReleaseStatusSnapshot(releasePath)
-	if !exists {
-		sm.deleteStatusMarkersForRelease(cfg, parentDir, relName, releasePath)
+	sm.deleteStatusMarkersForRelease(cfg, parentDir, relName, releasePath)
+
+	if zipscript.IsIgnoredReleaseSubdir(cfg, releasePath) || !zipscript.UsesReleaseCheckEntry(cfg, releasePath) {
 		return
 	}
-	if cached := sm.cachedReleaseSnapshot(releasePath); cached != nil {
-		if snapshot == nil {
-			copyState := *cached
-			snapshot = &copyState
-		} else {
-			mergeReleaseSnapshot(snapshot, cached)
-		}
+	entry := sm.vfs.GetFile(releasePath)
+	if entry == nil || !entry.IsDir || entry.IsSymlink {
+		return
 	}
 
-	if snapshot == nil {
-		snapshot = &vfsReleaseSnapshot{}
+	release, ok := sm.statusMarkerReleaseForPath(cfg, releasePath, entry)
+	if !ok {
+		return
 	}
-
-	release := zipscript.StatusMarkerRelease{
-		Name:         relName,
-		Path:         releasePath,
-		ModTime:      modTime,
-		VisibleCount: snapshot.VisibleCount,
-		HasSFV:       snapshot.HasSFV,
-		HasNFO:       snapshot.HasNFO,
-		Present:      snapshot.Present,
-		Total:        snapshot.Total,
+	markers := zipscript.BuildStatusMarkerEntries(cfg, parentDir, []zipscript.StatusMarkerRelease{release})
+	if len(markers) == 0 {
+		return
 	}
-
-	desired := make(map[string]string, 3)
-	for _, marker := range zipscript.BuildStatusMarkerEntries(cfg, parentDir, []zipscript.StatusMarkerRelease{release}) {
+	for _, marker := range markers {
 		if marker.Name == "" || marker.LinkTarget == "" {
 			continue
 		}
-		desired[path.Join(parentDir, marker.Name)] = marker.LinkTarget
-	}
-
-	for _, markerPath := range statusMarkerCandidatePaths(cfg, parentDir, relName) {
-		if _, keep := desired[markerPath]; keep {
-			continue
-		}
-		entry := sm.vfs.GetFile(markerPath)
-		if entry == nil || !entry.IsSymlink || path.Clean(entry.LinkTarget) != releasePath {
-			continue
-		}
-		sm.vfs.DeleteFile(markerPath)
-	}
-	for markerPath, targetPath := range desired {
-		entry := sm.vfs.GetFile(markerPath)
-		if entry != nil && entry.IsSymlink && path.Clean(entry.LinkTarget) == path.Clean(targetPath) {
-			continue
-		}
-		sm.vfs.AddSymlink(markerPath, targetPath)
+		sm.vfs.AddSymlink(path.Join(parentDir, marker.Name), marker.LinkTarget)
 	}
 }
 
-func (sm *SlaveManager) cachedReleaseSnapshot(releasePath string) *vfsReleaseSnapshot {
-	if sm == nil {
-		return nil
+func statusMarkerCanUseCachedProgress(cfg zipscript.Config, releasePath string, facts core.ReleaseChildFacts, hasFacts bool, current core.ReleaseProgressStat, hasCurrent bool) bool {
+	if hasCurrent && (current.Total > 0 || current.Present > 0 || current.HasSFV) {
+		return true
 	}
-	cleanPath := filepath.Clean(releasePath)
-	sm.releaseStateMu.RLock()
-	defer sm.releaseStateMu.RUnlock()
-	return cloneReleaseSnapshot(sm.releaseFacts[cleanPath])
+	if !hasFacts {
+		return false
+	}
+	if zipscript.UsesZipEntry(cfg, releasePath) && facts.FileCount > 0 {
+		return true
+	}
+	return false
 }
 
-func mergeReleaseSnapshot(dst, src *vfsReleaseSnapshot) {
-	if dst == nil || src == nil {
-		return
+func mergeStatusMarkerProgress(primary, fallback core.ReleaseProgressStat) core.ReleaseProgressStat {
+	out := primary
+	if fallback.Present > out.Present {
+		out.Present = fallback.Present
 	}
-	if src.VisibleCount > dst.VisibleCount {
-		dst.VisibleCount = src.VisibleCount
+	if fallback.Total > out.Total {
+		out.Total = fallback.Total
 	}
-	dst.HasSFV = dst.HasSFV || src.HasSFV
-	dst.HasNFO = dst.HasNFO || src.HasNFO
-	if src.Present > dst.Present {
-		dst.Present = src.Present
+	out.HasSFV = out.HasSFV || fallback.HasSFV
+	return out
+}
+
+func (sm *SlaveManager) statusMarkerReleaseForPath(cfg zipscript.Config, releasePath string, entry *VFSFile) (zipscript.StatusMarkerRelease, bool) {
+	releasePath = path.Clean("/" + strings.TrimSpace(releasePath))
+	if releasePath == "/" || releasePath == "." || entry == nil {
+		return zipscript.StatusMarkerRelease{}, false
 	}
-	if src.Total > dst.Total {
-		dst.Total = src.Total
+	snapshot, _, hasFacts := sm.vfs.GetReleaseStatusSnapshot(releasePath)
+	facts := core.ReleaseChildFacts{Path: releasePath}
+	stat := core.ReleaseProgressStat{Path: releasePath}
+	ok := false
+	if hasFacts && snapshot != nil {
+		facts.VisibleCount = snapshot.VisibleCount
+		facts.FileCount = snapshot.FileCount
+		facts.HasSFV = snapshot.HasSFV
+		facts.HasNFO = snapshot.HasNFO
+		if snapshot.Total > 0 || snapshot.HasSFV {
+			stat.Present = snapshot.Present
+			stat.Total = snapshot.Total
+			stat.HasSFV = snapshot.HasSFV
+			ok = true
+		}
 	}
+	if cached, cachedOK := sm.GetImmediateReleaseProgress(path.Dir(releasePath))[releasePath]; cachedOK && statusMarkerCanUseCachedProgress(cfg, releasePath, facts, hasFacts, stat, ok) {
+		if ok {
+			stat = mergeStatusMarkerProgress(cached, stat)
+		} else {
+			stat = cached
+		}
+		ok = true
+	}
+	if !ok && !hasFacts {
+		return zipscript.StatusMarkerRelease{}, false
+	}
+	release := zipscript.StatusMarkerRelease{
+		Name:    path.Base(releasePath),
+		Path:    releasePath,
+		ModTime: entry.LastModified,
+	}
+	if ok {
+		release.Present = stat.Present
+		release.Total = stat.Total
+		release.HasSFV = stat.HasSFV
+	}
+	if hasFacts {
+		release.VisibleCount = facts.VisibleCount
+		release.FileCount = facts.FileCount
+		release.HasNFO = facts.HasNFO
+		if !release.HasSFV {
+			release.HasSFV = facts.HasSFV
+		}
+	}
+	return release, true
 }
 
 func statusMarkerCandidatePaths(cfg zipscript.Config, parentDir, relName string) []string {
@@ -230,6 +278,34 @@ func (sm *SlaveManager) deleteStatusMarkersForRelease(cfg zipscript.Config, pare
 	}
 }
 
+func (sm *SlaveManager) pruneStaleStatusMarkersForDir(dirPath string) {
+	if sm == nil || sm.vfs == nil {
+		return
+	}
+	cfg := sm.statusMarkerConfig().Zipscript
+	if !zipscript.IncompleteEnabled(cfg) {
+		return
+	}
+	dirPath = path.Clean("/" + strings.TrimSpace(dirPath))
+	if dirPath == "/" || dirPath == "." {
+		return
+	}
+	for _, entry := range sm.vfs.ListDirectory(dirPath) {
+		if entry == nil || !entry.IsSymlink {
+			continue
+		}
+		name := path.Base(entry.Path)
+		if !zipscript.IsStatusMarkerName(cfg, name) {
+			continue
+		}
+		cleanTarget := path.Clean("/" + strings.TrimSpace(entry.LinkTarget))
+		targetEntry := sm.vfs.GetFile(cleanTarget)
+		if cleanTarget == "/" || cleanTarget == "." || path.Dir(cleanTarget) != dirPath || targetEntry == nil || !targetEntry.IsDir {
+			sm.vfs.DeleteFile(entry.Path)
+		}
+	}
+}
+
 func (sm *SlaveManager) syncStatusMarkersForDir(dirPath string) {
 	if sm == nil || sm.vfs == nil {
 		return
@@ -243,16 +319,8 @@ func (sm *SlaveManager) syncStatusMarkersForDir(dirPath string) {
 		return
 	}
 
-	entries := sm.vfs.ListDirectory(dirPath)
-	childFacts := sm.GetImmediateReleaseChildFacts(dirPath)
-	childFacts = mergeReleaseChildFacts(childFacts, sm.vfs.GetImmediateChildDirFacts(dirPath))
-	progress := sm.GetImmediateReleaseProgress(dirPath)
-	progress = mergeReleaseProgress(progress, sm.vfs.GetImmediateChildDirProgress(dirPath))
-
-	desired := make(map[string]string)
 	existingMarkers := make(map[string]string)
-	evaluatedTargets := make(map[string]struct{}, len(entries))
-	releases := make([]zipscript.StatusMarkerRelease, 0, len(entries))
+	entries := sm.vfs.ListDirectory(dirPath)
 	for _, entry := range entries {
 		if entry == nil {
 			continue
@@ -263,87 +331,18 @@ func (sm *SlaveManager) syncStatusMarkersForDir(dirPath string) {
 		}
 		if entry.IsSymlink && zipscript.IsStatusMarkerName(cfg, name) {
 			existingMarkers[path.Join(dirPath, name)] = strings.TrimSpace(entry.LinkTarget)
-		}
-		if !entry.IsDir || entry.IsSymlink || zipscript.IsStatusMarkerName(cfg, name) {
 			continue
 		}
-		releasePath := markerLinkTarget(dirPath, name)
-		if !zipscript.UsesReleaseCheckEntry(cfg, releasePath) || zipscript.IsIgnoredReleaseSubdir(cfg, releasePath) {
-			continue
+		if entry.IsDir && !entry.IsSymlink {
+			sm.syncStatusMarkersForRelease(entry.Path)
 		}
-		facts, hasFacts := childFacts[releasePath]
-		stat, ok := progress[releasePath]
-		if !ok && !hasFacts {
-			continue
-		}
-		evaluatedTargets[releasePath] = struct{}{}
-		release := zipscript.StatusMarkerRelease{
-			Name:    name,
-			Path:    releasePath,
-			ModTime: entry.LastModified,
-		}
-		if ok {
-			release.Present = stat.Present
-			release.Total = stat.Total
-			release.HasSFV = stat.HasSFV
-		}
-		if hasFacts {
-			release.VisibleCount = facts.VisibleCount
-			release.HasNFO = facts.HasNFO
-			if !release.HasSFV {
-				release.HasSFV = facts.HasSFV
-			}
-		}
-		releases = append(releases, release)
 	}
 
-	for _, marker := range zipscript.BuildStatusMarkerEntries(cfg, dirPath, releases) {
-		if marker.Name == "" || marker.LinkTarget == "" {
-			continue
-		}
-		desired[path.Join(dirPath, marker.Name)] = marker.LinkTarget
-	}
-
-	for markerPath := range existingMarkers {
-		if _, ok := desired[markerPath]; ok {
-			continue
-		}
-		targetPath := path.Clean(existingMarkers[markerPath])
-		targetEntry := sm.vfs.GetFile(targetPath)
-		if targetEntry == nil || !targetEntry.IsDir || strings.HasPrefix(path.Base(targetPath), "[NUKED]-") {
+	for markerPath, target := range existingMarkers {
+		cleanTarget := path.Clean("/" + strings.TrimSpace(target))
+		targetEntry := sm.vfs.GetFile(cleanTarget)
+		if cleanTarget == "/" || cleanTarget == "." || path.Dir(cleanTarget) != dirPath || targetEntry == nil || !targetEntry.IsDir {
 			sm.vfs.DeleteFile(markerPath)
-			continue
 		}
-		if _, ok := evaluatedTargets[targetPath]; !ok {
-			continue
-		}
-		sm.vfs.DeleteFile(markerPath)
-	}
-	for markerPath, targetPath := range desired {
-		if existingTarget, ok := existingMarkers[markerPath]; ok && path.Clean(existingTarget) == path.Clean(targetPath) {
-			continue
-		}
-		sm.vfs.AddSymlink(markerPath, targetPath)
-	}
-}
-
-func (sm *SlaveManager) rebuildAllStatusMarkers() {
-	if sm == nil || sm.vfs == nil {
-		return
-	}
-	files := sm.vfs.GetAllFiles()
-	if len(files) == 0 {
-		return
-	}
-	dirs := make([]string, 0, len(files))
-	for filePath, entry := range files {
-		if entry == nil || !entry.IsDir || entry.IsSymlink {
-			continue
-		}
-		dirs = append(dirs, filePath)
-	}
-	sort.Strings(dirs)
-	for _, dirPath := range dirs {
-		sm.syncStatusMarkersForDir(dirPath)
 	}
 }

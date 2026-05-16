@@ -1160,6 +1160,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 							fmt.Sprintf("Size=%d", e.Size),
 						}
 					}
+					facts = appendMLSDOwnerGroupFacts(facts, e, s.Config.ShowRealOwnerGroup)
 					output.WriteString(strings.Join(facts, ";") + "; " + e.Name + "\r\n")
 				}
 			}
@@ -2459,6 +2460,21 @@ func mlsdSymlinkType(e MasterFileEntry) string {
 	return "OS.unix=slink:" + target
 }
 
+func appendMLSDOwnerGroupFacts(facts []string, e MasterFileEntry, showReal bool) []string {
+	if !showReal {
+		return facts
+	}
+	owner := strings.TrimSpace(e.Owner)
+	group := strings.TrimSpace(e.Group)
+	if owner == "" {
+		owner = "GoFTPd"
+	}
+	if group == "" {
+		group = "GoFTPd"
+	}
+	return append(facts, "UNIX.owner="+owner, "UNIX.group="+group)
+}
+
 func incompleteMarkerName(pattern, relname string) string {
 	return zipscript.StatusMarkerName(pattern, relname)
 }
@@ -2955,9 +2971,9 @@ func buildReleaseUploadPipelineState(s *Session, bridge MasterBridge, in release
 	}
 
 	if state.SFVUpload {
-		if sfvEntries, err := bridge.GetSFVInfo(in.FilePath); err == nil {
-			log.Printf("[MASTER-ZS] Parsed SFV %s: %d entries", in.FileName, len(sfvEntries))
-			bridge.CacheSFV(in.UploadDir, in.FileName, sfvEntries)
+		if sfvInfo, err := bridge.GetSFVInfo(in.FilePath); err == nil {
+			log.Printf("[MASTER-ZS] Parsed SFV %s: %d entries", in.FileName, len(sfvInfo.Entries))
+			bridge.CacheSFV(in.UploadDir, in.FileName, sfvInfo)
 		}
 	}
 	state.SFVEntries = bridge.GetSFVData(in.UploadDir)
@@ -3662,6 +3678,13 @@ func probeSTORSitebotMediaInfo(s *Session, bridge MasterBridge, dirPath, filePat
 		}
 		return nil
 	}
+	dirPath = storReleaseMediaDir(dirPath, filePath)
+	if !mediaInfoReleaseDirAllowed(s.Config, dirPath) {
+		if s.Config.Debug {
+			log.Printf("[MASTER-ZS] stor media probe skipped for %s: %s is not a release dir", filePath, dirPath)
+		}
+		return nil
+	}
 	sections, sampleOnly, videoExts := mediaInfoPluginSettings(s.Config)
 	section := sectionFromPathWithConfig(s.Config, dirPath)
 	if len(sections) > 0 && !mediaInfoSectionMatch(section, sections) {
@@ -3708,7 +3731,22 @@ func emitSTORSitebotMediaInfo(s *Session, dirPath, filePath, fileName string, si
 	if hadMediaInfo || !releaseMediaInfoLooksUsable(fields) {
 		return
 	}
+	dirPath = storReleaseMediaDir(dirPath, filePath)
+	if s == nil || s.Config == nil || !mediaInfoReleaseDirAllowed(s.Config, dirPath) {
+		return
+	}
 	emitReleaseMetadataEvent(s, EventMediaInfo, dirPath, filePath, fileName, size, speedMB, fields)
+}
+
+func mediaInfoReleaseDirAllowed(cfg *Config, dirPath string) bool {
+	if cfg == nil {
+		return false
+	}
+	cleanDir := path.Clean("/" + strings.TrimSpace(dirPath))
+	if cleanDir == "/" || cleanDir == "." {
+		return false
+	}
+	return zipscript.UsesRaceEntry(cfg.Zipscript, cleanDir)
 }
 
 func applyAudioZipscriptChecks(s *Session, bridge MasterBridge, filePath, fileName string) (map[string]string, error) {

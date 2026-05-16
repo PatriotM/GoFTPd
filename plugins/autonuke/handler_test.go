@@ -19,7 +19,10 @@ func (b *testBridge) PluginListDir(path string) []plugin.FileEntry {
 }
 func (b *testBridge) MakeDir(path, owner, group string) error   { return nil }
 func (b *testBridge) Symlink(linkPath, targetPath string) error { return nil }
-func (b *testBridge) Chmod(path string, mode uint32) error      { return nil }
+func (b *testBridge) VFSSymlink(linkPath, targetPath string) error {
+	return nil
+}
+func (b *testBridge) Chmod(path string, mode uint32) error { return nil }
 func (b *testBridge) CreateSparseFile(path string, size int64, owner, group string) error {
 	return nil
 }

@@ -313,9 +313,6 @@ func (t *Transfer) SendFile(path string, position int64, expectedPeer string) pr
 		}
 	}
 
-	// Transfer with CRC32
-	h := crc32.NewIEEE()
-	r := io.TeeReader(file, h)
 	buf := make([]byte, t.slave.getTransferBufferSize())
 	lastStatus := time.Now()
 	firstMinCheck := true
@@ -328,7 +325,7 @@ func (t *Transfer) SendFile(path string, position int64, expectedPeer string) pr
 			return t.errorStatus("aborted: " + t.abortReason)
 		}
 
-		n, err := r.Read(buf)
+		n, err := file.Read(buf)
 		if n > 0 {
 			_, werr := writer.Write(buf[:n])
 			if werr != nil {
@@ -358,16 +355,16 @@ func (t *Transfer) SendFile(path string, position int64, expectedPeer string) pr
 		}
 	}
 
-	log.Printf("[Transfer] Sent %s (%d bytes, CRC32=%08X, offset=%d)", path, t.transferred, h.Sum32(), position)
+	log.Printf("[Transfer] Sent %s (%d bytes, offset=%d)", path, t.transferred, position)
 	t.mu.Lock()
-	t.checksum = h.Sum32()
+	t.checksum = 0
 	t.mu.Unlock()
 
 	return protocol.TransferStatus{
 		TransferIndex: t.transferIndex,
 		Elapsed:       time.Since(t.started).Milliseconds(),
 		Transferred:   t.transferred,
-		Checksum:      h.Sum32(),
+		Checksum:      0,
 		Finished:      true,
 	}
 }
