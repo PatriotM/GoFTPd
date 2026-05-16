@@ -129,9 +129,9 @@ func main() {
 			roots := make([]map[string]string, 0, len(status.Roots))
 			for _, root := range status.Roots {
 				roots = append(roots, map[string]string{
-					"path":       root.Path,
-					"mount_path": root.MountPath,
-					"free_bytes": fmt.Sprintf("%d", root.SpaceAvailable),
+					"path":        root.Path,
+					"mount_path":  root.MountPath,
+					"free_bytes":  fmt.Sprintf("%d", root.SpaceAvailable),
 					"total_bytes": fmt.Sprintf("%d", root.SpaceCapacity),
 				})
 			}
@@ -731,7 +731,7 @@ func configuredBootstrapDirs(cfg *core.Config) []string {
 	}
 	seen := map[string]bool{}
 	var out []string
-	add := func(p string) {
+	add := func(p string, skipWritablePluginRoots bool) {
 		p = strings.TrimSpace(p)
 		if p == "" || strings.ContainsAny(p, "*?[]") {
 			return
@@ -743,11 +743,14 @@ func configuredBootstrapDirs(cfg *core.Config) []string {
 		if p == "." || p == "/" || seen[p] {
 			return
 		}
+		if skipWritablePluginRoots && isWritablePluginRoot(cfg, p) {
+			return
+		}
 		seen[p] = true
 		out = append(out, p)
 	}
 	for _, section := range cfg.Sections {
-		add(section)
+		add(section, true)
 	}
 	if daemonPluginEnabled(cfg, "pre") {
 		preCfg := cfg.Plugins["pre"]
@@ -755,15 +758,17 @@ func configuredBootstrapDirs(cfg *core.Config) []string {
 		if configuredBase, ok := preCfg["base"].(string); ok && strings.TrimSpace(configuredBase) != "" {
 			base = configuredBase
 		}
-		add(base)
+		add(base, false)
 	}
 	if daemonPluginEnabled(cfg, "request") {
 		requestCfg := cfg.Plugins["request"]
-		dir := "/REQUESTS"
-		if configuredDir, ok := requestCfg["dir"].(string); ok && strings.TrimSpace(configuredDir) != "" {
-			dir = configuredDir
+		if _, pinned := pluginStorageSlave(requestCfg); !pinned {
+			dir := "/REQUESTS"
+			if configuredDir, ok := requestCfg["dir"].(string); ok && strings.TrimSpace(configuredDir) != "" {
+				dir = configuredDir
+			}
+			add(dir, false)
 		}
-		add(dir)
 	}
 	if daemonPluginEnabled(cfg, "speedtest") {
 		speedtestCfg := cfg.Plugins["speedtest"]
@@ -771,7 +776,7 @@ func configuredBootstrapDirs(cfg *core.Config) []string {
 		if configuredDir, ok := speedtestCfg["dir"].(string); ok && strings.TrimSpace(configuredDir) != "" {
 			dir = configuredDir
 		}
-		add(dir)
+		add(dir, false)
 	}
 	return out
 }
@@ -802,6 +807,47 @@ func isDisabledPluginOwnedSection(cfg *core.Config, p string) bool {
 	}
 }
 
+func isWritablePluginRoot(cfg *core.Config, p string) bool {
+	clean := path.Clean("/" + strings.TrimSpace(p))
+	if daemonPluginEnabled(cfg, "request") {
+		requestCfg := cfg.Plugins["request"]
+		dir := "/REQUESTS"
+		if configuredDir, ok := requestCfg["dir"].(string); ok && strings.TrimSpace(configuredDir) != "" {
+			dir = configuredDir
+		}
+		if clean == path.Clean("/"+strings.TrimSpace(dir)) {
+			return true
+		}
+	}
+	if daemonPluginEnabled(cfg, "speedtest") {
+		speedtestCfg := cfg.Plugins["speedtest"]
+		dir := "/SPEEDTEST"
+		if configuredDir, ok := speedtestCfg["dir"].(string); ok && strings.TrimSpace(configuredDir) != "" {
+			dir = configuredDir
+		}
+		if clean == path.Clean("/"+strings.TrimSpace(dir)) {
+			return true
+		}
+	}
+	return false
+}
+
+func pluginStorageSlave(pluginCfg map[string]interface{}) (string, bool) {
+	if pluginCfg == nil {
+		return "", false
+	}
+	raw, ok := pluginCfg["storage_slave"]
+	if !ok {
+		return "", false
+	}
+	slave, ok := raw.(string)
+	if !ok {
+		return "", false
+	}
+	slave = strings.TrimSpace(slave)
+	return slave, slave != ""
+}
+
 func configuredSectionDirs(cfg *core.Config) []string {
 	if cfg == nil {
 		return nil
@@ -818,6 +864,9 @@ func configuredSectionDirs(cfg *core.Config) []string {
 		p = path.Clean(p)
 		if p == "." {
 			p = "/"
+		}
+		if isWritablePluginRoot(cfg, p) {
+			return
 		}
 		if p != "/" {
 			seen[p] = true

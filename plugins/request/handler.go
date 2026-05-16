@@ -32,6 +32,7 @@ type Plugin struct {
 	reqwipeFlags              string
 	reqTopLimit               int
 	proxyUsers                []string
+	storageSlave              string
 	sitename                  string
 	debug                     bool
 	stopCh                    chan struct{}
@@ -104,6 +105,9 @@ func (p *Plugin) Init(svc *plugin.Services, cfg map[string]interface{}) error {
 	}
 	if raw, ok := cfg["proxy_users"]; ok {
 		p.proxyUsers = toStringSlice(raw)
+	}
+	if s := stringConfig(cfg, "storage_slave", ""); strings.TrimSpace(s) != "" {
+		p.storageSlave = strings.TrimSpace(s)
 	}
 	if s := stringConfig(cfg, "sitename", ""); strings.TrimSpace(s) != "" {
 		p.sitename = strings.TrimSpace(s)
@@ -194,11 +198,12 @@ func (p *Plugin) handleRequest(ctx plugin.SiteContext, args []string) bool {
 		p.reply(ctx, "550", "Permission denied: -by is only available to configured request proxy users.")
 		return true
 	}
+	requestedBy := firstNonEmpty(byUser, ctx.UserName())
 
 	entries := p.loadRequests()
-	if p.findRequest(entries, release) >= 0 {
+	if idx := p.findRequest(entries, release); idx >= 0 {
 		if p.requestHead != "" && !p.doNotCreateDirUntilFilled {
-			if err := p.ensureRequestDir(ctx, release); err != nil {
+			if err := p.ensureRequestDir(ctx, release, entries[idx].By); err != nil {
 				p.reply(ctx, "451", fmt.Sprintf("Failed to repair request dir: %v", err))
 				return true
 			}
@@ -220,7 +225,7 @@ func (p *Plugin) handleRequest(ctx plugin.SiteContext, args []string) bool {
 	}
 
 	if p.requestHead != "" && !p.doNotCreateDirUntilFilled {
-		if err := p.ensureRequestDir(ctx, release); err != nil {
+		if err := p.ensureRequestDir(ctx, release, requestedBy); err != nil {
 			p.reply(ctx, "451", fmt.Sprintf("Failed to create request dir: %v", err))
 			return true
 		}
@@ -231,7 +236,7 @@ func (p *Plugin) handleRequest(ctx plugin.SiteContext, args []string) bool {
 
 	entries = append(entries, requestEntry{
 		Release: release,
-		By:      firstNonEmpty(byUser, ctx.UserName()),
+		By:      requestedBy,
 		Mode:    "gl",
 		For:     forUser,
 		Date:    timeutil.Now().Format("2006-01-02 15:04"),
@@ -272,7 +277,7 @@ func (p *Plugin) handleReqFill(ctx plugin.SiteContext, args []string) bool {
 	entry := entries[idx]
 	reqDir := p.requestDir(entry.Release)
 	if p.requestHead != "" && !p.doNotCreateDirUntilFilled {
-		if err := p.ensureRequestDir(ctx, entry.Release); err != nil {
+		if err := p.ensureRequestDir(ctx, entry.Release, entry.By); err != nil {
 			p.reply(ctx, "451", fmt.Sprintf("Failed to repair request dir: %v", err))
 			return true
 		}
@@ -288,7 +293,7 @@ func (p *Plugin) handleReqFill(ctx plugin.SiteContext, args []string) bool {
 			return true
 		}
 	} else if p.doNotCreateDirUntilFilled {
-		if err := p.svc.Bridge.MakeDir(p.filledDir(entry.Release), ctx.UserName(), ctx.UserPrimaryGroup()); err != nil && !p.dirExists(p.filledDir(entry.Release)) {
+		if err := p.makeDir(p.filledDir(entry.Release), ctx.UserName(), ctx.UserPrimaryGroup()); err != nil && !p.dirExists(p.filledDir(entry.Release)) {
 			p.reply(ctx, "451", fmt.Sprintf("Failed to create filled request dir: %v", err))
 			return true
 		}
@@ -641,18 +646,18 @@ func (p *Plugin) saveFillStats(entries []requestFillEntry) error {
 	if err := p.ensureBaseDir(nil); err != nil {
 		return err
 	}
-	if err := p.svc.Bridge.WriteFile(p.fillStatsFile, []byte(b.String())); err != nil {
+	if err := p.writeFile(p.fillStatsFile, []byte(b.String())); err != nil {
 		if retryErr := p.ensureBaseDir(nil); retryErr != nil {
 			return fmt.Errorf("%w; retry mkdir failed: %v", err, retryErr)
 		}
-		if retryErr := p.svc.Bridge.WriteFile(p.fillStatsFile, []byte(b.String())); retryErr != nil {
+		if retryErr := p.writeFile(p.fillStatsFile, []byte(b.String())); retryErr != nil {
 			return retryErr
 		}
 	}
 	return nil
 }
 
-func (p *Plugin) ensureRequestDir(ctx plugin.SiteContext, release string) error {
+func (p *Plugin) ensureRequestDir(ctx plugin.SiteContext, release, ownerOverride string) error {
 	if err := p.ensureBaseDir(ctx); err != nil {
 		return err
 	}
@@ -663,7 +668,10 @@ func (p *Plugin) ensureRequestDir(ctx plugin.SiteContext, release string) error 
 		owner = ctx.UserName()
 		group = ctx.UserPrimaryGroup()
 	}
-	if err := p.svc.Bridge.MakeDir(dirPath, owner, group); err != nil {
+	if strings.TrimSpace(ownerOverride) != "" {
+		owner = strings.TrimSpace(ownerOverride)
+	}
+	if err := p.makeDir(dirPath, owner, group); err != nil {
 		return err
 	}
 	_ = p.svc.Bridge.Chmod(dirPath, 0777)
@@ -690,11 +698,11 @@ func (p *Plugin) saveRequests(entries []requestEntry) error {
 	if err := p.ensureBaseDir(nil); err != nil {
 		return err
 	}
-	if err := p.svc.Bridge.WriteFile(p.reqFile, []byte(b.String())); err != nil {
+	if err := p.writeFile(p.reqFile, []byte(b.String())); err != nil {
 		if retryErr := p.ensureBaseDir(nil); retryErr != nil {
 			return fmt.Errorf("%w; retry mkdir failed: %v", err, retryErr)
 		}
-		if retryErr := p.svc.Bridge.WriteFile(p.reqFile, []byte(b.String())); retryErr != nil {
+		if retryErr := p.writeFile(p.reqFile, []byte(b.String())); retryErr != nil {
 			return retryErr
 		}
 	}
@@ -702,20 +710,41 @@ func (p *Plugin) saveRequests(entries []requestEntry) error {
 }
 
 func (p *Plugin) ensureBaseDir(ctx plugin.SiteContext) error {
-	if p.dirExists(p.dir) {
-		return nil
-	}
 	owner := "GoFTPd"
 	group := "GoFTPd"
 	if ctx != nil {
 		owner = ctx.UserName()
 		group = ctx.UserPrimaryGroup()
 	}
-	if err := p.svc.Bridge.MakeDir(p.dir, owner, group); err != nil && !p.dirExists(p.dir) {
+	exists := p.dirExists(p.dir)
+	if err := p.makeDir(p.dir, owner, group); err != nil && !exists {
 		return err
 	}
 	_ = p.svc.Bridge.Chmod(p.dir, 0777)
 	return nil
+}
+
+type requestStorageBridge interface {
+	MakeDirOnSlave(dirPath, owner, group, slaveName string) error
+	WriteFileOnSlave(filePath string, content []byte, slaveName string) error
+}
+
+func (p *Plugin) makeDir(dirPath, owner, group string) error {
+	if p.storageSlave != "" {
+		if bridge, ok := p.svc.Bridge.(requestStorageBridge); ok {
+			return bridge.MakeDirOnSlave(dirPath, owner, group, p.storageSlave)
+		}
+	}
+	return p.svc.Bridge.MakeDir(dirPath, owner, group)
+}
+
+func (p *Plugin) writeFile(filePath string, content []byte) error {
+	if p.storageSlave != "" {
+		if bridge, ok := p.svc.Bridge.(requestStorageBridge); ok {
+			return bridge.WriteFileOnSlave(filePath, content, p.storageSlave)
+		}
+	}
+	return p.svc.Bridge.WriteFile(filePath, content)
 }
 
 func (p *Plugin) ensureBaseDirOnStartup() {

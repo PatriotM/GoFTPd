@@ -25,8 +25,14 @@ func TestRequestCreatesIndexFile(t *testing.T) {
 	if !strings.Contains(string(data), "Some.Release-TEST") {
 		t.Fatalf("expected request file to contain release, got %q", string(data))
 	}
+	if !strings.Contains(string(data), "by alice") {
+		t.Fatalf("expected FTP requester to be tracked, got %q", string(data))
+	}
 	if _, ok := bridge.dirs["/REQUESTS/REQ-Some.Release-TEST"]; !ok {
 		t.Fatalf("expected request directory to be created")
+	}
+	if got := bridge.dirs["/REQUESTS/REQ-Some.Release-TEST"].Owner; got != "alice" {
+		t.Fatalf("expected request dir owner to be FTP user, got %q", got)
 	}
 }
 
@@ -109,6 +115,44 @@ func TestReqFillProxyTracksProvidedUser(t *testing.T) {
 	}
 }
 
+func TestRequestProxyTracksProvidedUser(t *testing.T) {
+	bridge := newRequestTestBridge()
+	p := New()
+	p.svc = &plugin.Services{Bridge: bridge}
+
+	bot := &requestTestCtx{user: "goftpd", group: "sitebot", flags: "1"}
+	p.HandleSiteCommand(bot, "REQUEST", []string{"-by:ircUser", "Proxy.Request-TEST"})
+
+	requests := string(bridge.files["/REQUESTS/.requests"])
+	if !strings.Contains(requests, "by ircUser") {
+		t.Fatalf("expected proxied requester to be tracked, got %q", requests)
+	}
+	dir := bridge.dirs["/REQUESTS/REQ-Proxy.Request-TEST"]
+	if dir.Owner != "ircUser" {
+		t.Fatalf("expected request dir owner to be proxied user, got %q", dir.Owner)
+	}
+}
+
+func TestRequestUsesConfiguredStorageSlave(t *testing.T) {
+	bridge := newRequestTestBridge()
+	p := New()
+	p.svc = &plugin.Services{Bridge: bridge}
+	p.storageSlave = "LOCAL"
+
+	ctx := &requestTestCtx{user: "alice", group: "iND", flags: "1"}
+	p.HandleSiteCommand(ctx, "REQUEST", []string{"Pinned.Release-TEST"})
+
+	if got := bridge.dirSlaves["/REQUESTS"]; got != "LOCAL" {
+		t.Fatalf("expected base dir on LOCAL, got %q", got)
+	}
+	if got := bridge.dirSlaves["/REQUESTS/REQ-Pinned.Release-TEST"]; got != "LOCAL" {
+		t.Fatalf("expected request dir on LOCAL, got %q", got)
+	}
+	if got := bridge.fileSlaves["/REQUESTS/.requests"]; got != "LOCAL" {
+		t.Fatalf("expected request index on LOCAL, got %q", got)
+	}
+}
+
 type requestTestCtx struct {
 	user    string
 	group   string
@@ -135,15 +179,19 @@ func (c *requestTestCtx) hasReply(needle string) bool {
 }
 
 type requestTestBridge struct {
-	dirs     map[string]plugin.FileEntry
-	files    map[string][]byte
-	writeErr error
+	dirs       map[string]plugin.FileEntry
+	files      map[string][]byte
+	dirSlaves  map[string]string
+	fileSlaves map[string]string
+	writeErr   error
 }
 
 func newRequestTestBridge() *requestTestBridge {
 	return &requestTestBridge{
-		dirs:  map[string]plugin.FileEntry{"/": {Name: "/", IsDir: true}},
-		files: map[string][]byte{},
+		dirs:       map[string]plugin.FileEntry{"/": {Name: "/", IsDir: true}},
+		files:      map[string][]byte{},
+		dirSlaves:  map[string]string{},
+		fileSlaves: map[string]string{},
 	}
 }
 
@@ -192,6 +240,14 @@ func (b *requestTestBridge) MakeDir(dirPath, owner, group string) error {
 		}
 	}
 	b.addDir(dirPath, owner, group)
+	return nil
+}
+
+func (b *requestTestBridge) MakeDirOnSlave(dirPath, owner, group, slaveName string) error {
+	if err := b.MakeDir(dirPath, owner, group); err != nil {
+		return err
+	}
+	b.dirSlaves[cleanAbs(dirPath)] = slaveName
 	return nil
 }
 
@@ -250,6 +306,14 @@ func (b *requestTestBridge) WriteFile(filePath string, content []byte) error {
 	}
 	filePath = cleanAbs(filePath)
 	b.files[filePath] = append([]byte(nil), content...)
+	return nil
+}
+
+func (b *requestTestBridge) WriteFileOnSlave(filePath string, content []byte, slaveName string) error {
+	if err := b.WriteFile(filePath, content); err != nil {
+		return err
+	}
+	b.fileSlaves[cleanAbs(filePath)] = slaveName
 	return nil
 }
 

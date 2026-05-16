@@ -9,6 +9,11 @@ dir: "/REQUESTS"
 reqfile: "/REQUESTS/.requests"
 fill_stats_file: "/REQUESTS/.reqfills"
 
+# Optional: pin request storage to one writable slave. This keeps the base dir,
+# .requests, .reqfills and REQ-* dirs together instead of using automatic
+# upload routing. Leave empty to auto-select like normal writes.
+# storage_slave: "LOCAL"
+
 # Directory name prefixes for open vs filled requests.
 request_head: "REQ-"
 filled_head: "FILLED-"

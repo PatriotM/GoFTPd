@@ -894,6 +894,24 @@ func (b *Bridge) makeDirOnSlave(slave *RemoteSlave, dirPath string) error {
 	return nil
 }
 
+func (b *Bridge) writableAvailableSlaveByName(slaveName string) (*RemoteSlave, error) {
+	if b == nil || b.sm == nil {
+		return nil, fmt.Errorf("master not initialized")
+	}
+	name := strings.TrimSpace(slaveName)
+	if name == "" {
+		return nil, fmt.Errorf("slave name is empty")
+	}
+	slave := b.sm.GetSlave(name)
+	if slave == nil || !slave.IsAvailable() {
+		return nil, fmt.Errorf("requested slave unavailable: %s", name)
+	}
+	if b.sm.IsSlaveReadOnly(slave.Name()) {
+		return nil, fmt.Errorf("requested slave is read-only: %s", slave.Name())
+	}
+	return slave, nil
+}
+
 func (b *Bridge) resolveOwningSlave(path string) (*RemoteSlave, *VFSFile, error) {
 	if b == nil || b.sm == nil {
 		return nil, nil, fmt.Errorf("master not initialized")
@@ -1055,6 +1073,23 @@ func (b *Bridge) MakeDir(dirPath, owner, group string) error {
 	if slave == nil {
 		return fmt.Errorf("no available slave for mkdir: %s", dirPath)
 	}
+	if err := b.makeDirOnSlave(slave, dirPath); err != nil {
+		return err
+	}
+	b.sm.MakeDirectoryOnSlave(dirPath, owner, group, slave.Name())
+	b.sm.SyncStatusMarkersForPath(dirPath, true)
+	return nil
+}
+
+func (b *Bridge) MakeDirOnSlave(dirPath, owner, group, slaveName string) error {
+	if strings.TrimSpace(slaveName) == "" {
+		return b.MakeDir(dirPath, owner, group)
+	}
+	slave, err := b.writableAvailableSlaveByName(slaveName)
+	if err != nil {
+		return err
+	}
+	dirPath = filepath.ToSlash(filepath.Clean(dirPath))
 	if err := b.makeDirOnSlave(slave, dirPath); err != nil {
 		return err
 	}
@@ -1387,7 +1422,22 @@ func (b *Bridge) WriteFile(filePath string, content []byte) error {
 	if err != nil {
 		return err
 	}
+	return b.writeFileOnSlave(filePath, content, slave)
+}
 
+func (b *Bridge) WriteFileOnSlave(filePath string, content []byte, slaveName string) error {
+	if strings.TrimSpace(slaveName) == "" {
+		return b.WriteFile(filePath, content)
+	}
+	filePath = filepath.ToSlash(filepath.Clean(filePath))
+	slave, err := b.writableAvailableSlaveByName(slaveName)
+	if err != nil {
+		return err
+	}
+	return b.writeFileOnSlave(filePath, content, slave)
+}
+
+func (b *Bridge) writeFileOnSlave(filePath string, content []byte, slave *RemoteSlave) error {
 	index, err := IssueWriteFile(slave, filePath, string(content))
 	if err != nil {
 		return fmt.Errorf("issue writeFile: %w", err)
