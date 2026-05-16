@@ -506,6 +506,37 @@ func TestVFSAddFilePreservesVerifiedTransferDataAcrossRemerge(t *testing.T) {
 	}
 }
 
+func TestVFSAddFilePreservesVerifiedTransferDataAcrossRemergeMtimeChange(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+
+	vfs.AddFile("/X265/release/file.r00", VFSFile{
+		Size:         476800000,
+		LastModified: 1714930000,
+		Seen:         true,
+		SlaveName:    "LOCAL",
+		Checksum:     12345,
+		XferTime:     5000,
+	})
+
+	vfs.AddFile("/X265/release/file.r00", VFSFile{
+		Size:         476800000,
+		LastModified: 1714931234,
+		Seen:         true,
+		SlaveName:    "LOCAL",
+	})
+
+	got := vfs.GetFile("/X265/release/file.r00")
+	if got == nil {
+		t.Fatalf("expected file to remain present")
+	}
+	if got.Checksum != 12345 {
+		t.Fatalf("expected checksum to survive same-size remerge, got %d", got.Checksum)
+	}
+	if got.XferTime != 5000 {
+		t.Fatalf("expected xfertime to survive same-size remerge, got %d", got.XferTime)
+	}
+}
+
 func TestVFSSFVMetadataRequiresCurrentSFVFileWhenStrict(t *testing.T) {
 	vfs := NewVirtualFileSystem()
 	vfs.AddFile("/X265/release", VFSFile{IsDir: true, Seen: true})

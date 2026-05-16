@@ -162,9 +162,7 @@ func (vfs *VirtualFileSystem) AddFile(path string, file VFSFile) {
 	if existing := vfs.files[path]; existing != nil &&
 		!file.IsDir && !file.IsSymlink &&
 		!existing.IsDir && !existing.IsSymlink &&
-		existing.Size == file.Size &&
-		existing.LastModified == file.LastModified &&
-		existing.SlaveName == file.SlaveName {
+		existing.Size == file.Size {
 		if file.Checksum == 0 {
 			file.Checksum = existing.Checksum
 		}
