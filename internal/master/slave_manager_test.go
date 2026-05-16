@@ -153,6 +153,64 @@ func TestCacheZipProgressRefreshesStatusMarkers(t *testing.T) {
 	}
 }
 
+func TestFileStatusMarkerSyncUpdatesOnlyTouchedRelease(t *testing.T) {
+	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
+	sm.SetStatusMarkerConfig(zipscript.Config{
+		Enabled: true,
+		Incomplete: zipscript.IncompleteConfig{
+			Enabled:        true,
+			Indicator:      "[incomplete]-%0",
+			NoSFVIndicator: "[no-sfv]-%0",
+			NFOIndicator:   "[no-nfo]-%0",
+		},
+	})
+
+	sm.vfs.AddFile("/X265", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.AddFile("/X265/release", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.AddFile("/X265/release/release.sfv", VFSFile{Size: 10, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.AddFile("/X265/release/release.nfo", VFSFile{Size: 10, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.SetSFVData("/X265/release", "release.sfv", map[string]uint32{
+		"file.r00": 1,
+		"file.r01": 2,
+	})
+	sm.vfs.AddFile("/X265/release/file.r00", VFSFile{Size: 100, Seen: true, SlaveName: "LOCAL", Checksum: 1})
+	sm.SyncStatusMarkersForPath("/X265/release", true)
+	if got := sm.vfs.GetFile("/X265/[incomplete]-release"); got == nil {
+		t.Fatalf("expected incomplete marker before final file")
+	}
+
+	sm.vfs.AddFile("/X265/release/file.r01", VFSFile{Size: 100, Seen: true, SlaveName: "LOCAL", Checksum: 2})
+	sm.SyncStatusMarkersForPath("/X265/release/file.r01", false)
+	if got := sm.vfs.GetFile("/X265/[incomplete]-release"); got != nil {
+		t.Fatalf("did not expect incomplete marker after touched release completed, got %+v", got)
+	}
+}
+
+func TestStatusMarkerSyncDeletesRemovedReleaseMarker(t *testing.T) {
+	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
+	sm.SetStatusMarkerConfig(zipscript.Config{
+		Enabled: true,
+		Incomplete: zipscript.IncompleteConfig{
+			Enabled:        true,
+			Indicator:      "[incomplete]-%0",
+			NoSFVIndicator: "[no-sfv]-%0",
+			NFOIndicator:   "[no-nfo]-%0",
+		},
+	})
+
+	sm.vfs.AddFile("/X265", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.AddFile("/X265/release", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.SetSFVData("/X265/release", "release.sfv", map[string]uint32{"file.r00": 1})
+	sm.vfs.AddFile("/X265/release/release.sfv", VFSFile{Size: 10, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.AddSymlink("/X265/[incomplete]-release", "/X265/release")
+
+	sm.vfs.DeleteFile("/X265/release")
+	sm.SyncStatusMarkersForPath("/X265/release", true)
+	if got := sm.vfs.GetFile("/X265/[incomplete]-release"); got != nil {
+		t.Fatalf("expected marker for removed release to be deleted, got %+v", got)
+	}
+}
+
 func TestSetRemergeFlowControlNormalizesThresholds(t *testing.T) {
 	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
 	sm.SetRemergeFlowControl(0, 999)
