@@ -553,11 +553,10 @@ func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group s
 		return status.Transferred, status.Checksum, fmt.Errorf("%s", status.Error)
 	}
 
-	finalSize := status.Transferred
+	finalSize := finalUploadFileSize(status, position)
 	xferTime = status.Elapsed
 	checksum = status.Checksum
 	if position > 0 {
-		finalSize += position
 		finalChecksum, err := b.ChecksumFile(filePath)
 		if err != nil {
 			return written, checksum, fmt.Errorf("resume checksum: %w", err)
@@ -582,6 +581,16 @@ func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group s
 	b.sm.SyncStatusMarkersForPath(filePath, false)
 
 	return finalSize, checksum, nil
+}
+
+func finalUploadFileSize(status protocol.TransferStatus, position int64) int64 {
+	if status.FileSize > 0 {
+		return status.FileSize
+	}
+	if position > 0 {
+		return status.Transferred + position
+	}
+	return status.Transferred
 }
 
 // DownloadFile routes a download from a slave to the FTP client.
@@ -1062,8 +1071,9 @@ func (b *Bridge) copyFileBetweenSlaves(sourceSlave, destSlave *RemoteSlave, from
 	if destStatus.Error != "" {
 		return fmt.Errorf("destination transfer error for %s: %s", toPath, destStatus.Error)
 	}
-	if size > 0 && destStatus.Transferred != size {
-		return fmt.Errorf("archive copy size mismatch for %s: expected %d got %d", toPath, size, destStatus.Transferred)
+	destSize := finalUploadFileSize(destStatus, 0)
+	if size > 0 && destSize != size {
+		return fmt.Errorf("archive copy size mismatch for %s: expected %d got %d", toPath, size, destSize)
 	}
 	return nil
 }
@@ -2166,10 +2176,9 @@ func (b *Bridge) SlaveReceivePassthrough(filePath string, transferIdx int32, sla
 		return status.Transferred, status.Checksum, status.Elapsed, fmt.Errorf("%s", status.Error)
 	}
 
-	finalSize := status.Transferred
+	finalSize := finalUploadFileSize(status, position)
 	finalChecksum := status.Checksum
 	if position > 0 {
-		finalSize += position
 		if checksum, err := b.ChecksumFile(filePath); err == nil {
 			finalChecksum = checksum
 		}
@@ -2294,10 +2303,9 @@ func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group strin
 		return status.Transferred, status.Checksum, status.Elapsed, fmt.Errorf("%s", status.Error)
 	}
 
-	finalSize := status.Transferred
+	finalSize := finalUploadFileSize(status, position)
 	finalChecksum := status.Checksum
 	if position > 0 {
-		finalSize += position
 		if checksum, err := b.ChecksumFile(filePath); err == nil {
 			finalChecksum = checksum
 		}

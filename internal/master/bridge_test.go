@@ -2,6 +2,7 @@ package master
 
 import (
 	"goftpd/internal/core"
+	"goftpd/internal/protocol"
 	"strings"
 	"testing"
 )
@@ -46,3 +47,16 @@ func TestNukeVirtualEntriesFromHistory(t *testing.T) {
 	}
 }
 
+func TestFinalUploadFileSizePrefersSlaveStatSize(t *testing.T) {
+	status := protocol.TransferStatus{Transferred: 2 * 1024 * 1024, FileSize: 4892 * 1024}
+	if got := finalUploadFileSize(status, 0); got != 4892*1024 {
+		t.Fatalf("expected stat size to win, got %d", got)
+	}
+}
+
+func TestFinalUploadFileSizeFallsBackToResumeOffset(t *testing.T) {
+	status := protocol.TransferStatus{Transferred: 1024}
+	if got := finalUploadFileSize(status, 2048); got != 3072 {
+		t.Fatalf("expected transferred plus offset fallback, got %d", got)
+	}
+}

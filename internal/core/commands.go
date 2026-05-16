@@ -4517,7 +4517,6 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 		expected := zipExpectedPartsFromDIZ(bridge, dirPath)
 		entries := bridge.ListDir(dirPath)
 		users, totalBytes, total := zipDirRaceStats(bridge, dirPath, entries, expected)
-		cacheZipReleaseProgress(bridge, dirPath, total, expected)
 		raceComplete := zipDirCompleteAfterUpload(bridge, dirPath, fileName, entries, expected)
 		if raceComplete && expected > 0 && total < expected {
 			for _, entry := range entries {
@@ -4533,6 +4532,7 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 				break
 			}
 		}
+		cacheZipReleaseProgress(bridge, dirPath, total, expected)
 		if total > 0 {
 			raceDurationMs := bridge.GetRaceWallClockMilliseconds(dirPath)
 			avgSpeedMB := aggregateRaceSpeedMB(users)

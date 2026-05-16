@@ -243,11 +243,16 @@ func (t *Transfer) ReceiveFile(path string, position int64, expectedPeer string)
 	t.checksum = h.Sum32()
 	t.mu.Unlock()
 	_ = t.slave.writeObject(&protocol.AsyncResponseDiskStatus{Status: t.slave.getDiskStatus()})
+	finalSize := t.transferred
+	if info, statErr := file.Stat(); statErr == nil {
+		finalSize = info.Size()
+	}
 
 	return protocol.TransferStatus{
 		TransferIndex: t.transferIndex,
 		Elapsed:       time.Since(t.started).Milliseconds(),
 		Transferred:   t.transferred,
+		FileSize:      finalSize,
 		Checksum:      h.Sum32(),
 		Finished:      true,
 	}
