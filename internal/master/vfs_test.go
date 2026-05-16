@@ -551,9 +551,17 @@ func TestVFSUpdateFileVerificationRefreshesRaceTruth(t *testing.T) {
 		Checksum: 0,
 	})
 
-	_, _, _, presentBefore, totalBefore := vfs.GetRaceStats("/X265/release")
-	if presentBefore != 0 || totalBefore != 1 {
-		t.Fatalf("expected file to be unverified before checksum refresh, got present=%d total=%d", presentBefore, totalBefore)
+	verifiedBefore := vfs.GetVerifiedSFVPresentFiles("/X265/release")
+	if len(verifiedBefore) != 0 {
+		t.Fatalf("expected file to be unverified before checksum refresh, got %+v", verifiedBefore)
+	}
+
+	usersBefore, _, totalBytesBefore, presentBefore, totalBefore := vfs.GetRaceStats("/X265/release")
+	if presentBefore != 1 || totalBefore != 1 || totalBytesBefore != 100 {
+		t.Fatalf("expected unknown-CRC file to count for visible completeness only, got present=%d total=%d bytes=%d", presentBefore, totalBefore, totalBytesBefore)
+	}
+	if len(usersBefore) != 0 {
+		t.Fatalf("expected unknown-CRC file to stay out of verified race stats, got %+v", usersBefore)
 	}
 
 	if !vfs.UpdateFileVerification("/X265/release/file1.r00", 1) {

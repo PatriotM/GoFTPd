@@ -1390,12 +1390,19 @@ func (vfs *VirtualFileSystem) computeRaceStateFilteredLocked(dirPath string, exc
 		if f == nil {
 			continue
 		}
-		if expectedCRC != 0 && f.Checksum != expectedCRC {
+		checksumVerified := expectedCRC == 0 || f.Checksum == expectedCRC
+		// Remerge can load physical files without re-reading CRCs. For visible
+		// completeness markers, an existing file with an unknown checksum still
+		// counts as present; known mismatches stay excluded.
+		if expectedCRC != 0 && f.Checksum != 0 && f.Checksum != expectedCRC {
 			continue
 		}
 		cache.Present++
 		cache.TotalBytes += f.Size
 
+		if !checksumVerified {
+			continue
+		}
 		if f.XferTime <= 0 {
 			continue
 		}
