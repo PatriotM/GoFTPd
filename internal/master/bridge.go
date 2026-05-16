@@ -928,7 +928,9 @@ func (b *Bridge) selectWritableSlaveForCreate(path string) (*RemoteSlave, error)
 		if slave != nil {
 			return slave, nil
 		}
-		return nil, fmt.Errorf("path has no owning slave: %s", vfsPath)
+		if file.IsDir || file.IsSymlink {
+			return nil, fmt.Errorf("path has no owning slave: %s", vfsPath)
+		}
 	}
 	parent := filepath.ToSlash(filepath.Clean(filepath.Dir(vfsPath)))
 	if parent != "." && parent != "/" {
@@ -939,7 +941,9 @@ func (b *Bridge) selectWritableSlaveForCreate(path string) (*RemoteSlave, error)
 			if slave != nil {
 				return slave, nil
 			}
-			return nil, fmt.Errorf("parent path has no owning slave: %s", parent)
+			if !file.IsDir || file.IsSymlink {
+				return nil, fmt.Errorf("parent path has no owning slave: %s", parent)
+			}
 		}
 	}
 	slave := b.sm.SelectSlaveForUpload(vfsPath)
