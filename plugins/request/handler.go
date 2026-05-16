@@ -6,6 +6,7 @@ import (
 	"log"
 	"path"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ type Plugin struct {
 	svc                       *plugin.Services
 	dir                       string
 	reqFile                   string
+	fillStatsFile             string
 	requestHead               string
 	filledHead                string
 	allowSpace                bool
@@ -28,7 +30,9 @@ type Plugin struct {
 	showOnFill                bool
 	doNotCreateDirUntilFilled bool
 	reqwipeFlags              string
+	reqTopLimit               int
 	proxyUsers                []string
+	storageSlave              string
 	sitename                  string
 	debug                     bool
 	stopCh                    chan struct{}
@@ -43,21 +47,31 @@ type requestEntry struct {
 	Date    string
 }
 
+type requestFillEntry struct {
+	Release     string
+	RequestedBy string
+	FilledBy    string
+	Date        string
+}
+
 var reqLineRE = regexp.MustCompile(`^\[\s*(\d+):\]\s+(.+?)\s+~\s+by\s+(.+?)\s+\((.*?)\)(?:\s+for\s+(.+?))?\s+at\s+(.+)$`)
+var reqFillLineRE = regexp.MustCompile(`^(.+?)\s+~\s+requested by\s+(.+?)\s+filled by\s+(.+?)\s+at\s+(.+)$`)
 
 func New() *Plugin {
 	return &Plugin{
-		dir:          "/REQUESTS",
-		reqFile:      "/REQUESTS/.requests",
-		requestHead:  "REQ-",
-		filledHead:   "FILLED-",
-		replaceWith:  "_",
-		badChars:     `*{^~/,+&\`,
-		maxRequests:  30,
-		reqwipeFlags: "1",
-		proxyUsers:   []string{"goftpd"},
-		sitename:     "GoFTPd",
-		stopCh:       make(chan struct{}),
+		dir:           "/REQUESTS",
+		reqFile:       "/REQUESTS/.requests",
+		fillStatsFile: "/REQUESTS/.reqfills",
+		requestHead:   "REQ-",
+		filledHead:    "FILLED-",
+		replaceWith:   "_",
+		badChars:      `*{^~/,+&\`,
+		maxRequests:   30,
+		reqwipeFlags:  "1",
+		reqTopLimit:   10,
+		proxyUsers:    []string{"goftpd"},
+		sitename:      "GoFTPd",
+		stopCh:        make(chan struct{}),
 	}
 }
 
@@ -70,6 +84,9 @@ func (p *Plugin) Init(svc *plugin.Services, cfg map[string]interface{}) error {
 	}
 	if s := stringConfig(cfg, "reqfile", ""); strings.TrimSpace(s) != "" {
 		p.reqFile = cleanAbs(s)
+	}
+	if s := stringConfig(cfg, "fill_stats_file", ""); strings.TrimSpace(s) != "" {
+		p.fillStatsFile = cleanAbs(s)
 	}
 	if s := stringConfig(cfg, "request_head", ""); s != "" {
 		p.requestHead = s
@@ -89,11 +106,17 @@ func (p *Plugin) Init(svc *plugin.Services, cfg map[string]interface{}) error {
 	if raw, ok := cfg["proxy_users"]; ok {
 		p.proxyUsers = toStringSlice(raw)
 	}
+	if s := stringConfig(cfg, "storage_slave", ""); strings.TrimSpace(s) != "" {
+		p.storageSlave = strings.TrimSpace(s)
+	}
 	if s := stringConfig(cfg, "sitename", ""); strings.TrimSpace(s) != "" {
 		p.sitename = strings.TrimSpace(s)
 	}
 	if n := intConfig(cfg["max_requests"], 0); n >= 0 {
 		p.maxRequests = n
+	}
+	if n := intConfig(cfg["reqtop_limit"], 0); n > 0 {
+		p.reqTopLimit = n
 	}
 	if b, ok := boolConfig(cfg["allow_space"]); ok {
 		p.allowSpace = b
@@ -115,6 +138,11 @@ func (p *Plugin) Init(svc *plugin.Services, cfg map[string]interface{}) error {
 	} else if strings.TrimSpace(p.reqFile) == "" {
 		p.reqFile = path.Join(p.dir, ".requests")
 	}
+	if _, configured := cfg["fill_stats_file"]; !configured && p.dir != "/REQUESTS" {
+		p.fillStatsFile = path.Join(p.dir, ".reqfills")
+	} else if strings.TrimSpace(p.fillStatsFile) == "" {
+		p.fillStatsFile = path.Join(p.dir, ".reqfills")
+	}
 	go p.ensureBaseDirOnStartup()
 	return nil
 }
@@ -131,7 +159,7 @@ func (p *Plugin) Stop() error {
 }
 
 func (p *Plugin) SiteCommands() []string {
-	return []string{"REQUEST", "REQUESTS", "REQFILL", "REQFILLED", "REQDEL", "REQWIPE"}
+	return []string{"REQUEST", "REQUESTS", "REQFILL", "REQFILLED", "REQTOP", "REQDEL", "REQWIPE"}
 }
 
 func (p *Plugin) HandleSiteCommand(ctx plugin.SiteContext, command string, args []string) bool {
@@ -146,6 +174,8 @@ func (p *Plugin) HandleSiteCommand(ctx plugin.SiteContext, command string, args 
 		return p.handleStatus(ctx)
 	case "REQFILL", "REQFILLED":
 		return p.handleReqFill(ctx, args)
+	case "REQTOP":
+		return p.handleReqTop(ctx, args)
 	case "REQDEL":
 		return p.handleReqDel(ctx, args)
 	case "REQWIPE":
@@ -168,31 +198,53 @@ func (p *Plugin) handleRequest(ctx plugin.SiteContext, args []string) bool {
 		p.reply(ctx, "550", "Permission denied: -by is only available to configured request proxy users.")
 		return true
 	}
+	requestedBy := firstNonEmpty(byUser, ctx.UserName())
 
 	entries := p.loadRequests()
+	if idx := p.findRequest(entries, release); idx >= 0 {
+		if p.requestHead != "" && !p.doNotCreateDirUntilFilled {
+			if err := p.ensureRequestDir(ctx, release, entries[idx].By); err != nil {
+				p.reply(ctx, "451", fmt.Sprintf("Failed to repair request dir: %v", err))
+				return true
+			}
+		}
+		if err := p.saveRequests(entries); err != nil {
+			p.reply(ctx, "451", fmt.Sprintf("Failed to save request list: %v", err))
+			return true
+		}
+		p.reply(ctx, "200", fmt.Sprintf("%s has already been requested.", release))
+		return true
+	}
+	if p.dirExists(p.requestDir(release)) || p.dirExists(p.filledDir(release)) {
+		p.reply(ctx, "200", fmt.Sprintf("%s has already been requested.", release))
+		return true
+	}
 	if p.maxRequests > 0 && len(entries) >= p.maxRequests {
 		p.reply(ctx, "200", "No more requests allowed. Fill some up.")
 		return true
 	}
-	if p.findRequest(entries, release) >= 0 || p.dirExists(p.requestDir(release)) || p.dirExists(p.filledDir(release)) {
-		p.reply(ctx, "200", fmt.Sprintf("%s has already been requested.", release))
-		return true
-	}
 
-	p.ensureBaseDir(ctx)
 	if p.requestHead != "" && !p.doNotCreateDirUntilFilled {
-		p.svc.Bridge.MakeDir(p.requestDir(release), ctx.UserName(), ctx.UserPrimaryGroup())
-		_ = p.svc.Bridge.Chmod(p.requestDir(release), 0777)
+		if err := p.ensureRequestDir(ctx, release, requestedBy); err != nil {
+			p.reply(ctx, "451", fmt.Sprintf("Failed to create request dir: %v", err))
+			return true
+		}
+	} else if err := p.ensureBaseDir(ctx); err != nil {
+		p.reply(ctx, "451", fmt.Sprintf("Failed to create request base dir: %v", err))
+		return true
 	}
 
 	entries = append(entries, requestEntry{
 		Release: release,
-		By:      firstNonEmpty(byUser, ctx.UserName()),
+		By:      requestedBy,
 		Mode:    "gl",
 		For:     forUser,
 		Date:    timeutil.Now().Format("2006-01-02 15:04"),
 	})
-	p.saveRequests(entries)
+	if err := p.saveRequests(entries); err != nil {
+		p.reply(ctx, "451", fmt.Sprintf("Failed to save request list: %v", err))
+		return true
+	}
 	added := p.numberedEntry(entries[len(entries)-1])
 	if p.showOnRequest {
 		return p.replyStatus(ctx)
@@ -206,11 +258,16 @@ func (p *Plugin) handleStatus(ctx plugin.SiteContext) bool {
 }
 
 func (p *Plugin) handleReqFill(ctx plugin.SiteContext, args []string) bool {
-	key := strings.TrimSpace(strings.Join(args, " "))
+	key, byUser := p.parseKeyArgs(args)
 	if key == "" {
-		p.reply(ctx, "501", "Usage: SITE REQFILL <number|request>")
+		p.reply(ctx, "501", "Usage: SITE REQFILL <number|request> [-by:<user>]")
 		return true
 	}
+	if byUser != "" && !p.canProxyUser(ctx) {
+		p.reply(ctx, "550", "Permission denied: -by is only available to configured request proxy users.")
+		return true
+	}
+	filledBy := firstNonEmpty(byUser, ctx.UserName())
 	entries := p.loadRequests()
 	idx := p.findRequest(entries, key)
 	if idx < 0 {
@@ -219,23 +276,94 @@ func (p *Plugin) handleReqFill(ctx plugin.SiteContext, args []string) bool {
 	}
 	entry := entries[idx]
 	reqDir := p.requestDir(entry.Release)
+	if p.requestHead != "" && !p.doNotCreateDirUntilFilled {
+		if err := p.ensureRequestDir(ctx, entry.Release, entry.By); err != nil {
+			p.reply(ctx, "451", fmt.Sprintf("Failed to repair request dir: %v", err))
+			return true
+		}
+	}
 	if p.requestHead != "" && p.dirExists(reqDir) {
 		if p.dirEmpty(reqDir) {
 			p.reply(ctx, "200", "That request is empty. Can not reqfill it.")
 			return true
 		}
 		toDir, toName := p.availableFilledTarget(entry.Release)
-		p.svc.Bridge.RenameFile(reqDir, toDir, toName)
+		if err := p.svc.Bridge.RenameFile(reqDir, toDir, toName); err != nil {
+			p.reply(ctx, "451", fmt.Sprintf("Failed to rename request dir: %v", err))
+			return true
+		}
 	} else if p.doNotCreateDirUntilFilled {
-		p.svc.Bridge.MakeDir(p.filledDir(entry.Release), ctx.UserName(), ctx.UserPrimaryGroup())
+		if err := p.makeDir(p.filledDir(entry.Release), ctx.UserName(), ctx.UserPrimaryGroup()); err != nil && !p.dirExists(p.filledDir(entry.Release)) {
+			p.reply(ctx, "451", fmt.Sprintf("Failed to create filled request dir: %v", err))
+			return true
+		}
 		_ = p.svc.Bridge.Chmod(p.filledDir(entry.Release), 0777)
 	}
 	entries = removeEntry(entries, idx)
-	p.saveRequests(entries)
+	if err := p.saveRequests(entries); err != nil {
+		p.reply(ctx, "451", fmt.Sprintf("Failed to save request list: %v", err))
+		return true
+	}
+	if err := p.recordFill(entry, filledBy); err != nil {
+		p.reply(ctx, "200", fmt.Sprintf("%s : %s has been filled. Thank you. Fill stats were not saved: %v", key, entry.Release, err))
+		return true
+	}
 	if p.showOnFill {
 		return p.replyStatus(ctx)
 	}
 	p.reply(ctx, "200", fmt.Sprintf("%s : %s has been filled. Thank you.", key, entry.Release))
+	return true
+}
+
+func (p *Plugin) handleReqTop(ctx plugin.SiteContext, args []string) bool {
+	limit := p.reqTopLimit
+	if len(args) > 0 {
+		if n, err := strconv.Atoi(strings.TrimSpace(args[0])); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	stats := p.loadFillStats()
+	if len(stats) == 0 {
+		p.reply(ctx, "200", "No filled request stats yet.")
+		return true
+	}
+	type fillCount struct {
+		User  string
+		Count int
+	}
+	counts := map[string]*fillCount{}
+	for _, stat := range stats {
+		user := strings.TrimSpace(stat.FilledBy)
+		if user == "" {
+			continue
+		}
+		key := strings.ToLower(user)
+		if counts[key] == nil {
+			counts[key] = &fillCount{User: user}
+		}
+		counts[key].Count++
+	}
+	rows := make([]fillCount, 0, len(counts))
+	for _, count := range counts {
+		rows = append(rows, *count)
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Count != rows[j].Count {
+			return rows[i].Count > rows[j].Count
+		}
+		return strings.ToLower(rows[i].User) < strings.ToLower(rows[j].User)
+	})
+	if len(rows) > limit {
+		rows = rows[:limit]
+	}
+	lines := []string{"Request Fill Leaderboard:"}
+	for i, row := range rows {
+		lines = append(lines, fmt.Sprintf("[%02d] %s - %d fill(s)", i+1, row.User, row.Count))
+	}
+	p.replyMultiline(ctx, "200", lines)
 	return true
 }
 
@@ -269,7 +397,10 @@ func (p *Plugin) handleReqDel(ctx plugin.SiteContext, args []string) bool {
 		_ = p.svc.Bridge.DeleteFile(p.requestDir(entry.Release))
 	}
 	entries = removeEntry(entries, idx)
-	p.saveRequests(entries)
+	if err := p.saveRequests(entries); err != nil {
+		p.reply(ctx, "451", fmt.Sprintf("Failed to save request list: %v", err))
+		return true
+	}
 	p.reply(ctx, "200", fmt.Sprintf("%s : %s has been deleted.", key, entry.Release))
 	return true
 }
@@ -296,7 +427,10 @@ func (p *Plugin) handleReqWipe(ctx plugin.SiteContext, args []string) bool {
 		_ = p.svc.Bridge.DeleteFile(wiped)
 	}
 	entries = removeEntry(entries, idx)
-	p.saveRequests(entries)
+	if err := p.saveRequests(entries); err != nil {
+		p.reply(ctx, "451", fmt.Sprintf("Failed to save request list: %v", err))
+		return true
+	}
 	p.reply(ctx, "200", fmt.Sprintf("Wiped out %s", wiped))
 	return true
 }
@@ -378,22 +512,59 @@ func (p *Plugin) parseKeyArgs(args []string) (string, string) {
 
 func (p *Plugin) loadRequests() []requestEntry {
 	data, err := p.svc.Bridge.ReadFile(p.reqFile)
-	if err != nil || len(data) == 0 {
-		return nil
+	if err != nil && p.debug {
+		log.Printf("[REQUEST] read %s failed: %v", p.reqFile, err)
 	}
-	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	var entries []requestEntry
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		if entry, ok := parseRequestLine(line); ok {
-			entries = append(entries, entry)
+	if err == nil && len(data) > 0 {
+		scanner := bufio.NewScanner(strings.NewReader(string(data)))
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" {
+				continue
+			}
+			if entry, ok := parseRequestLine(line); ok {
+				entries = append(entries, entry)
+			}
 		}
 	}
+	entries = p.mergeRequestDirs(entries)
 	for i := range entries {
 		entries[i].Num = i + 1
+	}
+	return entries
+}
+
+func (p *Plugin) mergeRequestDirs(entries []requestEntry) []requestEntry {
+	if p.requestHead == "" {
+		return entries
+	}
+	known := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		known[strings.ToLower(entry.Release)] = struct{}{}
+	}
+	for _, entry := range p.svc.Bridge.PluginListDir(p.dir) {
+		if !entry.IsDir || !strings.HasPrefix(entry.Name, p.requestHead) {
+			continue
+		}
+		release := strings.TrimPrefix(entry.Name, p.requestHead)
+		if strings.TrimSpace(release) == "" {
+			continue
+		}
+		if _, ok := known[strings.ToLower(release)]; ok {
+			continue
+		}
+		date := timeutil.Now().Format("2006-01-02 15:04")
+		if entry.ModTime > 0 {
+			date = time.Unix(entry.ModTime, 0).Format("2006-01-02 15:04")
+		}
+		entries = append(entries, requestEntry{
+			Release: release,
+			By:      firstNonEmpty(entry.Owner, "unknown"),
+			Mode:    "gl",
+			Date:    date,
+		})
+		known[strings.ToLower(release)] = struct{}{}
 	}
 	return entries
 }
@@ -414,7 +585,100 @@ func parseRequestLine(line string) (requestEntry, bool) {
 	}, true
 }
 
-func (p *Plugin) saveRequests(entries []requestEntry) {
+func (p *Plugin) recordFill(entry requestEntry, filledBy string) error {
+	fills := p.loadFillStats()
+	fills = append(fills, requestFillEntry{
+		Release:     entry.Release,
+		RequestedBy: entry.By,
+		FilledBy:    filledBy,
+		Date:        timeutil.Now().Format("2006-01-02 15:04"),
+	})
+	return p.saveFillStats(fills)
+}
+
+func (p *Plugin) loadFillStats() []requestFillEntry {
+	data, err := p.svc.Bridge.ReadFile(p.fillStatsFile)
+	if err != nil {
+		if p.debug {
+			log.Printf("[REQUEST] read %s failed: %v", p.fillStatsFile, err)
+		}
+		return nil
+	}
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	var out []requestFillEntry
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		if entry, ok := parseFillLine(line); ok {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+func parseFillLine(line string) (requestFillEntry, bool) {
+	m := reqFillLineRE.FindStringSubmatch(line)
+	if len(m) == 0 {
+		return requestFillEntry{}, false
+	}
+	return requestFillEntry{
+		Release:     strings.TrimSpace(m[1]),
+		RequestedBy: strings.TrimSpace(m[2]),
+		FilledBy:    strings.TrimSpace(m[3]),
+		Date:        strings.TrimSpace(m[4]),
+	}, true
+}
+
+func (p *Plugin) saveFillStats(entries []requestFillEntry) error {
+	var b strings.Builder
+	for _, entry := range entries {
+		line := fmt.Sprintf("%s ~ requested by %s filled by %s at %s",
+			entry.Release,
+			firstNonEmpty(entry.RequestedBy, "unknown"),
+			firstNonEmpty(entry.FilledBy, "unknown"),
+			entry.Date,
+		)
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	if err := p.ensureBaseDir(nil); err != nil {
+		return err
+	}
+	if err := p.writeFile(p.fillStatsFile, []byte(b.String())); err != nil {
+		if retryErr := p.ensureBaseDir(nil); retryErr != nil {
+			return fmt.Errorf("%w; retry mkdir failed: %v", err, retryErr)
+		}
+		if retryErr := p.writeFile(p.fillStatsFile, []byte(b.String())); retryErr != nil {
+			return retryErr
+		}
+	}
+	return nil
+}
+
+func (p *Plugin) ensureRequestDir(ctx plugin.SiteContext, release, ownerOverride string) error {
+	if err := p.ensureBaseDir(ctx); err != nil {
+		return err
+	}
+	dirPath := p.requestDir(release)
+	owner := "GoFTPd"
+	group := "GoFTPd"
+	if ctx != nil {
+		owner = ctx.UserName()
+		group = ctx.UserPrimaryGroup()
+	}
+	if strings.TrimSpace(ownerOverride) != "" {
+		owner = strings.TrimSpace(ownerOverride)
+	}
+	if err := p.makeDir(dirPath, owner, group); err != nil {
+		return err
+	}
+	_ = p.svc.Bridge.Chmod(dirPath, 0777)
+	return nil
+}
+
+func (p *Plugin) saveRequests(entries []requestEntry) error {
 	for i := range entries {
 		entries[i].Num = i + 1
 		if entries[i].Mode == "" {
@@ -431,22 +695,56 @@ func (p *Plugin) saveRequests(entries []requestEntry) {
 		b.WriteString(line)
 		b.WriteByte('\n')
 	}
-	p.ensureBaseDir(nil)
-	_ = p.svc.Bridge.WriteFile(p.reqFile, []byte(b.String()))
+	if err := p.ensureBaseDir(nil); err != nil {
+		return err
+	}
+	if err := p.writeFile(p.reqFile, []byte(b.String())); err != nil {
+		if retryErr := p.ensureBaseDir(nil); retryErr != nil {
+			return fmt.Errorf("%w; retry mkdir failed: %v", err, retryErr)
+		}
+		if retryErr := p.writeFile(p.reqFile, []byte(b.String())); retryErr != nil {
+			return retryErr
+		}
+	}
+	return nil
 }
 
-func (p *Plugin) ensureBaseDir(ctx plugin.SiteContext) {
-	if p.dirExists(p.dir) {
-		return
-	}
+func (p *Plugin) ensureBaseDir(ctx plugin.SiteContext) error {
 	owner := "GoFTPd"
 	group := "GoFTPd"
 	if ctx != nil {
 		owner = ctx.UserName()
 		group = ctx.UserPrimaryGroup()
 	}
-	p.svc.Bridge.MakeDir(p.dir, owner, group)
+	exists := p.dirExists(p.dir)
+	if err := p.makeDir(p.dir, owner, group); err != nil && !exists {
+		return err
+	}
 	_ = p.svc.Bridge.Chmod(p.dir, 0777)
+	return nil
+}
+
+type requestStorageBridge interface {
+	MakeDirOnSlave(dirPath, owner, group, slaveName string) error
+	WriteFileOnSlave(filePath string, content []byte, slaveName string) error
+}
+
+func (p *Plugin) makeDir(dirPath, owner, group string) error {
+	if p.storageSlave != "" {
+		if bridge, ok := p.svc.Bridge.(requestStorageBridge); ok {
+			return bridge.MakeDirOnSlave(dirPath, owner, group, p.storageSlave)
+		}
+	}
+	return p.svc.Bridge.MakeDir(dirPath, owner, group)
+}
+
+func (p *Plugin) writeFile(filePath string, content []byte) error {
+	if p.storageSlave != "" {
+		if bridge, ok := p.svc.Bridge.(requestStorageBridge); ok {
+			return bridge.WriteFileOnSlave(filePath, content, p.storageSlave)
+		}
+	}
+	return p.svc.Bridge.WriteFile(filePath, content)
 }
 
 func (p *Plugin) ensureBaseDirOnStartup() {
@@ -455,7 +753,7 @@ func (p *Plugin) ensureBaseDirOnStartup() {
 
 	for attempt := 0; attempt < 60; attempt++ {
 		if p.svc != nil && p.svc.Bridge != nil {
-			p.ensureBaseDir(nil)
+			err := p.ensureBaseDir(nil)
 			if p.dirExists(p.dir) {
 				if p.debug {
 					log.Printf("[REQUEST] ensured request dir %s", p.dir)
@@ -463,7 +761,7 @@ func (p *Plugin) ensureBaseDirOnStartup() {
 				return
 			}
 			if p.debug {
-				log.Printf("[REQUEST] request dir %s not ready yet", p.dir)
+				log.Printf("[REQUEST] request dir %s not ready yet: %v", p.dir, err)
 			}
 		}
 		select {

@@ -39,6 +39,8 @@ type StatusMarkerEntry struct {
 	ModTime    int64
 }
 
+var zipPayloadNameRE = regexp.MustCompile(`(?i)\.(zip|z\d\d)$`)
+
 var scenePayloadExts = map[string]bool{
 	"rar":  true,
 	"zip":  true,
@@ -381,7 +383,7 @@ func ValidateUpload(cfg Config, uploadUser *user.User, dirPath, fileName string,
 	}
 	isPayload := IsRacePayloadFileForDir(cfg, dirPath, fileName) || listedInSFV
 	allowedOutsideSFV := AllowedOutsideSFVForDir(cfg, dirPath, fileName)
-	if UsesZip(cfg, dirPath) {
+	if UsesZipUploadMode(cfg, dirPath, fileName, existingNames) {
 		if strings.EqualFold(path.Base(strings.ReplaceAll(strings.TrimSpace(fileName), "\\", "/")), "file_id.diz") {
 			return errors.New("zipscript: diz-file is not allowed here")
 		}
@@ -642,9 +644,29 @@ func isPrimaryAudioPayload(dirPath, ext string) bool {
 		return ext == "mp3"
 	case "FLAC":
 		return ext == "flac"
+	case "REQUESTS":
+		return isRequestReleasePath(dirPath) && isAudioPayloadExt(ext)
 	default:
 		return false
 	}
+}
+
+func isAudioPayloadExt(ext string) bool {
+	switch strings.ToLower(strings.TrimSpace(ext)) {
+	case "mp3", "flac", "m4a", "wav":
+		return true
+	default:
+		return false
+	}
+}
+
+func isRequestReleasePath(dirPath string) bool {
+	clean := strings.Trim(path.Clean("/"+strings.TrimSpace(dirPath)), "/")
+	if clean == "" {
+		return false
+	}
+	parts := strings.Split(clean, "/")
+	return len(parts) >= 3 && strings.EqualFold(parts[0], "REQUESTS") && strings.HasPrefix(strings.ToUpper(parts[1]), "REQ-")
 }
 
 func ExpectedFileLabel(cfg Config, dirPath string) string {
@@ -678,10 +700,36 @@ func IsRacePayloadFileForDir(cfg Config, dirPath, fileName string) bool {
 	if strings.HasSuffix(name, ".rar") || isSceneMultipartExt(normalizedExt(name)) {
 		return true
 	}
-	if UsesZip(cfg, dirPath) && regexp.MustCompile(`(?i)\.(zip|z\d\d)$`).MatchString(name) {
+	if UsesZip(cfg, dirPath) && IsZipPayloadName(name) {
 		return true
 	}
 	return IsMediaInfoFile(name)
+}
+
+func IsZipPayloadName(name string) bool {
+	return zipPayloadNameRE.MatchString(strings.ToLower(strings.TrimSpace(name)))
+}
+
+func IsZipManifestName(name string) bool {
+	return strings.EqualFold(path.Base(strings.ReplaceAll(strings.TrimSpace(name), "\\", "/")), "file_id.diz")
+}
+
+func UsesZipUploadMode(cfg Config, dirPath, fileName string, existingNames []string) bool {
+	if !UsesZip(cfg, dirPath) {
+		return false
+	}
+	if !UsesSFV(cfg, dirPath) {
+		return true
+	}
+	if IsZipPayloadName(fileName) || IsZipManifestName(fileName) {
+		return true
+	}
+	for _, name := range existingNames {
+		if IsZipPayloadName(name) || IsZipManifestName(name) {
+			return true
+		}
+	}
+	return false
 }
 
 func isSceneMultipartExt(ext string) bool {
@@ -704,8 +752,8 @@ func CanTriggerRaceEndForDir(cfg Config, dirPath string, sfvEntries map[string]u
 		return false
 	}
 	name := raceEntryKey(fileName)
-	if UsesZip(cfg, dirPath) {
-		return regexp.MustCompile(`(?i)\.(zip|z\d\d)$`).MatchString(name)
+	if UsesZip(cfg, dirPath) && (!UsesSFV(cfg, dirPath) || IsZipPayloadName(name)) {
+		return IsZipPayloadName(name)
 	}
 	if strings.HasSuffix(name, ".sfv") {
 		return true
@@ -865,7 +913,8 @@ func AudioCheckEnabled(cfg Config, dirPath, fileName string) bool {
 		return false
 	}
 	section, _ := SectionInfoFromPath(dirPath)
-	if len(cfg.Audio.Sections) > 0 && !matchesAnySectionName(section, cfg.Audio.Sections) {
+	requestAudio := isRequestReleasePath(dirPath) && isAudioPayloadExt(normalizedExt(fileName))
+	if len(cfg.Audio.Sections) > 0 && !matchesAnySectionName(section, cfg.Audio.Sections) && !requestAudio {
 		return false
 	}
 	ext := normalizedExt(fileName)

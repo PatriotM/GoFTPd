@@ -117,3 +117,24 @@ func TestDH1080CtxNegotiatesSameKey(t *testing.T) {
 		t.Fatalf("negotiated keys differ:\nalice=%q\nbob=%q", aliceKey, bobKey)
 	}
 }
+
+func TestSendMessageTruncatesOverlongIRCLines(t *testing.T) {
+	conn := &recordingConn{}
+	bot := NewBot("irc.example.net", 6667, "Bot", "bot", "Bot")
+	bot.Conn = conn
+	bot.Connected = true
+
+	if err := bot.SendMessage("#chan", strings.Repeat("A", 900)); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	if len(conn.writes) != 1 {
+		t.Fatalf("expected one write, got %d", len(conn.writes))
+	}
+	line := strings.TrimSuffix(conn.writes[0], "\r\n")
+	if len(line) > maxIRCLineBytes {
+		t.Fatalf("IRC line length = %d, want <= %d", len(line), maxIRCLineBytes)
+	}
+	if !strings.HasSuffix(line, "...") {
+		t.Fatalf("expected truncated line to end with ellipsis, got %q", line)
+	}
+}

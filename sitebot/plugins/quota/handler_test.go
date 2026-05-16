@@ -16,7 +16,7 @@ func TestScanAndProcessDisablesFailedTrial(t *testing.T) {
 	if err := os.MkdirAll(usersDir, 0755); err != nil {
 		t.Fatalf("mkdir users: %v", err)
 	}
-	if err := writeUserFile(filepath.Join(usersDir, "alice"), "GROUP iND\nFLAGS 3\nWKUP 1 0 0\nDAYUP 1 0 0\n"); err != nil {
+	if err := writeUserFile(filepath.Join(usersDir, "alice"), "PRIMARY_GROUP iND\nGROUP iND 0\nCUSTOM keep\nFLAGS 3\nWKUP 1 0 0\nDAYUP 1 0 0\n"); err != nil {
 		t.Fatalf("write user: %v", err)
 	}
 
@@ -56,6 +56,11 @@ func TestScanAndProcessDisablesFailedTrial(t *testing.T) {
 	}
 	if !strings.Contains(string(content), "FLAGS 63") && !strings.Contains(string(content), "FLAGS 36") {
 		t.Fatalf("expected disabled flag added, got:\n%s", string(content))
+	}
+	for _, needle := range []string{"PRIMARY_GROUP iND", "GROUP iND 0", "CUSTOM keep"} {
+		if !strings.Contains(string(content), needle) {
+			t.Fatalf("expected quota flag update to preserve %q, got:\n%s", needle, string(content))
+		}
 	}
 	byeContent, err := os.ReadFile(filepath.Join(byeDir, "alice.bye"))
 	if err != nil {

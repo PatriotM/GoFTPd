@@ -17,6 +17,7 @@ import (
 
 	"goftpd/internal/core"
 	"goftpd/internal/protocol"
+	"goftpd/internal/zipscript"
 )
 
 // SlaveManager listens for slave connections and manages all RemoteSlave objects.
@@ -1216,18 +1217,29 @@ func (sm *SlaveManager) loadReleaseSnapshotFromDisk(filePath string) error {
 // immediately and remerge runs in the background. Files appear in LIST
 // as they are indexed.
 func (sm *SlaveManager) initializeSlaveAfterConnect(rs *RemoteSlave, forceInstantOnline bool) {
+	sm.initializeSlaveRemerge(rs, "/", false, false, forceInstantOnline)
+}
+
+func (sm *SlaveManager) initializeSlaveRemerge(rs *RemoteSlave, basePath string, rootsOnly bool, scoped bool, forceInstantOnline bool) {
 	mode := sm.GetRemergeMode()
 	instantOnline := forceInstantOnline || mode == "instant"
-	if _, useCachedVFS := sm.startupCachedSlaves.LoadAndDelete(rs.name); useCachedVFS {
-		log.Printf("[SlaveManager] Reusing cached VFS for slave %s on startup; skipping initial remerge", rs.name)
-		rs.remerging.Store(false)
-		rs.SetAvailable(true)
-		sm.publishDiskStatus(rs)
-		sm.ensureBootstrapDirsOnSlave(rs)
-		return
+	basePath = path.Clean("/" + strings.TrimSpace(basePath))
+	if basePath == "." || basePath == "" {
+		basePath = "/"
+	}
+	if !scoped {
+		if _, useCachedVFS := sm.startupCachedSlaves.LoadAndDelete(rs.name); useCachedVFS {
+			log.Printf("[SlaveManager] Reusing cached VFS for slave %s on startup; skipping initial remerge", rs.name)
+			sm.rebuildAllStatusMarkers()
+			rs.remerging.Store(false)
+			rs.SetAvailable(true)
+			sm.publishDiskStatus(rs)
+			sm.ensureBootstrapDirsOnSlave(rs)
+			return
+		}
 	}
 
-	log.Printf("[SlaveManager] Starting remerge for slave %s (mode=%s)", rs.name, mode)
+	log.Printf("[SlaveManager] Starting remerge for slave %s (mode=%s base=%s rootsOnly=%v scoped=%v)", rs.name, mode, basePath, rootsOnly, scoped)
 
 	rs.remerging.Store(true)
 	if instantOnline {
@@ -1241,10 +1253,12 @@ func (sm *SlaveManager) initializeSlaveAfterConnect(rs *RemoteSlave, forceInstan
 
 	sm.ensureBootstrapDirsOnSlave(rs)
 
-	// Mark current files unseen before remerge so stale entries can be purged.
-	sm.vfs.MarkAllUnseen(rs.name)
+	// Only full slave remerges should mark everything unseen and purge at the end.
+	if !scoped {
+		sm.vfs.MarkAllUnseen(rs.name)
+	}
 
-	index, err := IssueRemerge(rs, "/", false, 0, time.Now().UnixMilli(), instantOnline, sm.getExcludePaths())
+	index, err := IssueRemerge(rs, basePath, false, 0, time.Now().UnixMilli(), instantOnline, rootsOnly, sm.getExcludePaths())
 	if err != nil {
 		log.Printf("[SlaveManager] Failed to issue remerge to %s: %v", rs.name, err)
 		// Don't take offline - slave is still connected, just no file index yet.
@@ -1269,9 +1283,11 @@ func (sm *SlaveManager) initializeSlaveAfterConnect(rs *RemoteSlave, forceInstan
 			remergeComplete = true
 			log.Printf("[SlaveManager] Remerge complete for slave %s", rs.name)
 
-			// Purge files that were physically deleted from the slave.
-			sm.vfs.PurgeUnseen(rs.name)
-			log.Printf("[SlaveManager] Ghost files purged for %s", rs.name)
+			if !scoped {
+				// Purge files that were physically deleted from the slave.
+				sm.vfs.PurgeUnseen(rs.name)
+				log.Printf("[SlaveManager] Ghost files purged for %s", rs.name)
+			}
 
 			// Persist the VFS after remerge and purge complete.
 			if err := sm.vfs.SaveToDisk(vfsFilePath); err != nil {
@@ -1303,6 +1319,9 @@ func (sm *SlaveManager) ProcessRemerge(rs *RemoteSlave, resp *protocol.AsyncResp
 			fullPath = resp.Path + "/" + inode.Name
 		}
 		if sm.vfs.IsExcludedPath(fullPath) {
+			continue
+		}
+		if zipscript.IsStatusMarkerName(sm.statusMarkerConfig().Zipscript, inode.Name) {
 			continue
 		}
 
@@ -1443,6 +1462,7 @@ func (sm *SlaveManager) scheduleRemergeSFVParse(rs *RemoteSlave, sfvPath string)
 			sfvMap[strings.ToLower(path.Base(entry.FileName))] = entry.CRC32
 		}
 		sm.vfs.SetSFVData(dirPath, sfvName, sfvMap)
+		sm.cleanupStaleMissingMarkersAfterRemerge(rs, dirPath, sfvMap)
 		sm.syncStatusMarkersForDir(dirPath)
 
 		for _, child := range sm.vfs.ListDirectory(dirPath) {
@@ -1458,6 +1478,40 @@ func (sm *SlaveManager) scheduleRemergeSFVParse(rs *RemoteSlave, sfvPath string)
 			}
 		}
 	}()
+}
+
+func (sm *SlaveManager) cleanupStaleMissingMarkersAfterRemerge(rs *RemoteSlave, dirPath string, sfvMap map[string]uint32) {
+	if sm == nil || rs == nil || len(sfvMap) == 0 {
+		return
+	}
+	if !zipscript.ShowMissingFilesForDir(sm.statusMarkerConfig().Zipscript, dirPath) {
+		return
+	}
+	filesByName := make(map[string]*VFSFile)
+	for _, entry := range sm.vfs.ListDirectory(dirPath) {
+		if entry == nil || entry.IsDir {
+			continue
+		}
+		filesByName[strings.ToLower(path.Base(entry.Path))] = entry
+	}
+	for expectedName := range sfvMap {
+		realEntry := filesByName[strings.ToLower(path.Base(expectedName))]
+		missingEntry := filesByName[strings.ToLower(path.Base(expectedName)+"-MISSING")]
+		if realEntry == nil || missingEntry == nil {
+			continue
+		}
+		missingPath := missingEntry.Path
+		sm.vfs.DeleteFile(missingPath)
+		go func(missing string) {
+			index, err := IssueDelete(rs, missing)
+			if err != nil {
+				return
+			}
+			if _, err := rs.FetchResponse(index, 30*time.Second); err != nil {
+				log.Printf("[SlaveManager] stale missing marker delete failed for %s: %v", missing, err)
+			}
+		}(missingPath)
+	}
 }
 
 // --- Slave Access ---
@@ -1494,6 +1548,21 @@ func (sm *SlaveManager) StartRemerge(name string) error {
 	return nil
 }
 
+func (sm *SlaveManager) StartRemergePath(name, basePath string, rootsOnly bool) error {
+	rs := sm.GetSlave(name)
+	if rs == nil {
+		return fmt.Errorf("unknown slave %s", name)
+	}
+	if !rs.IsOnline() {
+		return fmt.Errorf("slave %s is offline", rs.Name())
+	}
+	if !rs.remerging.CompareAndSwap(false, true) {
+		return fmt.Errorf("slave %s is already remerging", rs.Name())
+	}
+	go sm.initializeSlaveRemerge(rs, basePath, rootsOnly, true, sm.GetManualRemergeMode() == "instant")
+	return nil
+}
+
 // StartRemergeAll starts a full background VFS refresh for every online slave.
 func (sm *SlaveManager) StartRemergeAll() (int, []string) {
 	var errs []string
@@ -1504,6 +1573,23 @@ func (sm *SlaveManager) StartRemergeAll() (int, []string) {
 	}
 	for _, rs := range slaves {
 		if err := sm.StartRemerge(rs.Name()); err != nil {
+			errs = append(errs, err.Error())
+			continue
+		}
+		started++
+	}
+	return started, errs
+}
+
+func (sm *SlaveManager) StartRemergeAllPath(basePath string, rootsOnly bool) (int, []string) {
+	var errs []string
+	started := 0
+	slaves := sm.GetAllSlaves()
+	if len(slaves) == 0 {
+		return 0, []string{"no slaves connected"}
+	}
+	for _, rs := range slaves {
+		if err := sm.StartRemergePath(rs.Name(), basePath, rootsOnly); err != nil {
 			errs = append(errs, err.Error())
 			continue
 		}

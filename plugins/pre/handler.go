@@ -1046,15 +1046,12 @@ func (p *Plugin) applyPreCredits(users []plugin.RaceUser, creditRatio int) int64
 		if strings.TrimSpace(racer.Name) == "" || racer.Bytes <= 0 {
 			continue
 		}
-		u, err := user.LoadUser(racer.Name, groupMap)
-		if err != nil {
-			p.logf("could not load user %s for PRE reward: %v", racer.Name, err)
-			continue
-		}
 		award := racer.Bytes * int64(creditRatio)
-		u.Credits += award
-		if err := u.Save(); err != nil {
-			p.logf("could not save PRE reward for %s: %v", racer.Name, err)
+		if _, err := user.MutateAndSave(racer.Name, groupMap, func(u *user.User) error {
+			u.Credits += award
+			return nil
+		}); err != nil {
+			p.logf("could not apply PRE reward for %s: %v", racer.Name, err)
 			continue
 		}
 		totalAwarded += award

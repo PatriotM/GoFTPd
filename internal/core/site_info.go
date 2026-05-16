@@ -75,7 +75,7 @@ var baseSiteHelpEntries = []siteHelpEntry{
 	{Command: "WIPE", Usage: "[-r] <path>", Summary: "Wipe a path", Area: "Release/admin"},
 	{Command: "KICK", Usage: "<user>", Summary: "Disconnect a user", Area: "Release/admin"},
 	{Command: "REHASH", Usage: "", Summary: "Reload permissions and config-backed state", Area: "Release/admin"},
-	{Command: "REMERGE", Usage: "[slave]", Summary: "Refresh slave VFS index", Area: "Release/admin"},
+	{Command: "REMERGE", Usage: "<slave|*> [SITE|<path>]", Summary: "Refresh slave VFS index", Area: "Release/admin"},
 	{Command: "SLAVEBANS", Usage: "", Summary: "Show slave control denylist and active temp bans", Area: "Release/admin"},
 	{Command: "SLAVEBAN", Usage: "<ip|cidr>", Summary: "Add an IP or CIDR to the persistent slave control denylist", Area: "Release/admin"},
 	{Command: "SLAVEUNBAN", Usage: "<ip|cidr>", Summary: "Remove an IP or CIDR from the persistent slave control denylist", Area: "Release/admin"},

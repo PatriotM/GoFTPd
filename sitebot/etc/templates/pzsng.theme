@@ -438,7 +438,7 @@ announce.TOPICCMD_USAGE = "%c02{TOPIC:} %c01{Usage:} %c05{!topic #channel topic 
 announce.NUKE = "%c04{NUKED:} %c14{[}%section_colored%c14{]} %c06{%relname}"
 announce.NUKE_FACTOR = "%c04{NUKED:} %c01{Was nuked factor} %c04{%multiplier_label} %c01{by} %c%sec_c2{%u_name}"
 announce.NUKE_REASON = "%c04{NUKED:} %c01{[reason]} %c14{-->} %c04{%reason}"
-announce.NUKE_NUKEES = "%c04{NUKED:} %c01{[nukees]} %c14{-->} %c07{%nukees}"
+announce.NUKE_NUKEES = "%c04{NUKED:} %c01{[nukees]} %c14{-->} %{nukees_colored}"
 
 announce.UNNUKE = "%c01{UNNUKE:} %c14{[}%section_colored%c14{]} %c14{%relname} %c01{by} %c%sec_c2{%u_name}"
 
@@ -455,8 +455,8 @@ announce.PREBWUSER = "%c01{PREBW:} %c14{[}%section_colored%c14{]} %c01{::} %c04{
 
 announce.NEWPRETIME = "%c09{PRETiME:} %c14{[}%section_colored%c14{]} %c%sec_c3{%relname} %c01{::} %c09{OK} %c01{:: released} %c09{%preage}%c01{ ago}"
 announce.OLDPRETIME = "%c04{PRETiME:} %c14{[}%section_colored%c14{]} %c%sec_c3{%relname} %c01{::} %c04{BAD} %c01{:: released} %c04{%preage}%c01{ ago}"
-announce.NEWPRETIMEINLINE = "%c01{NEW:} %c14{[}%section_colored%c14{]} %c%sec_c3{%relname} %c01{by} %c%sec_c2{%u_name} %c01{:: released} %c09{%preage}%c01{ ago}"
-announce.OLDPRETIMEINLINE = "%c01{NEW:} %c14{[}%section_colored%c14{]} %c%sec_c3{%relname} %c01{by} %c%sec_c2{%u_name} %c01{:: released} %c04{%preage}%c01{ ago}"
+announce.NEWPRETIMEINLINE = "%b%c01{NEW:}%b %c14{[}%section_colored%c14{]} %c%sec_c3{%relname} %c01{by} %c%sec_c2{%u_name} %c01{:: released} %c09{%preage}%c01{ ago}"
+announce.OLDPRETIMEINLINE = "%b%c01{NEW:}%b %c14{[}%section_colored%c14{]} %c%sec_c3{%relname} %c01{by} %c%sec_c2{%u_name} %c01{:: released} %c04{%preage}%c01{ ago}"
 
 announce.DF_SLAVE = "%c02{DF:} %c06{%slave} %c01{-} %c03{%free} %c01{free /} %c05{%total} %c01{total (}%c03{%{free_pct}%}%c01{ free) [}%state_colored%c14{]}"
 
@@ -483,6 +483,10 @@ announce.REQUESTCMD_LINE = "%c02{REQUEST:} %c05{%line}"
 announce.REQUESTCMD_ERROR = "%c02{REQUEST:} %c04{SITE %command failed:} %c05{%response}"
 announce.REQUESTCMD_DENIED = "%c02{REQUEST:} %c04{%response}"
 announce.REQUESTCMD_USAGE = "%c02{REQUEST:} %c01{Usage:} %c05{%response}"
+announce.REQTOPCMD_HEADER = "%c03{REQTOP FILLERS:} %c14{[ }%c01{%count} %c01{Users ]}"
+announce.REQTOPCMD_ENTRY = "%c14{[}%c03{%rank}%c14{]} %c06{%user} %c01{- (}%c03{%fills} %c01{Fills)}"
+announce.REQTOPCMD_TOTAL = "%c03{TOTAL REQUEST FILLS:} %c01{( }%c01{%fills} %c01{Fills )}"
+announce.REQTOPCMD_EMPTY = "%c03{REQTOP:} %c05{No filled requests recorded yet.}"
 
 
 

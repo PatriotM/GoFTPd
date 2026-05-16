@@ -109,6 +109,14 @@ func (b *Bridge) StartRemergeAll() (int, []string) {
 	return b.sm.StartRemergeAll()
 }
 
+func (b *Bridge) StartRemergePath(slaveName, basePath string, rootsOnly bool) error {
+	return b.sm.StartRemergePath(slaveName, basePath, rootsOnly)
+}
+
+func (b *Bridge) StartRemergeAllPath(basePath string, rootsOnly bool) (int, []string) {
+	return b.sm.StartRemergeAllPath(basePath, rootsOnly)
+}
+
 func (b *Bridge) GetLiveTransferStats() []core.LiveTransferStat {
 	return b.getLiveTransferStats(true)
 }
@@ -886,6 +894,24 @@ func (b *Bridge) makeDirOnSlave(slave *RemoteSlave, dirPath string) error {
 	return nil
 }
 
+func (b *Bridge) writableAvailableSlaveByName(slaveName string) (*RemoteSlave, error) {
+	if b == nil || b.sm == nil {
+		return nil, fmt.Errorf("master not initialized")
+	}
+	name := strings.TrimSpace(slaveName)
+	if name == "" {
+		return nil, fmt.Errorf("slave name is empty")
+	}
+	slave := b.sm.GetSlave(name)
+	if slave == nil || !slave.IsAvailable() {
+		return nil, fmt.Errorf("requested slave unavailable: %s", name)
+	}
+	if b.sm.IsSlaveReadOnly(slave.Name()) {
+		return nil, fmt.Errorf("requested slave is read-only: %s", slave.Name())
+	}
+	return slave, nil
+}
+
 func (b *Bridge) resolveOwningSlave(path string) (*RemoteSlave, *VFSFile, error) {
 	if b == nil || b.sm == nil {
 		return nil, nil, fmt.Errorf("master not initialized")
@@ -920,7 +946,9 @@ func (b *Bridge) selectWritableSlaveForCreate(path string) (*RemoteSlave, error)
 		if slave != nil {
 			return slave, nil
 		}
-		return nil, fmt.Errorf("path has no owning slave: %s", vfsPath)
+		if file.IsDir || file.IsSymlink {
+			return nil, fmt.Errorf("path has no owning slave: %s", vfsPath)
+		}
 	}
 	parent := filepath.ToSlash(filepath.Clean(filepath.Dir(vfsPath)))
 	if parent != "." && parent != "/" {
@@ -931,7 +959,9 @@ func (b *Bridge) selectWritableSlaveForCreate(path string) (*RemoteSlave, error)
 			if slave != nil {
 				return slave, nil
 			}
-			return nil, fmt.Errorf("parent path has no owning slave: %s", parent)
+			if !file.IsDir || file.IsSymlink {
+				return nil, fmt.Errorf("parent path has no owning slave: %s", parent)
+			}
 		}
 	}
 	slave := b.sm.SelectSlaveForUpload(vfsPath)
@@ -1047,6 +1077,24 @@ func (b *Bridge) MakeDir(dirPath, owner, group string) error {
 		return err
 	}
 	b.sm.MakeDirectoryOnSlave(dirPath, owner, group, slave.Name())
+	b.sm.SyncStatusMarkersForPath(dirPath, true)
+	return nil
+}
+
+func (b *Bridge) MakeDirOnSlave(dirPath, owner, group, slaveName string) error {
+	if strings.TrimSpace(slaveName) == "" {
+		return b.MakeDir(dirPath, owner, group)
+	}
+	slave, err := b.writableAvailableSlaveByName(slaveName)
+	if err != nil {
+		return err
+	}
+	dirPath = filepath.ToSlash(filepath.Clean(dirPath))
+	if err := b.makeDirOnSlave(slave, dirPath); err != nil {
+		return err
+	}
+	b.sm.MakeDirectoryOnSlave(dirPath, owner, group, slave.Name())
+	b.sm.SyncStatusMarkersForPath(dirPath, true)
 	return nil
 }
 
@@ -1374,7 +1422,22 @@ func (b *Bridge) WriteFile(filePath string, content []byte) error {
 	if err != nil {
 		return err
 	}
+	return b.writeFileOnSlave(filePath, content, slave)
+}
 
+func (b *Bridge) WriteFileOnSlave(filePath string, content []byte, slaveName string) error {
+	if strings.TrimSpace(slaveName) == "" {
+		return b.WriteFile(filePath, content)
+	}
+	filePath = filepath.ToSlash(filepath.Clean(filePath))
+	slave, err := b.writableAvailableSlaveByName(slaveName)
+	if err != nil {
+		return err
+	}
+	return b.writeFileOnSlave(filePath, content, slave)
+}
+
+func (b *Bridge) writeFileOnSlave(filePath string, content []byte, slave *RemoteSlave) error {
 	index, err := IssueWriteFile(slave, filePath, string(content))
 	if err != nil {
 		return fmt.Errorf("issue writeFile: %w", err)
@@ -1532,10 +1595,13 @@ func (b *Bridge) candidateSlavesForPath(filePath string) ([]*RemoteSlave, error)
 
 func (b *Bridge) MarkFileMissing(filePath string) error {
 	b.sm.GetVFS().DeleteFile(filePath)
+	var err error
 	if b.raceDB != nil {
-		return b.raceDB.DeletePath(filepath.Clean(filePath), false)
+		err = b.raceDB.DeletePath(filepath.Clean(filePath), false)
 	}
-	return nil
+	b.sm.InvalidateReleaseStateForPath(filePath, false)
+	b.sm.SyncStatusMarkersForPath(filePath, false)
+	return err
 }
 
 func (b *Bridge) reconcileFailedUploadState(filePath string, slave *RemoteSlave) {
@@ -1811,15 +1877,63 @@ func (b *Bridge) GetVFSRaceStatsFresh(dirPath string) ([]core.VFSRaceUser, []cor
 	return coreUsers, coreGroups, totalBytes, present, total
 }
 
+func mergeReleaseProgress(primary, fallback map[string]core.ReleaseProgressStat) map[string]core.ReleaseProgressStat {
+	if len(primary) == 0 {
+		if len(fallback) == 0 {
+			return nil
+		}
+		out := make(map[string]core.ReleaseProgressStat, len(fallback))
+		for key, value := range fallback {
+			out[key] = value
+		}
+		return out
+	}
+	if len(fallback) == 0 {
+		return primary
+	}
+	out := make(map[string]core.ReleaseProgressStat, len(primary)+len(fallback))
+	for key, value := range fallback {
+		out[key] = value
+	}
+	for key, value := range primary {
+		out[key] = value
+	}
+	return out
+}
+
+func mergeReleaseChildFacts(primary, fallback map[string]core.ReleaseChildFacts) map[string]core.ReleaseChildFacts {
+	if len(primary) == 0 {
+		if len(fallback) == 0 {
+			return nil
+		}
+		out := make(map[string]core.ReleaseChildFacts, len(fallback))
+		for key, value := range fallback {
+			out[key] = value
+		}
+		return out
+	}
+	if len(fallback) == 0 {
+		return primary
+	}
+	out := make(map[string]core.ReleaseChildFacts, len(primary)+len(fallback))
+	for key, value := range fallback {
+		out[key] = value
+	}
+	for key, value := range primary {
+		out[key] = value
+	}
+	return out
+}
+
 func (b *Bridge) GetImmediateReleaseProgress(dirPath string) map[string]core.ReleaseProgressStat {
 	if b == nil || b.sm == nil {
 		return nil
 	}
 	cleanDirPath := filepath.Clean(dirPath)
-	if out := b.sm.GetImmediateReleaseProgress(cleanDirPath); len(out) > 0 {
-		return out
-	}
-	return b.sm.GetVFS().GetImmediateChildDirProgress(cleanDirPath)
+	return mergeReleaseProgress(
+		b.sm.GetImmediateReleaseProgress(cleanDirPath),
+		b.sm.GetVFS().GetImmediateChildDirProgress(cleanDirPath),
+	)
 }
 
 func (b *Bridge) GetImmediateReleaseChildFacts(dirPath string) map[string]core.ReleaseChildFacts {
@@ -1827,10 +1941,10 @@ func (b *Bridge) GetImmediateReleaseChildFacts(dirPath string) map[string]core.R
 		return nil
 	}
 	cleanDirPath := filepath.Clean(dirPath)
-	if out := b.sm.GetImmediateReleaseChildFacts(cleanDirPath); len(out) > 0 {
-		return out
-	}
-	return b.sm.GetVFS().GetImmediateChildDirFacts(cleanDirPath)
+	return mergeReleaseChildFacts(
+		b.sm.GetImmediateReleaseChildFacts(cleanDirPath),
+		b.sm.GetVFS().GetImmediateChildDirFacts(cleanDirPath),
+	)
 }
 
 func (b *Bridge) PluginGetVFSRaceStats(dirPath string) ([]plugin.RaceUser, []plugin.RaceGroup, int64, int, int) {
@@ -1918,6 +2032,25 @@ func (b *Bridge) SyncReleaseRaceStats(dirPath string) error {
 		}
 	}
 	return b.raceDB.ReplaceReleaseFiles(cleanDirPath, meta.SFVName, meta.SFVEntries, files)
+}
+
+func (b *Bridge) CacheReleaseProgress(dirPath string, present, total int, hasManifest bool) {
+	if b == nil || b.sm == nil || total <= 0 {
+		return
+	}
+	cleanDirPath := filepath.Clean(dirPath)
+	parent := filepath.Clean(filepath.Dir(cleanDirPath))
+	facts := b.sm.GetVFS().GetImmediateChildDirFacts(parent)[cleanDirPath]
+	snapshot := &vfsReleaseSnapshot{
+		VisibleCount: facts.VisibleCount,
+		HasSFV:       facts.HasSFV || hasManifest,
+		HasNFO:       facts.HasNFO,
+		Present:      present,
+		Total:        total,
+	}
+	b.sm.releaseStateMu.Lock()
+	b.sm.setReleaseFactLocked(cleanDirPath, snapshot)
+	b.sm.releaseStateMu.Unlock()
 }
 
 // GetSFVData returns cached SFV entries for a directory.

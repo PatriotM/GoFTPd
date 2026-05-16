@@ -797,7 +797,7 @@ func (p *Plugin) setDisabledFlag(username string, disabled bool) error {
 	if !strings.HasSuffix(output, "\n") {
 		output += "\n"
 	}
-	return os.WriteFile(path, []byte(output), 0644)
+	return writeFileAtomic(path, []byte(output), 0644)
 }
 
 func (p *Plugin) writeByeFile(username, reason string, bytesUp int64) error {
@@ -808,7 +808,7 @@ func (p *Plugin) writeByeFile(username, reason string, bytesUp int64) error {
 		return err
 	}
 	content := fmt.Sprintf("Account Disabled.\nStats: %s Up\nReason: %s\n", formatBytes(bytesUp), strings.TrimSpace(reason))
-	return os.WriteFile(filepath.Join(p.byeDir, username+".bye"), []byte(content), 0644)
+	return writeFileAtomic(filepath.Join(p.byeDir, username+".bye"), []byte(content), 0644)
 }
 
 func (p *Plugin) ensureUserFile(username string) error {
@@ -819,6 +819,47 @@ func (p *Plugin) ensureUserFile(username string) error {
 		}
 		return err
 	}
+	return nil
+}
+
+func writeFileAtomic(path string, data []byte, fallbackPerm os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	perm := fallbackPerm
+	if st, err := os.Stat(path); err == nil {
+		perm = st.Mode().Perm()
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		_ = os.Remove(path)
+		if renameErr := os.Rename(tmpPath, path); renameErr != nil {
+			return err
+		}
+	}
+	cleanup = false
 	return nil
 }
 
@@ -860,14 +901,11 @@ func (p *Plugin) loadState() error {
 }
 
 func (p *Plugin) saveStateLocked() error {
-	if err := os.MkdirAll(filepath.Dir(p.stateFile), 0755); err != nil {
-		return err
-	}
 	data, err := yaml.Marshal(&p.state)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(p.stateFile, data, 0644)
+	return writeFileAtomic(p.stateFile, data, 0644)
 }
 
 func (p *Plugin) startLoop() {

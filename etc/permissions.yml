@@ -122,6 +122,7 @@ rules:
         - REQUESTS
         - REQFILL
         - REQFILLED
+        - REQTOP
         - REQDEL
         - BANNED
         - SELFIP

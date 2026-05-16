@@ -57,7 +57,7 @@ func TestScanTargetsForBaseIncludeArchiveMountAtRoot(t *testing.T) {
 		},
 	}
 
-	targets := s.scanTargetsForBase("/")
+	targets := s.scanTargetsForBase("/", false)
 	if len(targets) != 2 {
 		t.Fatalf("expected 2 scan targets, got %d", len(targets))
 	}

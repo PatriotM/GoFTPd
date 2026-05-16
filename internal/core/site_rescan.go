@@ -755,6 +755,10 @@ func rescanZipPostProcess(cfg *Config, bridge MasterBridge, dirPath string, opts
 			result.Errors = append(result.Errors, fmt.Sprintf("file_id.diz recover skipped: %v", err))
 		}
 	}
+	if expected := zipExpectedPartsFromDIZ(bridge, dirPath); expected > 0 {
+		_, _, present := zipDirRaceStats(bridge, dirPath, bridge.ListDir(dirPath), expected)
+		cacheZipReleaseProgress(bridge, dirPath, present, expected)
+	}
 	return result
 }
 

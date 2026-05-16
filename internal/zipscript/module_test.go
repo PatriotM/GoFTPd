@@ -253,6 +253,55 @@ func TestValidateUploadRestrictFilesHonorsSetting(t *testing.T) {
 	}
 }
 
+func TestRequestMixedZipAndSFVSectionsAllowAudioAndZip(t *testing.T) {
+	cfg := Config{
+		Enabled: true,
+		Sections: SectionsConfig{
+			SFV: []string{"/REQUESTS/*/*"},
+			Zip: []string{"/REQUESTS/*/*"},
+		},
+		Race: RaceConfig{
+			Enabled: true,
+		},
+		AllowedFiles: AllowedFilesConfig{
+			AllowedTypes: []string{"sfv", "nfo", "rar", "zip"},
+		},
+	}
+	dirPath := "/REQUESTS/REQ-music_release-WOW/Cruel_Division-Carcosa-WEB-2026-SDR"
+
+	if err := ValidateUpload(cfg, nil, dirPath, "04-cruel_division-calcification.mp3", nil, nil, nil); err != nil {
+		t.Fatalf("expected request audio upload to be accepted by SFV mode, got %v", err)
+	}
+	if err := ValidateUpload(cfg, nil, dirPath, "release.zip", nil, nil, nil); err != nil {
+		t.Fatalf("expected request zip upload to still use zip mode, got %v", err)
+	}
+	if !CanTriggerRaceEndForDir(cfg, dirPath, map[string]uint32{"04-cruel_division-calcification.mp3": 1}, "04-cruel_division-calcification.mp3") {
+		t.Fatalf("expected listed request audio payload to trigger SFV race end checks")
+	}
+	if !CanTriggerRaceEndForDir(cfg, dirPath, nil, "release.zip") {
+		t.Fatalf("expected request zip payload to trigger zip race end checks")
+	}
+}
+
+func TestRequestAudioCheckIgnoresSectionNameForRequestedAudio(t *testing.T) {
+	cfg := Config{
+		Enabled: true,
+		Audio: AudioConfig{
+			Enabled:    true,
+			Sections:   []string{"MP3", "FLAC"},
+			Extensions: []string{"mp3", "flac"},
+		},
+	}
+	dirPath := "/REQUESTS/REQ-music_release-WOW/Cruel_Division-Carcosa-WEB-2026-SDR"
+
+	if !AudioCheckEnabled(cfg, dirPath, "04-cruel_division-calcification.mp3") {
+		t.Fatalf("expected request mp3 upload to run audio checks")
+	}
+	if AudioCheckEnabled(cfg, dirPath, "sample.mkv") {
+		t.Fatalf("did not expect non-audio request payload to run audio checks")
+	}
+}
+
 func TestValidateUploadSfvFirstPathIgnoreSkipsEnforcement(t *testing.T) {
 	cfg := Config{
 		Enabled: true,

@@ -218,7 +218,7 @@ func IssueAbort(rs *RemoteSlave, transferIndex int32, reason string) {
 
 // IssueRemerge tells the slave to scan and send its file listing.
 // ().
-func IssueRemerge(rs *RemoteSlave, path string, partialRemerge bool, skipAgeCutoff int64, masterTime int64, instantOnline bool, excludePaths []string) (string, error) {
+func IssueRemerge(rs *RemoteSlave, path string, partialRemerge bool, skipAgeCutoff int64, masterTime int64, instantOnline bool, rootsOnly bool, excludePaths []string) (string, error) {
 	index, err := rs.FetchIndex()
 	if err != nil {
 		return "", err
@@ -229,6 +229,7 @@ func IssueRemerge(rs *RemoteSlave, path string, partialRemerge bool, skipAgeCuto
 		fmt.Sprintf("%d", skipAgeCutoff),
 		fmt.Sprintf("%d", masterTime),
 		fmt.Sprintf("%v", instantOnline),
+		fmt.Sprintf("%v", rootsOnly),
 	}
 	for _, p := range excludePaths {
 		p = strings.TrimSpace(p)

@@ -63,9 +63,16 @@ func applyWeeklyAllotmentIfDue(u *user.User, now time.Time) error {
 		return err
 	}
 
-	u.Credits = u.WeeklyAllotment
-	if err := u.Save(); err != nil {
+	updated, err := user.MutateAndSave(u.Name, nil, func(current *user.User) error {
+		current.Credits = current.WeeklyAllotment
+		return nil
+	})
+	if err != nil {
 		return err
+	}
+	if updated != nil {
+		u.Credits = updated.Credits
+		u.WeeklyAllotment = updated.WeeklyAllotment
 	}
 	_, err = db.Exec(`
 INSERT INTO weekly_allotment(username, week_key, applied_at)

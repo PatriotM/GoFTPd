@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -30,6 +31,14 @@ type Plugin struct {
 	staffHosts    []string
 	theme         *tmpl.Theme
 }
+
+type reqTopEntry struct {
+	Rank  string
+	User  string
+	Fills int
+}
+
+var reqTopEntryRE = regexp.MustCompile(`^\[\s*([0-9]+)\]\s+(.+?)\s+-\s+([0-9]+)\s+fill\(s\)$`)
 
 func New() *Plugin {
 	return &Plugin{
@@ -119,8 +128,11 @@ func (p *Plugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 			vars := map[string]string{"command": cmd, "response": "!reqfill <number|request>"}
 			return p.reply(evt, p.render("REQUESTCMD_USAGE", vars, "REQUEST: Usage: !reqfill <number|request>")), nil
 		}
-		siteArgs = "REQFILL " + args
-		displayArgs = siteArgs
+		siteArgs = "REQFILL -by:" + evt.User + " " + args
+		displayArgs = "REQFILL " + args
+	case "reqtop":
+		siteArgs = "REQTOP " + args
+		displayArgs = strings.TrimSpace(siteArgs)
 	case "reqdel":
 		if args == "" {
 			vars := map[string]string{"command": cmd, "response": "!reqdel <number|request>"}
@@ -361,6 +373,12 @@ func wildcardMatch(pattern, value string) bool {
 }
 
 func (p *Plugin) commandResponse(evt *event.Event, command string, lines []string) []plugin.Output {
+	commandFields := strings.Fields(command)
+	if len(commandFields) > 0 && strings.EqualFold(commandFields[0], "REQTOP") {
+		if out := p.reqTopResponse(evt, lines); len(out) > 0 {
+			return out
+		}
+	}
 	if len(lines) <= 1 {
 		response := responseText(lines)
 		vars := map[string]string{"command": command, "response": response, "line": response, "user": evt.User, "channel": evt.Data["channel"]}
@@ -381,6 +399,66 @@ func (p *Plugin) commandResponse(evt *event.Event, command string, lines []strin
 		}
 		out = append(out, p.render("REQUESTCMD_LINE", vars, "REQUEST: "+line))
 	}
+	return p.replies(evt, out...)
+}
+
+func (p *Plugin) reqTopResponse(evt *event.Event, lines []string) []plugin.Output {
+	clean := responseLines(lines)
+	entries := make([]reqTopEntry, 0, len(clean))
+	for _, line := range clean {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if strings.Contains(strings.ToLower(line), "no filled request stats") {
+			return p.reply(evt, p.render("REQTOPCMD_EMPTY", map[string]string{
+				"response": line,
+				"user":     evt.User,
+				"channel":  evt.Data["channel"],
+			}, "REQTOP: No filled requests recorded yet."))
+		}
+		match := reqTopEntryRE.FindStringSubmatch(line)
+		if len(match) == 0 {
+			continue
+		}
+		rank, _ := strconv.Atoi(match[1])
+		fills, _ := strconv.Atoi(match[3])
+		entries = append(entries, reqTopEntry{
+			Rank:  fmt.Sprintf("%02d", rank),
+			User:  strings.TrimSpace(match[2]),
+			Fills: fills,
+		})
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+
+	total := 0
+	for _, entry := range entries {
+		total += entry.Fills
+	}
+	out := make([]string, 0, len(entries)+2)
+	out = append(out, p.render("REQTOPCMD_HEADER", map[string]string{
+		"count":    strconv.Itoa(len(entries)),
+		"users":    strconv.Itoa(len(entries)),
+		"response": responseText(clean),
+		"user":     evt.User,
+		"channel":  evt.Data["channel"],
+	}, fmt.Sprintf("REQTOP FILLERS: [ %d Users ]", len(entries))))
+	for _, entry := range entries {
+		out = append(out, p.render("REQTOPCMD_ENTRY", map[string]string{
+			"rank":    entry.Rank,
+			"user":    entry.User,
+			"fills":   strconv.Itoa(entry.Fills),
+			"fill":    strconv.Itoa(entry.Fills),
+			"channel": evt.Data["channel"],
+		}, fmt.Sprintf("[%s] %s - (%d Fills)", entry.Rank, entry.User, entry.Fills)))
+	}
+	out = append(out, p.render("REQTOPCMD_TOTAL", map[string]string{
+		"fills":   strconv.Itoa(total),
+		"fill":    strconv.Itoa(total),
+		"channel": evt.Data["channel"],
+	}, fmt.Sprintf("TOTAL REQUEST FILLS: ( %d Fills )", total)))
 	return p.replies(evt, out...)
 }
 

@@ -2,10 +2,17 @@
 #   SITE REQUEST Release.Name-GRP
 #   SITE REQUESTS
 #   SITE REQFILL <number|Release.Name-GRP>
+#   SITE REQTOP [limit]
 #   SITE REQDEL <number|Release.Name-GRP>
 #   SITE REQWIPE <number|Release.Name-GRP>
 dir: "/REQUESTS"
 reqfile: "/REQUESTS/.requests"
+fill_stats_file: "/REQUESTS/.reqfills"
+
+# Optional: pin request storage to one writable slave. This keeps the base dir,
+# .requests, .reqfills and REQ-* dirs together instead of using automatic
+# upload routing. Leave empty to auto-select like normal writes.
+# storage_slave: "LOCAL"
 
 # Directory name prefixes for open vs filled requests.
 request_head: "REQ-"
@@ -18,6 +25,9 @@ bad_chars: '*{^~/,+&\'
 
 # Per-user request cap.
 max_requests: 30
+
+# Default number of users shown by SITE REQTOP.
+reqtop_limit: 10
 
 # When true, SITE REQUEST replies with the full current request list instead of
 # a short "added" confirmation line.
