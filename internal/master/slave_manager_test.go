@@ -118,6 +118,25 @@ func TestMarkFileMissingRefreshesStatusMarkers(t *testing.T) {
 	}
 }
 
+func TestMissingMarkerSyncPathsCreatesAndDeletesExpectedMarkers(t *testing.T) {
+	createPaths, deletePaths := missingMarkerSyncPaths("/X265/release", map[string]uint32{
+		"file.r00": 1,
+		"file.r01": 2,
+		"file.r02": 3,
+	}, []*VFSFile{
+		{Path: "/X265/release/file.r00", Size: 100},
+		{Path: "/X265/release/file.r00-MISSING"},
+		{Path: "/X265/release/file.r01-MISSING"},
+	})
+
+	if len(deletePaths) != 1 || deletePaths[0] != "/X265/release/file.r00-MISSING" {
+		t.Fatalf("expected stale marker delete for present file, got %#v", deletePaths)
+	}
+	if len(createPaths) != 1 || createPaths[0] != "/X265/release/file.r02-MISSING" {
+		t.Fatalf("expected missing marker create for absent file, got %#v", createPaths)
+	}
+}
+
 func TestCacheZipProgressRefreshesStatusMarkers(t *testing.T) {
 	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
 	sm.SetStatusMarkerConfig(zipscript.Config{
