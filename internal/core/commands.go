@@ -2679,7 +2679,7 @@ func dirRaceProgress(bridge MasterBridge, cfg *Config, dirPath string) (totalByt
 	if bridge == nil || cfg == nil {
 		return 0, 0, 0
 	}
-	if zipscript.UsesZip(cfg.Zipscript, dirPath) {
+	if useZipRaceMode(bridge, cfg, dirPath, "") {
 		entries := bridge.ListDir(dirPath)
 		expected := zipExpectedPartsFromDIZ(bridge, dirPath)
 		_, totalBytes, present = zipDirRaceStats(bridge, dirPath, entries, expected)
@@ -4008,8 +4008,7 @@ func shouldAnnounceNoRace(cfg *Config, dirPath string, existingNames []string, f
 }
 
 func isZipPayloadName(name string) bool {
-	name = strings.ToLower(strings.TrimSpace(name))
-	return regexp.MustCompile(`(?i)\.(zip|z\d\d)$`).MatchString(name)
+	return zipscript.IsZipPayloadName(name)
 }
 
 func isZipRecoverableArchiveName(name string) bool {
@@ -4468,7 +4467,7 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 	}
 
 	sfvEntries := bridge.GetSFVData(dirPath)
-	usesZip := zipscript.UsesZip(cfg.Zipscript, dirPath)
+	usesZip := useZipRaceMode(bridge, cfg, dirPath, fileName)
 	isTrackedPayload := isTrackedRacePayload(bridge, cfg, dirPath, fileName)
 	if !isTrackedPayload && !usesZip {
 		return nil, nil, 0, 0, 0, false
@@ -4636,6 +4635,33 @@ func shouldEmitZipRaceEnd(cfg *Config, dirPath, fileName string) bool {
 		return false
 	}
 	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(fileName)), ".zip")
+}
+
+func useZipRaceMode(bridge MasterBridge, cfg *Config, dirPath, fileName string) bool {
+	if cfg == nil || !zipscript.UsesZip(cfg.Zipscript, dirPath) {
+		return false
+	}
+	if !zipscript.UsesSFV(cfg.Zipscript, dirPath) {
+		return true
+	}
+	if isZipPayloadName(fileName) || zipscript.IsZipManifestName(fileName) {
+		return true
+	}
+	if bridge == nil {
+		return false
+	}
+	if bridge.GetSFVData(dirPath) != nil {
+		return false
+	}
+	for _, entry := range bridge.ListDir(dirPath) {
+		if entry.IsDir || entry.IsSymlink {
+			continue
+		}
+		if isZipPayloadName(entry.Name) || zipscript.IsZipManifestName(entry.Name) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Session) resolvePretTargetPath(bridge MasterBridge) string {

@@ -452,7 +452,6 @@ zipscript:
       - "/PRIVATE/*"
       - "/LINKS/*"
       - "/PRE/*"
-      - "/REQUESTS/*"
     ignored_release_subdirs: ["Sample", "Proof", "Subs", "Subtitles", "Covers"] # helper dirs inside a release that should not get NEW/RACE/COMPLETE or marker handling
     # release_check controls where the stricter "this should end up as a proper
     # complete release" behavior applies:

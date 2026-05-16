@@ -8,7 +8,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
+
+const maxIRCLineBytes = 510
 
 type Bot struct {
 	Host         string
@@ -315,7 +318,33 @@ func (b *Bot) sendTargetRaw(target, msg string, notice bool) error {
 	if notice {
 		command = "NOTICE"
 	}
-	return b.SendRaw(fmt.Sprintf("%s %s :%s", command, target, msg))
+	prefix := fmt.Sprintf("%s %s :", command, target)
+	return b.SendRaw(prefix + truncateIRCMessage(prefix, msg))
+}
+
+func truncateIRCMessage(prefix, msg string) string {
+	max := maxIRCLineBytes - len(prefix)
+	if max <= 0 || len(msg) <= max {
+		return msg
+	}
+	if max <= 3 {
+		return truncateUTF8Bytes(msg, max)
+	}
+	return truncateUTF8Bytes(msg, max-3) + "..."
+}
+
+func truncateUTF8Bytes(s string, max int) string {
+	if max <= 0 || len(s) <= max {
+		if max <= 0 {
+			return ""
+		}
+		return s
+	}
+	out := s[:max]
+	for !utf8.ValidString(out) && len(out) > 0 {
+		out = out[:len(out)-1]
+	}
+	return out
 }
 
 func (b *Bot) channelKey(channel string) *BlowfishEncryptor {
