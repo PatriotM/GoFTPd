@@ -302,6 +302,32 @@ func TestVFSPurgeUnseenChildrenRemovesGhostFilesForScannedDir(t *testing.T) {
 	}
 }
 
+func TestVFSScopedRemergePurgesUnseenSubtreeOnly(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/TV-1080P", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	vfs.AddFile("/TV-1080P/old", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	vfs.AddFile("/TV-1080P/old/file.r00", VFSFile{Size: 100, Seen: true, SlaveName: "LOCAL"})
+	vfs.AddFile("/TV-1080P/keep", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	vfs.AddFile("/X265/other", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+
+	vfs.MarkSubtreeUnseen("LOCAL", "/TV-1080P")
+	vfs.AddFile("/TV-1080P/keep", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	vfs.PurgeUnseenSubtree("LOCAL", "/TV-1080P")
+
+	if got := vfs.GetFile("/TV-1080P/old"); got != nil {
+		t.Fatalf("expected scoped ghost dir to be purged, got %+v", got)
+	}
+	if got := vfs.GetFile("/TV-1080P/old/file.r00"); got != nil {
+		t.Fatalf("expected scoped ghost file to be purged, got %+v", got)
+	}
+	if got := vfs.GetFile("/TV-1080P/keep"); got == nil {
+		t.Fatalf("expected re-seen scoped dir to remain")
+	}
+	if got := vfs.GetFile("/X265/other"); got == nil {
+		t.Fatalf("expected unrelated dir outside scoped path to remain")
+	}
+}
+
 func TestParentDirModTimeBubblesOnChanges(t *testing.T) {
 	vfs := NewVirtualFileSystem()
 	vfs.AddFile("/site", VFSFile{IsDir: true, Seen: true, LastModified: 1})

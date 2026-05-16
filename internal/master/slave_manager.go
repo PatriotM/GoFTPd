@@ -1137,6 +1137,8 @@ func (sm *SlaveManager) initializeSlaveRemerge(rs *RemoteSlave, basePath string,
 	// Only full slave remerges should mark everything unseen and purge at the end.
 	if !scoped {
 		sm.vfs.MarkAllUnseen(rs.name)
+	} else if !rootsOnly {
+		sm.vfs.MarkSubtreeUnseen(rs.name, basePath)
 	}
 
 	index, err := IssueRemerge(rs, basePath, false, 0, time.Now().UnixMilli(), instantOnline, rootsOnly, sm.getExcludePaths())
@@ -1168,6 +1170,9 @@ func (sm *SlaveManager) initializeSlaveRemerge(rs *RemoteSlave, basePath string,
 				// Purge files that were physically deleted from the slave.
 				sm.vfs.PurgeUnseen(rs.name)
 				log.Printf("[SlaveManager] Ghost files purged for %s", rs.name)
+			} else if !rootsOnly {
+				sm.vfs.PurgeUnseenSubtree(rs.name, basePath)
+				log.Printf("[SlaveManager] Scoped ghost files purged for %s at %s", rs.name, basePath)
 			}
 
 			// Persist the VFS after remerge and purge complete.

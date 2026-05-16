@@ -288,6 +288,26 @@ func (vfs *VirtualFileSystem) MarkAllUnseen(slaveName string) {
 	}
 }
 
+// MarkSubtreeUnseen flags files for a specific slave as unseen below rootPath
+// before a scoped remerge. This lets scoped remerges purge ghost entries
+// without touching unrelated sections.
+func (vfs *VirtualFileSystem) MarkSubtreeUnseen(slaveName, rootPath string) {
+	vfs.mu.Lock()
+	defer vfs.mu.Unlock()
+
+	rootPath = cleanVFSPath(rootPath)
+	for path, file := range vfs.files {
+		if vfs.protectedDirs[path] {
+			file.Seen = true
+			file.SlaveName = ""
+			continue
+		}
+		if file.SlaveName == slaveName && (path == rootPath || strings.HasPrefix(path, rootPath+"/")) {
+			file.Seen = false
+		}
+	}
+}
+
 // PurgeUnseen removes any files for a specific slave that were not seen during the remerge.
 func (vfs *VirtualFileSystem) PurgeUnseen(slaveName string) {
 	vfs.mu.Lock()
@@ -300,6 +320,28 @@ func (vfs *VirtualFileSystem) PurgeUnseen(slaveName string) {
 			continue
 		}
 		if file.SlaveName == slaveName && !file.Seen {
+			changed = vfs.deletePathLocked(path) || changed
+		}
+	}
+	if changed {
+		vfs.markPersistDirtyLocked()
+	}
+}
+
+// PurgeUnseenSubtree removes stale files below rootPath after a scoped remerge.
+func (vfs *VirtualFileSystem) PurgeUnseenSubtree(slaveName, rootPath string) {
+	vfs.mu.Lock()
+	defer vfs.mu.Unlock()
+
+	rootPath = cleanVFSPath(rootPath)
+	changed := false
+	for path, file := range vfs.files {
+		if vfs.protectedDirs[path] {
+			file.Seen = true
+			file.SlaveName = ""
+			continue
+		}
+		if file.SlaveName == slaveName && !file.Seen && (path == rootPath || strings.HasPrefix(path, rootPath+"/")) {
 			changed = vfs.deletePathLocked(path) || changed
 		}
 	}
