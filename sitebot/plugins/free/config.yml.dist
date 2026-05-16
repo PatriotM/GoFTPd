@@ -6,12 +6,33 @@ reply_target: "channel"
 stale_after_seconds: 600
 
 # Optional named groups shown by !df.
-# Each group can sum slave root statuses by virtual mount_paths and/or direct local paths.
-# Use mount_paths when you want all mounted_roots under one virtual path like /ARCHiVE.
-# Use paths when you want to name specific local disks directly, like /glftpd/DISK1.
-# Example for one LOCAL slave with mounted_roots under /ARCHiVE and /OFFSITE:
+#
+# You can group roots in two different ways:
+#
+#   mount_paths:
+#     Match the virtual path exposed by the slave config.
+#     Use this for logical groups like "/" for the normal site root, or
+#     "/ARCHiVE" to sum every mounted_root that is mounted under /ARCHiVE.
+#
+#   paths:
+#     Match the exact real/local root path reported by the slave.
+#     Use this when you want to name specific disks directly, for example
+#     "/glftpd/DISK1". These are exact matches, not glob patterns.
+#
+# If your slave has:
+#   roots: ["/glftpd/site"]
+#   mounted_roots:
+#     - path: "/glftpd/DISK1"
+#       mount_path: "/ARCHiVE"
+#     - path: "/glftpd/DISK2"
+#       mount_path: "/ARCHiVE"
+#
+# Then mount_paths: ["/ARCHiVE"] sums DISK1+DISK2 by virtual mount name,
+# while paths: ["/glftpd/DISK1"] only counts that one real disk.
 #
 # named_groups:
+#   - name: "RACE"
+#     mount_paths: ["/"]
 #   - name: "ARCHiVE"
 #     mount_paths: ["/ARCHiVE"]
 #   - name: "OFFSiTE ARCHiVE"

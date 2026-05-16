@@ -463,6 +463,8 @@ announce.OLDPRETIMEINLINE = "%c01{NEW:} %c14{[}%section_colored%c14{]} %c%sec_c3
 
 announce.DF_SLAVE = "%c02{DF:} %c06{%slave} %c01{-} %c03{%free} %c01{free /} %c05{%total} %c01{total (}%c03{%{free_pct}%}%c01{ free) [}%state_colored%c14{]}"
 
+announce.DF_GROUP = "%c02{DF:} %c06{%name} %c01{-} %c03{%free} %c01{free /} %c05{%total} %c01{total (}%c03{%{free_pct}%}%c01{ free)}"
+
 announce.DF_TOTAL = "%c02{DF:} %c06{TOTAL} %c01{-} %c03{%free} %c01{free /} %c05{%total} %c01{total (}%c03{%{free_pct}%}%c01{ free)}"
 
 announce.DF_EMPTY = "%c02{DF:} %c04{No slave disk status received yet.}"
