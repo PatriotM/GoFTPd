@@ -97,6 +97,32 @@ func TestStatusMarkersRequireRealContentForNoSFVAndNoNFO(t *testing.T) {
 	}
 }
 
+func TestStatusMarkersDoNotCreateNoSFVForZipSections(t *testing.T) {
+	cfg := Config{
+		Enabled: true,
+		Sections: SectionsConfig{
+			SFV:          []string{"/0DAY/*/*"},
+			Zip:          []string{"/0DAY/*/*"},
+			ReleaseCheck: []string{"/0DAY/*/*"},
+		},
+		Incomplete: IncompleteConfig{
+			Enabled:        true,
+			NoSFVIndicator: "[no-sfv]-%0",
+			NFOIndicator:   "[no-nfo]-%0",
+		},
+	}
+
+	got := BuildStatusMarkerEntries(cfg, "/0DAY/0516", []StatusMarkerRelease{{
+		Name:      "Tool.v1.0-WOW",
+		Path:      "/0DAY/0516/Tool.v1.0-WOW",
+		FileCount: 1,
+	}})
+
+	if len(got) != 1 || got[0].Name != "[no-nfo]-Tool.v1.0-WOW" {
+		t.Fatalf("expected only no-nfo marker for zip section, got %#v", got)
+	}
+}
+
 func TestStatusMarkersIgnoreProgressWithoutCurrentContent(t *testing.T) {
 	cfg := Config{
 		Enabled: true,

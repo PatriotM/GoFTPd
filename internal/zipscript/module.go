@@ -285,7 +285,8 @@ func BuildStatusMarkerEntries(cfg Config, parentDir string, releases []StatusMar
 		if !hasContent && !isRequestContainerPath(releasePath) {
 			hasContent = rel.VisibleCount > 0
 		}
-		if hasContent && noSFVPattern != "" && !rel.HasSFV {
+		expectsSFV := UsesSFVEntry(cfg, releasePath) && !UsesZipEntry(cfg, releasePath)
+		if hasContent && expectsSFV && noSFVPattern != "" && !rel.HasSFV {
 			appendStatusMarker(&out, seen, statusMarkerName(noSFVPattern, name), releasePath, rel.ModTime)
 		}
 		if hasContent && nfoPattern != "" && !rel.HasNFO {
