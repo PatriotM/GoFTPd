@@ -355,10 +355,6 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				}
 			}
 
-			if err := s.checkLoginStorageSpace(); err != nil {
-				return s.failLoginStorageWrite(remoteIP, "storage_health", err)
-			}
-
 			if !s.User.IPAllowed(remoteIP) {
 				reason := "ip_not_allowed"
 				if len(s.User.IPs) == 0 {
@@ -418,17 +414,12 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				if s.Config.Debug {
 					log.Printf("[WEEKLYALLOTMENT] apply failed for %s: %v", s.User.Name, err)
 				}
-				return s.failLoginStorageWrite(remoteIP, "weekly_allotment", err)
 			}
-			s.User.ResetTransferStatPeriodsIfDue(now)
 
 			if strings.TrimSpace(s.User.CurrentDir) != "" {
 				s.CurrentDir = path.Clean(s.User.CurrentDir)
 			}
 			s.User.LastLogin = now.Unix()
-			if err := s.User.Save(); err != nil {
-				return s.failLoginStorageWrite(remoteIP, "last_login", err)
-			}
 			s.IsLogged = true
 			s.PendingUser = ""
 			s.PendingReason = ""
@@ -2469,8 +2460,11 @@ func (s *Session) failLoginStorageWrite(remoteIP, action string, err error) bool
 		extra["error"] = err.Error()
 	}
 	s.emitLoginFailureWithData(s.User.Name, remoteIP, reason, extra)
+	detail := cleanLoginStorageError(err)
 	if reason == "disk_full" {
 		fmt.Fprintf(s.Conn, "530 Login temporarily unavailable: disk full.\r\n")
+	} else if detail != "" {
+		fmt.Fprintf(s.Conn, "530 Login temporarily unavailable: storage write failed during %s: %s\r\n", action, detail)
 	} else {
 		fmt.Fprintf(s.Conn, "530 Login temporarily unavailable: storage write failed.\r\n")
 	}
@@ -2482,6 +2476,18 @@ func loginStorageFailureReason(err error) string {
 		return "disk_full"
 	}
 	return "storage_error"
+}
+
+func cleanLoginStorageError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(err.Error(), "\r", " "), "\n", " "))
+	msg = strings.Join(strings.Fields(msg), " ")
+	if len(msg) > 180 {
+		msg = msg[:177] + "..."
+	}
+	return msg
 }
 
 func isDiskFullError(err error) bool {

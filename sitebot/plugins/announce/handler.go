@@ -514,6 +514,29 @@ func loginFailKey(vars map[string]string) string {
 	return username + "|" + reason + "|" + ip + "|" + mask
 }
 
+func loginStorageDetail(vars map[string]string) string {
+	action := cleanLoginStorageText(vars["action"])
+	errText := cleanLoginStorageText(vars["error"])
+	if len(errText) > 180 {
+		errText = errText[:177] + "..."
+	}
+	switch {
+	case action != "" && errText != "":
+		return fmt.Sprintf(" during %s: %s", action, errText)
+	case action != "":
+		return " during " + action
+	case errText != "":
+		return ": " + errText
+	default:
+		return " while updating daemon state"
+	}
+}
+
+func cleanLoginStorageText(text string) string {
+	text = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(text, "\r", " "), "\n", " "))
+	return strings.Join(strings.Fields(text), " ")
+}
+
 func colorizeNukees(raw string) string {
 	parts := strings.Split(raw, ",")
 	out := make([]string, 0, len(parts))
@@ -878,9 +901,9 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 			case "ip_restricted":
 				message = fmt.Sprintf("%s could not log in, ip %s not in whitelist (%s).%s", vars["username"], ip, source, banHint)
 			case "disk_full":
-				message = fmt.Sprintf("%s could not log in, disk full while updating daemon/VFS state.", vars["username"])
+				message = fmt.Sprintf("%s could not log in, disk full%s.", vars["username"], loginStorageDetail(vars))
 			case "storage_error":
-				message = fmt.Sprintf("%s could not log in, storage write failed while updating daemon/VFS state.", vars["username"])
+				message = fmt.Sprintf("%s could not log in, storage write failed%s.", vars["username"], loginStorageDetail(vars))
 			case "account_expired":
 				message = fmt.Sprintf("%s could not log in, account expired.", vars["username"])
 			case "tls_required":

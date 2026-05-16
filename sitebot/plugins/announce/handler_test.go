@@ -211,6 +211,32 @@ func TestLoginFailNoIPMasksDoesNotSuggestBan(t *testing.T) {
 	}
 }
 
+func TestLoginFailStorageErrorShowsDetail(t *testing.T) {
+	p := New()
+	evt := &event.Event{
+		Type: event.EventLoginFail,
+		Data: map[string]string{
+			"username": "XtrEme",
+			"reason":   "storage_error",
+			"action":   "last_login",
+			"error":    "refusing unsafe userfile save for XtrEme: would reset RATIO from 3 to 0",
+		},
+	}
+
+	outs, err := p.OnEvent(evt)
+	if err != nil {
+		t.Fatalf("OnEvent failed: %v", err)
+	}
+	if len(outs) != 1 {
+		t.Fatalf("outputs = %d, want 1", len(outs))
+	}
+	for _, needle := range []string{"storage write failed", "last_login", "would reset RATIO"} {
+		if !strings.Contains(outs[0].Text, needle) {
+			t.Fatalf("output %q missing %q", outs[0].Text, needle)
+		}
+	}
+}
+
 func TestFormatAudioInfoSummaryOmitsMissingSampleRate(t *testing.T) {
 	got := formatAudioInfoSummary(map[string]string{
 		"genre":        "Acoustic",
