@@ -73,6 +73,13 @@ func TestLoadAndSavePreservesImportedUserfileFields(t *testing.T) {
 	if err := u.Save(); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
+	backup, err := os.ReadFile(filepath.Join("etc", "users", ".backup", "Finity"))
+	if err != nil {
+		t.Fatalf("ReadFile(backup) error = %v", err)
+	}
+	if string(backup) != input {
+		t.Fatalf("backup did not preserve pre-save userfile\n%s", string(backup))
+	}
 	if u.UploadSlots != 10 {
 		t.Fatalf("UploadSlots = %d, want 10 derived from LOGINS", u.UploadSlots)
 	}
@@ -116,6 +123,95 @@ func TestLoadAndSavePreservesImportedUserfileFields(t *testing.T) {
 		if !strings.Contains(text, needle) {
 			t.Fatalf("saved userfile missing %q\n%s", needle, text)
 		}
+	}
+}
+
+func TestSaveRefusesToStripAccountFields(t *testing.T) {
+	tmp := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join("etc", "users"), 0755); err != nil {
+		t.Fatalf("MkdirAll(users) error = %v", err)
+	}
+	userPath := filepath.Join("etc", "users", "Finity")
+	input := strings.Join([]string{
+		"USER Added by goftpd",
+		"GENERAL 0,120 -1 0 0",
+		"LOGINS 16 0 6 10",
+		"TIMEFRAME 0 0",
+		"FLAGS 3",
+		"TAGLINE No Tagline Set",
+		"HOMEDIR /site",
+		"DIR /",
+		"ADDED 1712306777 goftpd",
+		"EXPIRES 0",
+		"CREDITS 245752440015 0",
+		"RATIO 3 -1",
+		"ALLUP 10 1000 0",
+		"ALLDN 0 0 0",
+		"WKUP 10 1000 0",
+		"WKDN 0 0 0",
+		"DAYUP 10 1000 0",
+		"DAYDN 0 0 0",
+		"MONTHUP 10 1000 0",
+		"MONTHDN 0 0 0",
+		"NUKE 0 0 0",
+		"TIME 0 0 0 0 1712306777",
+		"PRIMARY_GROUP iND",
+		"GROUP iND 0",
+		"IP *@1.2.3.4",
+	}, "\n") + "\n"
+	if err := os.WriteFile(userPath, []byte(input), 0600); err != nil {
+		t.Fatalf("WriteFile(user) error = %v", err)
+	}
+
+	u := &User{
+		Name:       "Finity",
+		Groups:     map[string]int{},
+		Ratio:      0,
+		Credits:    0,
+		AllUp:      StatLine{Files: 11, Bytes: 1100},
+		WkUp:       StatLine{Files: 11, Bytes: 1100},
+		DayUp:      StatLine{Files: 11, Bytes: 1100},
+		MonthUp:    StatLine{Files: 11, Bytes: 1100},
+		StatExtras: map[string]string{},
+	}
+	if err := u.Save(); err == nil {
+		t.Fatalf("Save() succeeded while stripping account fields")
+	}
+	out, err := os.ReadFile(userPath)
+	if err != nil {
+		t.Fatalf("ReadFile(user) error = %v", err)
+	}
+	if string(out) != input {
+		t.Fatalf("unsafe save changed the original file\n%s", string(out))
+	}
+}
+
+func TestLoadUserRejectsEmptyUserfile(t *testing.T) {
+	tmp := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join("etc", "users"), 0755); err != nil {
+		t.Fatalf("MkdirAll(users) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join("etc", "users", "Finity"), nil, 0600); err != nil {
+		t.Fatalf("WriteFile(user) error = %v", err)
+	}
+	if _, err := LoadUser("Finity", nil); err == nil {
+		t.Fatalf("LoadUser() succeeded for empty userfile")
 	}
 }
 

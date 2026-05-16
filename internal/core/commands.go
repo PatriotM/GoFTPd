@@ -2,6 +2,7 @@ package core
 
 import (
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"hash"
 	"hash/crc32"
@@ -354,8 +355,16 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				}
 			}
 
+			if err := s.checkLoginStorageSpace(); err != nil {
+				return s.failLoginStorageWrite(remoteIP, "storage_health", err)
+			}
+
 			if !s.User.IPAllowed(remoteIP) {
-				s.emitLoginFailure(s.User.Name, remoteIP, "ip_not_allowed")
+				reason := "ip_not_allowed"
+				if len(s.User.IPs) == 0 {
+					reason = "no_ip_masks"
+				}
+				s.emitLoginFailure(s.User.Name, remoteIP, reason)
 				fmt.Fprintf(s.Conn, "530 IP not allowed.\r\n")
 				return false
 			}
@@ -404,23 +413,25 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					}
 				}
 			}
-			if err := applyWeeklyAllotmentIfDue(s.User, time.Now()); err != nil && s.Config.Debug {
-				log.Printf("[WEEKLYALLOTMENT] apply failed for %s: %v", s.User.Name, err)
-			}
-			if s.User.ResetTransferStatPeriodsIfDue(time.Now()) {
-				if err := s.User.Save(); err != nil {
-					log.Printf("[USER] failed to persist period rollover for %s: %v", s.User.Name, err)
+			now := time.Now()
+			if err := applyWeeklyAllotmentIfDue(s.User, now); err != nil {
+				if s.Config.Debug {
+					log.Printf("[WEEKLYALLOTMENT] apply failed for %s: %v", s.User.Name, err)
 				}
+				return s.failLoginStorageWrite(remoteIP, "weekly_allotment", err)
 			}
+			s.User.ResetTransferStatPeriodsIfDue(now)
 
-			s.IsLogged = true
-			s.PendingUser = ""
-			s.PendingReason = ""
 			if strings.TrimSpace(s.User.CurrentDir) != "" {
 				s.CurrentDir = path.Clean(s.User.CurrentDir)
 			}
-			s.User.LastLogin = time.Now().Unix()
-			s.User.Save()
+			s.User.LastLogin = now.Unix()
+			if err := s.User.Save(); err != nil {
+				return s.failLoginStorageWrite(remoteIP, "last_login", err)
+			}
+			s.IsLogged = true
+			s.PendingUser = ""
+			s.PendingReason = ""
 			fmt.Fprintf(s.Conn, "230-Welcome to GoFTPd, %s!\r\n", s.User.Name)
 			fmt.Fprintf(s.Conn, "230-Tagline: %s\r\n", s.User.Tagline)
 
@@ -2404,6 +2415,87 @@ func (s *Session) showGlobalStats(code string, final bool) {
 		fmt.Fprintf(s.Conn, "%s- [Credits: %.1fGiB] [Ratio: %s]\r\n",
 			code, creditsGiB, ratioStr)
 	}
+}
+
+func (s *Session) checkLoginStorageSpace() error {
+	for _, target := range []string{"userdata", filepath.Join("etc", "users")} {
+		statPath := nearestExistingPath(target)
+		if statPath == "" {
+			continue
+		}
+		var stat syscall.Statfs_t
+		if err := syscall.Statfs(statPath, &stat); err != nil {
+			continue
+		}
+		if stat.Bfree == 0 {
+			return fmt.Errorf("disk full at %s", statPath)
+		}
+		if stat.Files > 0 && stat.Ffree == 0 {
+			return fmt.Errorf("no free inodes at %s", statPath)
+		}
+	}
+	return nil
+}
+
+func nearestExistingPath(target string) string {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return ""
+	}
+	for {
+		if _, err := os.Stat(target); err == nil {
+			return target
+		}
+		parent := filepath.Dir(target)
+		if parent == target || parent == "" {
+			return ""
+		}
+		target = parent
+	}
+}
+
+func (s *Session) failLoginStorageWrite(remoteIP, action string, err error) bool {
+	if s == nil || s.User == nil {
+		return false
+	}
+	reason := loginStorageFailureReason(err)
+	if s.Config != nil && s.Config.Debug {
+		log.Printf("[PASS] User %s login rejected: %s during %s: %v", s.User.Name, reason, action, err)
+	}
+	extra := map[string]string{
+		"action": action,
+	}
+	if err != nil {
+		extra["error"] = err.Error()
+	}
+	s.emitLoginFailureWithData(s.User.Name, remoteIP, reason, extra)
+	if reason == "disk_full" {
+		fmt.Fprintf(s.Conn, "530 Login temporarily unavailable: disk full.\r\n")
+	} else {
+		fmt.Fprintf(s.Conn, "530 Login temporarily unavailable: storage write failed.\r\n")
+	}
+	return false
+}
+
+func loginStorageFailureReason(err error) string {
+	if isDiskFullError(err) {
+		return "disk_full"
+	}
+	return "storage_error"
+}
+
+func isDiskFullError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, syscall.ENOSPC) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "no space left on device") ||
+		strings.Contains(msg, "disk full") ||
+		strings.Contains(msg, "not enough space") ||
+		strings.Contains(msg, "no free inodes")
 }
 
 func mbString(size int64) string { return fmt.Sprintf("%.0fMB", float64(size)/1024.0/1024.0) }

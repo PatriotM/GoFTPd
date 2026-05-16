@@ -1,7 +1,9 @@
 package user
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	pathpkg "path"
@@ -132,6 +134,9 @@ func loadUserFile(name, path string, groupMap map[string]int) (*User, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
+	}
+	if strings.TrimSpace(string(data)) == "" {
+		return nil, fmt.Errorf("userfile %s is empty", name)
 	}
 
 	// Parse userfile format
@@ -380,6 +385,9 @@ func loadUserFile(name, path string, groupMap map[string]int) (*User, error) {
 		u.LoginSlots = 16
 		u.LoginSlotsSet = true
 	}
+	if err := validateLoadedUserfile(name, string(data), u); err != nil {
+		return nil, err
+	}
 
 	// Set GID based on primary group
 	if groupMap != nil {
@@ -404,6 +412,19 @@ func loadUserFile(name, path string, groupMap map[string]int) (*User, error) {
 	}
 
 	return u, nil
+}
+
+func validateLoadedUserfile(name, raw string, u *User) error {
+	safety := inspectUserfileSafety(raw)
+	hasTraffic := u.AllUp.Files > 0 || u.AllUp.Bytes > 0 ||
+		u.AllDn.Files > 0 || u.AllDn.Bytes > 0 ||
+		u.WkUp.Files > 0 || u.WkUp.Bytes > 0 ||
+		u.DayUp.Files > 0 || u.DayUp.Bytes > 0 ||
+		u.MonthUp.Files > 0 || u.MonthUp.Bytes > 0
+	if hasTraffic && safety.groups == 0 && safety.ips == 0 && safety.primaryGroup == "" && safety.ratio == 0 && safety.credits == 0 {
+		return fmt.Errorf("userfile %s looks truncated: has stats but no GROUP/IP/account fields", name)
+	}
+	return nil
 }
 
 func (u *User) deriveLoginLimitsFromLine() {
@@ -498,6 +519,62 @@ func (u *User) saveLocked() error {
 	if st, err := os.Stat(path); err == nil {
 		mode = st.Mode().Perm()
 	}
+	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "USER %s\n", u.UserLine)
+	fmt.Fprintf(&buf, "GENERAL %s\n", u.GeneralLine)
+	fmt.Fprintf(&buf, "LOGINS %s\n", u.LoginsLine)
+	fmt.Fprintf(&buf, "TIMEFRAME %s\n", u.TimeframeLine)
+	fmt.Fprintf(&buf, "FLAGS %s\n", u.Flags)
+	fmt.Fprintf(&buf, "TAGLINE %s\n", u.Tagline)
+	fmt.Fprintf(&buf, "HOMEDIR %s\n", u.HomeRoot)
+	fmt.Fprintf(&buf, "DIR %s\n", u.HomeDir)
+	fmt.Fprintf(&buf, "ADDED %d %s\n", u.Added, u.AddedBy)
+	fmt.Fprintf(&buf, "EXPIRES %d\n", u.Expires)
+	writeValueLine(&buf, "CREDITS", u.Credits, u.CreditsExtra)
+	writeValueLine(&buf, "RATIO", int64(u.Ratio), u.RatioExtra)
+	fmt.Fprintf(&buf, "LOGINSLOTS %d\n", u.LoginSlots)
+	fmt.Fprintf(&buf, "MAXSIM %d\n", u.MaxSim)
+	fmt.Fprintf(&buf, "UPLOADSLOTS %d\n", u.UploadSlots)
+	fmt.Fprintf(&buf, "DOWNLOADSLOTS %d\n", u.DownloadSlots)
+	fmt.Fprintf(&buf, "WKLYALLOTMENT %d\n", u.WeeklyAllotment)
+	fmt.Fprintf(&buf, "GROUPSLOTS %d %d\n", u.GroupSlots, u.LeechSlots)
+	writeStatLine(&buf, "ALLUP", u.AllUp, u.StatExtras["ALLUP"])
+	writeStatLine(&buf, "ALLDN", u.AllDn, u.StatExtras["ALLDN"])
+	writeStatLine(&buf, "WKUP", u.WkUp, u.StatExtras["WKUP"])
+	writeStatLine(&buf, "WKDN", u.WkDn, u.StatExtras["WKDN"])
+	writeStatLine(&buf, "DAYUP", u.DayUp, u.StatExtras["DAYUP"])
+	writeStatLine(&buf, "DAYDN", u.DayDn, u.StatExtras["DAYDN"])
+	writeStatLine(&buf, "MONTHUP", u.MonthUp, u.StatExtras["MONTHUP"])
+	writeStatLine(&buf, "MONTHDN", u.MonthDn, u.StatExtras["MONTHDN"])
+	writeNukeLine(&buf, u.NukeStat, u.StatExtras["NUKE"])
+	writeTimeLine(&buf, u.TimeFields, u.LastLogin, u.PeriodAnchor)
+
+	if u.PrimaryGroup != "" {
+		fmt.Fprintf(&buf, "PRIMARY_GROUP %s\n", u.PrimaryGroup)
+	}
+
+	groups := make([]string, 0, len(u.Groups))
+	for group := range u.Groups {
+		groups = append(groups, group)
+	}
+	sort.Strings(groups)
+	for _, group := range groups {
+		fmt.Fprintf(&buf, "GROUP %s %d\n", group, u.Groups[group])
+	}
+
+	ips := append([]string(nil), u.IPs...)
+	sort.Strings(ips)
+	for _, ip := range ips {
+		fmt.Fprintf(&buf, "IP %s\n", ip)
+	}
+
+	if err := validateUserfileRewrite(path, buf.String()); err != nil {
+		return err
+	}
+	if err := backupExistingUserfile(path, mode); err != nil {
+		return err
+	}
+
 	file, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return err
@@ -510,54 +587,10 @@ func (u *User) saveLocked() error {
 		}
 	}()
 
-	fmt.Fprintf(file, "USER %s\n", u.UserLine)
-	fmt.Fprintf(file, "GENERAL %s\n", u.GeneralLine)
-	fmt.Fprintf(file, "LOGINS %s\n", u.LoginsLine)
-	fmt.Fprintf(file, "TIMEFRAME %s\n", u.TimeframeLine)
-	fmt.Fprintf(file, "FLAGS %s\n", u.Flags)
-	fmt.Fprintf(file, "TAGLINE %s\n", u.Tagline)
-	fmt.Fprintf(file, "HOMEDIR %s\n", u.HomeRoot)
-	fmt.Fprintf(file, "DIR %s\n", u.HomeDir)
-	fmt.Fprintf(file, "ADDED %d %s\n", u.Added, u.AddedBy)
-	fmt.Fprintf(file, "EXPIRES %d\n", u.Expires)
-	writeValueLine(file, "CREDITS", u.Credits, u.CreditsExtra)
-	writeValueLine(file, "RATIO", int64(u.Ratio), u.RatioExtra)
-	fmt.Fprintf(file, "LOGINSLOTS %d\n", u.LoginSlots)
-	fmt.Fprintf(file, "MAXSIM %d\n", u.MaxSim)
-	fmt.Fprintf(file, "UPLOADSLOTS %d\n", u.UploadSlots)
-	fmt.Fprintf(file, "DOWNLOADSLOTS %d\n", u.DownloadSlots)
-	fmt.Fprintf(file, "WKLYALLOTMENT %d\n", u.WeeklyAllotment)
-	fmt.Fprintf(file, "GROUPSLOTS %d %d\n", u.GroupSlots, u.LeechSlots)
-	writeStatLine(file, "ALLUP", u.AllUp, u.StatExtras["ALLUP"])
-	writeStatLine(file, "ALLDN", u.AllDn, u.StatExtras["ALLDN"])
-	writeStatLine(file, "WKUP", u.WkUp, u.StatExtras["WKUP"])
-	writeStatLine(file, "WKDN", u.WkDn, u.StatExtras["WKDN"])
-	writeStatLine(file, "DAYUP", u.DayUp, u.StatExtras["DAYUP"])
-	writeStatLine(file, "DAYDN", u.DayDn, u.StatExtras["DAYDN"])
-	writeStatLine(file, "MONTHUP", u.MonthUp, u.StatExtras["MONTHUP"])
-	writeStatLine(file, "MONTHDN", u.MonthDn, u.StatExtras["MONTHDN"])
-	writeNukeLine(file, u.NukeStat, u.StatExtras["NUKE"])
-	writeTimeLine(file, u.TimeFields, u.LastLogin, u.PeriodAnchor)
-
-	if u.PrimaryGroup != "" {
-		fmt.Fprintf(file, "PRIMARY_GROUP %s\n", u.PrimaryGroup)
+	if _, err := file.Write(buf.Bytes()); err != nil {
+		_ = file.Close()
+		return err
 	}
-
-	groups := make([]string, 0, len(u.Groups))
-	for group := range u.Groups {
-		groups = append(groups, group)
-	}
-	sort.Strings(groups)
-	for _, group := range groups {
-		fmt.Fprintf(file, "GROUP %s %d\n", group, u.Groups[group])
-	}
-
-	ips := append([]string(nil), u.IPs...)
-	sort.Strings(ips)
-	for _, ip := range ips {
-		fmt.Fprintf(file, "IP %s\n", ip)
-	}
-
 	if err := file.Chmod(mode); err != nil {
 		_ = file.Close()
 		return err
@@ -566,13 +599,184 @@ func (u *User) saveLocked() error {
 		return err
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
-		_ = os.Remove(path)
-		if renameErr := os.Rename(tmpPath, path); renameErr != nil {
-			return err
-		}
+		return err
 	}
 	cleanup = false
 	return nil
+}
+
+type userfileSafety struct {
+	groups       int
+	ips          int
+	ratio        int64
+	credits      int64
+	hasRatio     bool
+	hasCredits   bool
+	hasTraffic   bool
+	primaryGroup string
+}
+
+func validateUserfileRewrite(path, next string) error {
+	currentBytes, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	current := inspectUserfileSafety(string(currentBytes))
+	if current.hasTraffic && current.groups == 0 && current.ips == 0 && current.primaryGroup == "" && current.ratio == 0 && current.credits == 0 {
+		return fmt.Errorf("refusing unsafe userfile save for %s: current file looks truncated", filepath.Base(path))
+	}
+	if current.groups == 0 && current.ips == 0 && !current.hasRatio && !current.hasCredits && current.primaryGroup == "" && !current.hasTraffic {
+		return nil
+	}
+	replacement := inspectUserfileSafety(next)
+	if current.groups > 0 && replacement.groups == 0 {
+		return fmt.Errorf("refusing unsafe userfile save for %s: would remove all GROUP lines", filepath.Base(path))
+	}
+	if current.ips > 0 && replacement.ips == 0 {
+		return fmt.Errorf("refusing unsafe userfile save for %s: would remove all IP lines", filepath.Base(path))
+	}
+	if current.primaryGroup != "" && replacement.primaryGroup == "" {
+		return fmt.Errorf("refusing unsafe userfile save for %s: would remove PRIMARY_GROUP", filepath.Base(path))
+	}
+	if current.hasRatio && current.ratio > 0 && (!replacement.hasRatio || replacement.ratio == 0) {
+		return fmt.Errorf("refusing unsafe userfile save for %s: would reset RATIO from %d to 0", filepath.Base(path), current.ratio)
+	}
+	if current.hasCredits && current.credits > 0 && (!replacement.hasCredits || replacement.credits == 0) {
+		return fmt.Errorf("refusing unsafe userfile save for %s: would reset CREDITS from %d to 0", filepath.Base(path), current.credits)
+	}
+	return nil
+}
+
+func backupExistingUserfile(path string, mode os.FileMode) error {
+	currentBytes, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if strings.TrimSpace(string(currentBytes)) == "" {
+		return fmt.Errorf("refusing to back up empty userfile %s", filepath.Base(path))
+	}
+
+	backupDir := filepath.Join(filepath.Dir(path), ".backup")
+	if err := os.MkdirAll(backupDir, 0700); err != nil {
+		return err
+	}
+	backupPath := filepath.Join(backupDir, filepath.Base(path))
+	linkTmp, err := tempBackupPath(backupDir, filepath.Base(path), ".link")
+	if err == nil {
+		if err := os.Link(path, linkTmp); err == nil {
+			if err := os.Rename(linkTmp, backupPath); err == nil {
+				return nil
+			}
+		}
+		_ = os.Remove(linkTmp)
+	}
+	return copyUserfileBackup(currentBytes, backupDir, backupPath, filepath.Base(path), mode)
+}
+
+func tempBackupPath(dir, name, suffix string) (string, error) {
+	file, err := os.CreateTemp(dir, "."+name+".bak.tmp-*"+suffix)
+	if err != nil {
+		return "", err
+	}
+	tmpPath := file.Name()
+	if err := file.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return "", err
+	}
+	if err := os.Remove(tmpPath); err != nil {
+		return "", err
+	}
+	return tmpPath, nil
+}
+
+func copyUserfileBackup(currentBytes []byte, backupDir, backupPath, name string, mode os.FileMode) error {
+	file, err := os.CreateTemp(backupDir, "."+name+".bak.tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := file.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if _, err := file.Write(currentBytes); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Chmod(mode); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, backupPath); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
+}
+
+func inspectUserfileSafety(text string) userfileSafety {
+	var out userfileSafety
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	for _, line := range lines {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) == 0 {
+			continue
+		}
+		switch fields[0] {
+		case "GROUP":
+			if len(fields) >= 2 {
+				out.groups++
+			}
+		case "IP":
+			if len(fields) >= 2 {
+				out.ips++
+			}
+		case "PRIMARY", "PRIMARY_GROUP":
+			if len(fields) >= 2 {
+				out.primaryGroup = fields[1]
+			}
+		case "RATIO":
+			if len(fields) >= 2 {
+				if value, err := parseFirstInt64(fields[1]); err == nil {
+					out.ratio = value
+					out.hasRatio = true
+				}
+			}
+		case "CREDITS":
+			if len(fields) >= 2 {
+				if value, err := parseFirstInt64(fields[1]); err == nil {
+					out.credits = value
+					out.hasCredits = true
+				}
+			}
+		case "ALLUP", "ALLDN", "WKUP", "WKDN", "DAYUP", "DAYDN", "MONTHUP", "MONTHDN":
+			if len(fields) >= 3 {
+				files, filesErr := parseFirstInt64(fields[1])
+				bytes, bytesErr := parseFirstInt64(fields[2])
+				if (filesErr == nil && files > 0) || (bytesErr == nil && bytes > 0) {
+					out.hasTraffic = true
+				}
+			}
+		}
+	}
+	return out
+}
+
+func parseFirstInt64(raw string) (int64, error) {
+	var value int64
+	_, err := fmt.Sscanf(raw, "%d", &value)
+	return value, err
 }
 
 // UpdateStats increments throughput metrics and manages credits
@@ -732,7 +936,7 @@ func (u *User) IsExpired() bool {
 	return u.Expires < time.Now().Unix()
 }
 
-func writeValueLine(file *os.File, key string, value int64, extra string) {
+func writeValueLine(file io.Writer, key string, value int64, extra string) {
 	if extra != "" {
 		fmt.Fprintf(file, "%s %d %s\n", key, value, extra)
 		return
@@ -740,7 +944,7 @@ func writeValueLine(file *os.File, key string, value int64, extra string) {
 	fmt.Fprintf(file, "%s %d\n", key, value)
 }
 
-func writeStatLine(file *os.File, key string, stat StatLine, extra string) {
+func writeStatLine(file io.Writer, key string, stat StatLine, extra string) {
 	if extra != "" {
 		fmt.Fprintf(file, "%s %d %d %d %s\n", key, stat.Files, stat.Bytes, stat.Meta, extra)
 		return
@@ -748,7 +952,7 @@ func writeStatLine(file *os.File, key string, stat StatLine, extra string) {
 	fmt.Fprintf(file, "%s %d %d %d\n", key, stat.Files, stat.Bytes, stat.Meta)
 }
 
-func writeTimeLine(file *os.File, fields []string, lastLogin int64, periodAnchor int64) {
+func writeTimeLine(file io.Writer, fields []string, lastLogin int64, periodAnchor int64) {
 	if len(fields) == 0 {
 		if periodAnchor > 0 {
 			fmt.Fprintf(file, "TIME %d %d 0 0 %d\n", 0, lastLogin, periodAnchor)
@@ -771,7 +975,7 @@ func writeTimeLine(file *os.File, fields []string, lastLogin int64, periodAnchor
 	fmt.Fprintf(file, "TIME %s\n", strings.Join(copied, " "))
 }
 
-func writeNukeLine(file *os.File, stat StatLine, extra string) {
+func writeNukeLine(file io.Writer, stat StatLine, extra string) {
 	if extra != "" {
 		fmt.Fprintf(file, "NUKE %d %d %d %s\n", stat.Meta, stat.Files, stat.Bytes, extra)
 		return

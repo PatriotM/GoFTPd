@@ -1,6 +1,7 @@
 package announce
 
 import (
+	"strings"
 	"testing"
 
 	"goftpd/sitebot/internal/event"
@@ -153,6 +154,60 @@ func TestUploadRaceAnnouncesStopAfterComplete(t *testing.T) {
 	}
 	if len(outs) != 0 {
 		t.Fatalf("expected no post-complete race outputs, got %+v", outs)
+	}
+}
+
+func TestLoginFailDiskFullDoesNotSuggestBan(t *testing.T) {
+	p := New()
+	evt := &event.Event{
+		Type: event.EventLoginFail,
+		Data: map[string]string{
+			"username":    "Finity",
+			"remote_ip":   "95.211.6.225",
+			"remote_mask": "*@95.211.6.225",
+			"reason":      "disk_full",
+		},
+	}
+
+	outs, err := p.OnEvent(evt)
+	if err != nil {
+		t.Fatalf("OnEvent failed: %v", err)
+	}
+	if len(outs) != 1 {
+		t.Fatalf("outputs = %d, want 1", len(outs))
+	}
+	if !strings.Contains(outs[0].Text, "disk full") {
+		t.Fatalf("output %q does not mention disk full", outs[0].Text)
+	}
+	if strings.Contains(outs[0].Text, "SITE BAN") {
+		t.Fatalf("output %q should not suggest a ban", outs[0].Text)
+	}
+}
+
+func TestLoginFailNoIPMasksDoesNotSuggestBan(t *testing.T) {
+	p := New()
+	evt := &event.Event{
+		Type: event.EventLoginFail,
+		Data: map[string]string{
+			"username":    "Ostral",
+			"remote_ip":   "185.7.81.122",
+			"remote_mask": "*@185.7.81.122",
+			"reason":      "no_ip_masks",
+		},
+	}
+
+	outs, err := p.OnEvent(evt)
+	if err != nil {
+		t.Fatalf("OnEvent failed: %v", err)
+	}
+	if len(outs) != 1 {
+		t.Fatalf("outputs = %d, want 1", len(outs))
+	}
+	if !strings.Contains(outs[0].Text, "no IP masks configured") {
+		t.Fatalf("output %q does not mention missing IP masks", outs[0].Text)
+	}
+	if strings.Contains(outs[0].Text, "SITE BAN") {
+		t.Fatalf("output %q should not suggest a ban", outs[0].Text)
 	}
 }
 

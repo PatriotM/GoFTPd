@@ -873,8 +873,14 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 				message = fmt.Sprintf("%s could not log in, bad password from %s.%s", vars["username"], source, banHint)
 			case "ip_not_allowed":
 				message = fmt.Sprintf("%s could not log in, ip %s not allowed (%s).%s", vars["username"], ip, source, banHint)
+			case "no_ip_masks":
+				message = fmt.Sprintf("%s could not log in, no IP masks configured in userfile.", vars["username"])
 			case "ip_restricted":
 				message = fmt.Sprintf("%s could not log in, ip %s not in whitelist (%s).%s", vars["username"], ip, source, banHint)
+			case "disk_full":
+				message = fmt.Sprintf("%s could not log in, disk full while updating daemon/VFS state.", vars["username"])
+			case "storage_error":
+				message = fmt.Sprintf("%s could not log in, storage write failed while updating daemon/VFS state.", vars["username"])
 			case "account_expired":
 				message = fmt.Sprintf("%s could not log in, account expired.", vars["username"])
 			case "tls_required":

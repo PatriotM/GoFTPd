@@ -684,6 +684,10 @@ func copyMap(in map[string]string) map[string]string {
 }
 
 func (s *Session) emitLoginFailure(username, remoteIP, reason string) {
+	s.emitLoginFailureWithData(username, remoteIP, reason, nil)
+}
+
+func (s *Session) emitLoginFailureWithData(username, remoteIP, reason string, extra map[string]string) {
 	if s == nil || s.Config == nil {
 		return
 	}
@@ -692,6 +696,9 @@ func (s *Session) emitLoginFailure(username, remoteIP, reason string) {
 		"remote_ip":   strings.TrimSpace(remoteIP),
 		"remote_mask": "*@" + strings.TrimSpace(remoteIP),
 		"reason":      strings.TrimSpace(reason),
+	}
+	for key, value := range extra {
+		data[key] = strings.TrimSpace(value)
 	}
 	s.emitEvent(EventLoginFail, "", "", 0, 0, data)
 }
