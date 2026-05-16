@@ -195,6 +195,19 @@ func (r MountedRoot) fullPath(virtualPath string) string {
 	return filepath.Join(r.Path, filepath.FromSlash(rel))
 }
 
+func (r MountedRoot) virtualPath(fullPath string) (string, bool) {
+	cleanRoot := filepath.Clean(r.Path)
+	cleanFull := filepath.Clean(fullPath)
+	rel, err := filepath.Rel(cleanRoot, cleanFull)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	if rel == "." {
+		return cleanVirtualPath(r.MountPath), true
+	}
+	return cleanVirtualPath(path.Join(r.MountPath, filepath.ToSlash(rel))), true
+}
+
 func (s *Slave) rootsForVirtualPath(virtualPath string) []MountedRoot {
 	virtualPath = cleanVirtualPath(virtualPath)
 	matches := make([]MountedRoot, 0, len(s.roots))
@@ -207,6 +220,23 @@ func (s *Slave) rootsForVirtualPath(virtualPath string) []MountedRoot {
 		return len(matches[i].MountPath) > len(matches[j].MountPath)
 	})
 	return matches
+}
+
+func (s *Slave) virtualSymlinkTarget(linkFullPath, rawTarget string) string {
+	rawTarget = strings.TrimSpace(rawTarget)
+	if rawTarget == "" {
+		return ""
+	}
+	physicalTarget := rawTarget
+	if !filepath.IsAbs(physicalTarget) {
+		physicalTarget = filepath.Join(filepath.Dir(linkFullPath), physicalTarget)
+	}
+	for _, root := range s.roots {
+		if virtualTarget, ok := root.virtualPath(physicalTarget); ok {
+			return virtualTarget
+		}
+	}
+	return filepath.ToSlash(filepath.Clean(rawTarget))
 }
 
 type scanTarget struct {
@@ -680,6 +710,12 @@ func (s *Slave) handleMakeDir(ac *protocol.AsyncCommand) interface{} {
 
 	for _, root := range roots {
 		fullPath := root.fullPath(dirPath)
+		if info, err := os.Stat(fullPath); err == nil && info.IsDir() {
+			continue
+		}
+		if info, err := os.Lstat(fullPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
+			continue
+		}
 		if err := os.MkdirAll(fullPath, 0755); err != nil {
 			return &protocol.AsyncResponseError{Index: ac.Index, Message: fmt.Sprintf("makedir failed: %v", err)}
 		}
@@ -1110,8 +1146,8 @@ func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
 				Group:        getFileGroup(info),
 			})
 			if info.Mode()&os.ModeSymlink != 0 {
-				if target, err := os.Readlink(fullPath); err == nil {
-					currentFiles[len(currentFiles)-1].LinkTarget = filepath.ToSlash(target)
+				if linkTarget, err := os.Readlink(fullPath); err == nil {
+					currentFiles[len(currentFiles)-1].LinkTarget = s.virtualSymlinkTarget(fullPath, linkTarget)
 				}
 			}
 

@@ -196,25 +196,37 @@ func (p *Plugin) handleRequest(ctx plugin.SiteContext, args []string) bool {
 	}
 
 	entries := p.loadRequests()
+	if p.findRequest(entries, release) >= 0 {
+		if p.requestHead != "" && !p.doNotCreateDirUntilFilled {
+			if err := p.ensureRequestDir(ctx, release); err != nil {
+				p.reply(ctx, "451", fmt.Sprintf("Failed to repair request dir: %v", err))
+				return true
+			}
+		}
+		if err := p.saveRequests(entries); err != nil {
+			p.reply(ctx, "451", fmt.Sprintf("Failed to save request list: %v", err))
+			return true
+		}
+		p.reply(ctx, "200", fmt.Sprintf("%s has already been requested.", release))
+		return true
+	}
+	if p.dirExists(p.requestDir(release)) || p.dirExists(p.filledDir(release)) {
+		p.reply(ctx, "200", fmt.Sprintf("%s has already been requested.", release))
+		return true
+	}
 	if p.maxRequests > 0 && len(entries) >= p.maxRequests {
 		p.reply(ctx, "200", "No more requests allowed. Fill some up.")
 		return true
 	}
-	if p.findRequest(entries, release) >= 0 || p.dirExists(p.requestDir(release)) || p.dirExists(p.filledDir(release)) {
-		p.reply(ctx, "200", fmt.Sprintf("%s has already been requested.", release))
-		return true
-	}
 
-	if err := p.ensureBaseDir(ctx); err != nil {
-		p.reply(ctx, "451", fmt.Sprintf("Failed to create request base dir: %v", err))
-		return true
-	}
 	if p.requestHead != "" && !p.doNotCreateDirUntilFilled {
-		if err := p.svc.Bridge.MakeDir(p.requestDir(release), ctx.UserName(), ctx.UserPrimaryGroup()); err != nil && !p.dirExists(p.requestDir(release)) {
+		if err := p.ensureRequestDir(ctx, release); err != nil {
 			p.reply(ctx, "451", fmt.Sprintf("Failed to create request dir: %v", err))
 			return true
 		}
-		_ = p.svc.Bridge.Chmod(p.requestDir(release), 0777)
+	} else if err := p.ensureBaseDir(ctx); err != nil {
+		p.reply(ctx, "451", fmt.Sprintf("Failed to create request base dir: %v", err))
+		return true
 	}
 
 	entries = append(entries, requestEntry{
@@ -259,6 +271,12 @@ func (p *Plugin) handleReqFill(ctx plugin.SiteContext, args []string) bool {
 	}
 	entry := entries[idx]
 	reqDir := p.requestDir(entry.Release)
+	if p.requestHead != "" && !p.doNotCreateDirUntilFilled {
+		if err := p.ensureRequestDir(ctx, entry.Release); err != nil {
+			p.reply(ctx, "451", fmt.Sprintf("Failed to repair request dir: %v", err))
+			return true
+		}
+	}
 	if p.requestHead != "" && p.dirExists(reqDir) {
 		if p.dirEmpty(reqDir) {
 			p.reply(ctx, "200", "That request is empty. Can not reqfill it.")
@@ -631,6 +649,24 @@ func (p *Plugin) saveFillStats(entries []requestFillEntry) error {
 			return retryErr
 		}
 	}
+	return nil
+}
+
+func (p *Plugin) ensureRequestDir(ctx plugin.SiteContext, release string) error {
+	if err := p.ensureBaseDir(ctx); err != nil {
+		return err
+	}
+	dirPath := p.requestDir(release)
+	owner := "GoFTPd"
+	group := "GoFTPd"
+	if ctx != nil {
+		owner = ctx.UserName()
+		group = ctx.UserPrimaryGroup()
+	}
+	if err := p.svc.Bridge.MakeDir(dirPath, owner, group); err != nil {
+		return err
+	}
+	_ = p.svc.Bridge.Chmod(dirPath, 0777)
 	return nil
 }
 

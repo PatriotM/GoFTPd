@@ -1,0 +1,46 @@
+package slave
+
+import (
+	"path/filepath"
+	"testing"
+)
+
+func TestVirtualSymlinkTargetMapsPhysicalRootToVFS(t *testing.T) {
+	siteRoot := filepath.Join(string(filepath.Separator), "glftpd", "site")
+	s := &Slave{roots: []MountedRoot{{Path: siteRoot, MountPath: "/"}}}
+
+	linkPath := filepath.Join(siteRoot, "!Today_XXX-0DAY")
+	targetPath := filepath.Join(siteRoot, "XXX-0DAY", "0516")
+
+	if got := s.virtualSymlinkTarget(linkPath, targetPath); got != "/XXX-0DAY/0516" {
+		t.Fatalf("unexpected target: %q", got)
+	}
+}
+
+func TestVirtualSymlinkTargetMapsRelativeRootTargetToVFS(t *testing.T) {
+	siteRoot := filepath.Join(string(filepath.Separator), "glftpd", "site")
+	s := &Slave{roots: []MountedRoot{{Path: siteRoot, MountPath: "/"}}}
+
+	linkPath := filepath.Join(siteRoot, "!Today_XXX-0DAY")
+	targetPath := filepath.Join("XXX-0DAY", "0516")
+
+	if got := s.virtualSymlinkTarget(linkPath, targetPath); got != "/XXX-0DAY/0516" {
+		t.Fatalf("unexpected target: %q", got)
+	}
+}
+
+func TestVirtualSymlinkTargetMapsMountedRootToVFS(t *testing.T) {
+	siteRoot := filepath.Join(string(filepath.Separator), "glftpd", "site")
+	archiveRoot := filepath.Join(string(filepath.Separator), "glftpd", "DISK1")
+	s := &Slave{roots: []MountedRoot{
+		{Path: siteRoot, MountPath: "/"},
+		{Path: archiveRoot, MountPath: "/ARCHiVE"},
+	}}
+
+	linkPath := filepath.Join(siteRoot, "ARCHiVE-LINK")
+	targetPath := filepath.Join(archiveRoot, "XXX-0DAY", "0516")
+
+	if got := s.virtualSymlinkTarget(linkPath, targetPath); got != "/ARCHiVE/XXX-0DAY/0516" {
+		t.Fatalf("unexpected target: %q", got)
+	}
+}

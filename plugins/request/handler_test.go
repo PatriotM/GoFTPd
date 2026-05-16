@@ -73,6 +73,24 @@ func TestRequestReportsIndexSaveFailure(t *testing.T) {
 	}
 }
 
+func TestDuplicateRequestRepairsMissingDirectory(t *testing.T) {
+	bridge := newRequestTestBridge()
+	bridge.addDir("/REQUESTS", "GoFTPd", "GoFTPd")
+	bridge.files["/REQUESTS/.requests"] = []byte("[ 1:] Repair.Release-TEST ~ by alice (gl) at 2026-05-16 02:00\n")
+	p := New()
+	p.svc = &plugin.Services{Bridge: bridge}
+
+	ctx := &requestTestCtx{user: "alice", group: "iND", flags: "1"}
+	p.HandleSiteCommand(ctx, "REQUEST", []string{"Repair.Release-TEST"})
+
+	if _, ok := bridge.dirs["/REQUESTS/REQ-Repair.Release-TEST"]; !ok {
+		t.Fatalf("expected missing request directory to be repaired")
+	}
+	if !ctx.hasReply("has already been requested") {
+		t.Fatalf("expected duplicate reply, got %#v", ctx.replies)
+	}
+}
+
 func TestReqFillProxyTracksProvidedUser(t *testing.T) {
 	bridge := newRequestTestBridge()
 	p := New()
