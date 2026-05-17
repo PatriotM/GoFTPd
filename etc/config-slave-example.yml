@@ -2,7 +2,7 @@
 #
 # Build the daemon, edit the values below, then start from this directory with:
 #
-#   ./goftpd --config config-slave-example.yml
+#   ./goftpd --config etc/config-slave-example.yml
 #
 # If you prefer the default config path, copy this file to etc/config.yml and
 # run ./goftpd without --config.
