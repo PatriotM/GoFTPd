@@ -26,6 +26,11 @@ deny_dirs:
   - path: "/"
     pattern: "^\\[NUKED\\]"
 
+  # TV-style releases belong in TV-BLURAY, not BLURAY.
+  # Matches S01E01 and S01D01 style names.
+  - path: "/BLURAY"
+    pattern: "(?i)(^|[._ -])S[0-9]{2}[ED][0-9]{2}([._ -]|$)"
+
 # Allow-only rules by path/section.
 # If one or more allow rules match the target path, the release name must
 # match at least one of those rule regexes or MKD is denied.

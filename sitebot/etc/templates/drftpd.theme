@@ -328,6 +328,7 @@ announce.AUDIOINFO = "%c01{FLAC} %c01{-> }%c14{%relname}%b %c14{[}%genre%b %c01{
 
 announce.MEDIAINFO = "[SAMPLE] %c14{%relname}%b %c01{::} %video_format%b %c01{: }%c05{%{width}}%c01{x}%c05{%{height}} %c01{: }%audio_format%b %c01{: }%channels%b %c01{: }%duration%b"
 announce.CUSTOM = "%message"
+announce.RELEASEGUARD = "%c04{RELEASEGUARD:} %c05{%message}"
 announce.SPACEARCHIVE = "%c14{[SPACE]:} %c09{[ARCHiViNG]} %c14{::} %c14{%relname} %c14{::} %c06{[}%c14{%size_mb} MB%c06{]} %c14{to} %c07{[}%c14{%destination_label}%c07{]}"
 announce.SPACEOFFSITE = "%c14{[SPACE]:} %c13{[OFFSiTE]} %c14{::} %c14{%relname} %c14{::} %c06{[}%c14{%size_mb} MB%c06{]} %c14{to} %c07{[}%c14{%destination_label}%c07{]}"
 announce.SPACEDELETE = "%c14{[SPACE]:} %c04{[DELETiNG]} %c14{::} %c14{%relname} %c14{::} %c06{[}%c14{%size_mb} MB%c06{]} %c14{from} %c07{[}%c14{%destination_label}%c07{]}"

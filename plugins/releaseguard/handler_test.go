@@ -86,6 +86,60 @@ func TestValidateMKDirRejectsScopedBluRayRule(t *testing.T) {
 	}
 }
 
+func TestValidateMKDirRejectsSeriesInBluraySection(t *testing.T) {
+	p := newPluginForTest(t, map[string]interface{}{
+		"deny_dirs": []interface{}{
+			map[string]interface{}{"path": "/BLURAY", "pattern": `(?i)(^|[._ -])S[0-9]{2}[ED][0-9]{2}([._ -]|$)`},
+		},
+	}, nil)
+	if err := p.ValidateMKDir(&user.User{Name: "tester"}, "/BLURAY/Show.Name.S01D01.COMPLETE.BLURAY-GRP"); err == nil {
+		t.Fatal("expected S01D01 release to be rejected in BLURAY")
+	}
+	if err := p.ValidateMKDir(&user.User{Name: "tester"}, "/TV-BLURAY/Show.Name.S01D01.COMPLETE.BLURAY-GRP"); err != nil {
+		t.Fatalf("expected S01D01 release to pass in TV-BLURAY, got %v", err)
+	}
+}
+
+func TestValidateMKDirEmitsRejectEvent(t *testing.T) {
+	var gotType string
+	var gotPath string
+	var gotSection string
+	var gotData map[string]string
+	p := New()
+	err := p.Init(&plugin.Services{
+		Bridge: &testBridge{},
+		EmitEvent: func(eventType, eventPath, filename, section string, size int64, speed float64, data map[string]string) {
+			gotType = eventType
+			gotPath = eventPath
+			gotSection = section
+			gotData = data
+		},
+	}, map[string]interface{}{
+		"deny_dirs": []interface{}{
+			map[string]interface{}{"path": "/TV-1080P", "pattern": `(?i)bluray`},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+	err = p.ValidateMKDir(&user.User{Name: "steel", PrimaryGroup: "iND"}, "/TV-1080P/The.Disastrous.Life.Of.Saiki.K.E15.1080p.BluRay.x264-URANiME")
+	if err == nil {
+		t.Fatal("expected release to be rejected")
+	}
+	if gotType != "CUSTOM" {
+		t.Fatalf("event type = %q, want CUSTOM", gotType)
+	}
+	if gotPath != "/TV-1080P/The.Disastrous.Life.Of.Saiki.K.E15.1080p.BluRay.x264-URANiME" {
+		t.Fatalf("event path = %q", gotPath)
+	}
+	if gotSection != "TV-1080P" {
+		t.Fatalf("event section = %q, want TV-1080P", gotSection)
+	}
+	if gotData["announce_type"] != "RELEASEGUARD" || gotData["username"] != "steel" || gotData["rule_pattern"] != "(?i)bluray" {
+		t.Fatalf("unexpected event data: %#v", gotData)
+	}
+}
+
 func TestReloadConfigUpdatesDenyRules(t *testing.T) {
 	p := newPluginForTest(t, map[string]interface{}{}, nil)
 	target := "/TV-1080P/The.Disastrous.Life.Of.Saiki.K.E15.1080p.BluRay.x264-URANiME"

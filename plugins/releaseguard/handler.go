@@ -128,16 +128,22 @@ func (p *Plugin) ValidateMKDir(u *user.User, targetPath string) error {
 			continue
 		}
 		if p.denyCaseConflicts && strings.EqualFold(entryName, name) && entryName != name {
-			return fmt.Errorf("release name clashes with existing dir %q (case differs)", entryName)
+			err := fmt.Errorf("release name clashes with existing dir %q (case differs)", entryName)
+			p.emitReject(u, targetPath, name, "case_conflict", "", "", err.Error())
+			return err
 		}
 		if p.denySameNameInParent && strings.EqualFold(entryName, name) {
-			return fmt.Errorf("release %q already exists in %s", name, parent)
+			err := fmt.Errorf("release %q already exists in %s", name, parent)
+			p.emitReject(u, targetPath, name, "duplicate", "", "", err.Error())
+			return err
 		}
 		if p.checkNukedNames {
 			for _, prefix := range p.nukedPrefixes {
 				prefix = strings.TrimSpace(prefix)
 				if prefix != "" && strings.EqualFold(entryName, prefix+name) {
-					return fmt.Errorf("release %q already exists as a nuked entry in %s", name, parent)
+					err := fmt.Errorf("release %q already exists as a nuked entry in %s", name, parent)
+					p.emitReject(u, targetPath, name, "nuked_name", "", prefix, err.Error())
+					return err
 				}
 			}
 		}
@@ -145,12 +151,16 @@ func (p *Plugin) ValidateMKDir(u *user.User, targetPath string) error {
 
 	for _, r := range p.denyGroups {
 		if r.matches(targetPath, name) {
-			return fmt.Errorf("release group banned by rule %q", r.Pattern)
+			err := fmt.Errorf("release group banned by rule %q", r.Pattern)
+			p.emitReject(u, targetPath, name, "deny_group", r.Path, r.Pattern, err.Error())
+			return err
 		}
 	}
 	for _, r := range p.denyDirs {
 		if r.matches(targetPath, name) {
-			return fmt.Errorf("release name banned by rule %q", r.Pattern)
+			err := fmt.Errorf("release name banned by rule %q", r.Pattern)
+			p.emitReject(u, targetPath, name, "deny_dir", r.Path, r.Pattern, err.Error())
+			return err
 		}
 	}
 	if len(p.allowDirs) > 0 {
@@ -167,11 +177,44 @@ func (p *Plugin) ValidateMKDir(u *user.User, targetPath string) error {
 			}
 		}
 		if scoped && !allowed {
-			return fmt.Errorf("release name does not match allowed patterns for this section")
+			err := fmt.Errorf("release name does not match allowed patterns for this section")
+			p.emitReject(u, targetPath, name, "allow_miss", "", "", err.Error())
+			return err
 		}
 	}
 
 	return nil
+}
+
+func (p *Plugin) emitReject(u *user.User, targetPath, name, reason, rulePath, rulePattern, message string) {
+	if p == nil || p.svc == nil || p.svc.EmitEvent == nil {
+		return
+	}
+	username := "unknown"
+	group := ""
+	if u != nil {
+		username = strings.TrimSpace(u.Name)
+		group = strings.TrimSpace(u.PrimaryGroup)
+		if username == "" {
+			username = "unknown"
+		}
+	}
+	section := sectionFromPath(targetPath)
+	data := map[string]string{
+		"template":      "RELEASEGUARD",
+		"announce_type": "RELEASEGUARD",
+		"message":       fmt.Sprintf("%s tried to create %s: %s", username, targetPath, message),
+		"username":      username,
+		"user":          username,
+		"group":         group,
+		"relname":       name,
+		"target_path":   targetPath,
+		"parent_path":   path.Dir(targetPath),
+		"reason":        reason,
+		"rule_path":     rulePath,
+		"rule_pattern":  rulePattern,
+	}
+	p.svc.EmitEvent("CUSTOM", targetPath, name, section, 0, 0, data)
 }
 
 func (p *Plugin) handleBanned(ctx plugin.SiteContext, args []string) bool {
@@ -339,6 +382,18 @@ func pathScopeMatches(scope, target string) bool {
 	}
 	scope = strings.TrimRight(scope, "/")
 	return target == scope || strings.HasPrefix(target, scope+"/")
+}
+
+func sectionFromPath(p string) string {
+	p = cleanAbs(p)
+	trimmed := strings.Trim(p, "/")
+	if trimmed == "" {
+		return ""
+	}
+	if idx := strings.Index(trimmed, "/"); idx >= 0 {
+		return trimmed[:idx]
+	}
+	return trimmed
 }
 
 func cleanAbs(p string) string {
