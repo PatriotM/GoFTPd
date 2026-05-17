@@ -20,6 +20,10 @@ log_keep_days: 2
 # Must match the master's TLS setting. Keep false unless master.control uses TLS.
 tls_enabled: false
 
+# Refuse uploads when the selected slave root has less free space than this.
+# Keep this aligned with the master config.
+free_space_mb: 2048
+
 slave:
   # Must match a master-side slaves[].name policy if you use policies.
   name: "LOCAL"

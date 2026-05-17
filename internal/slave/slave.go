@@ -49,6 +49,7 @@ type Slave struct {
 	bindIP               string
 	ignorePartialRemerge bool
 	transferBufferSize   int
+	freeSpaceMB          int
 	debug                bool
 
 	conn            net.Conn
@@ -97,6 +98,7 @@ type SlaveConfig struct {
 	Timeout              int           `yaml:"timeout"` // seconds, default 60
 	IgnorePartialRemerge bool          `yaml:"ignore_partial_remerge"`
 	TransferBufferSize   int           `yaml:"transfer_buffer_size"`
+	FreeSpaceMB          int           `yaml:"free_space_mb"`
 	Debug                bool
 }
 
@@ -135,6 +137,7 @@ func NewSlave(cfg SlaveConfig) *Slave {
 		timeout:              timeout,
 		ignorePartialRemerge: cfg.IgnorePartialRemerge,
 		transferBufferSize:   bufferSize,
+		freeSpaceMB:          cfg.FreeSpaceMB,
 		debug:                cfg.Debug,
 	}
 }
@@ -1706,7 +1709,15 @@ func (s *Slave) getDirForUpload(relPath string) (string, error) {
 	cleanRel := filepath.Clean(relPath)
 	dirPart := filepath.Dir(cleanRel)
 	roots := s.rootsForVirtualPath(relPath)
+	var bestSeenAvail int64 = -1
 	for _, root := range roots {
+		avail, ok := s.rootHasUploadSpace(root)
+		if avail > bestSeenAvail {
+			bestSeenAvail = avail
+		}
+		if !ok {
+			continue
+		}
 		existingDir := root.fullPath(dirPart)
 		if info, err := os.Stat(existingDir); err == nil && info.IsDir() {
 			if err := os.MkdirAll(existingDir, 0755); err != nil {
@@ -1720,7 +1731,13 @@ func (s *Slave) getDirForUpload(relPath string) (string, error) {
 	var bestAvail int64
 
 	for _, root := range roots {
-		avail, _ := getDiskSpace(root.Path)
+		avail, ok := s.rootHasUploadSpace(root)
+		if avail > bestSeenAvail {
+			bestSeenAvail = avail
+		}
+		if !ok {
+			continue
+		}
 		if avail > bestAvail {
 			bestAvail = avail
 			bestRoot = root
@@ -1728,6 +1745,9 @@ func (s *Slave) getDirForUpload(relPath string) (string, error) {
 	}
 
 	if bestRoot.Path == "" {
+		if bestSeenAvail >= 0 && s.minUploadFreeBytes() > 0 {
+			return "", s.lowUploadSpaceError(bestSeenAvail)
+		}
 		return "", fmt.Errorf("no root available")
 	}
 
@@ -1735,6 +1755,23 @@ func (s *Slave) getDirForUpload(relPath string) (string, error) {
 	os.MkdirAll(fullDir, 0755)
 
 	return bestRoot.fullPath(cleanRel), nil
+}
+
+func (s *Slave) minUploadFreeBytes() int64 {
+	if s == nil || s.freeSpaceMB <= 0 {
+		return 0
+	}
+	return int64(s.freeSpaceMB) * 1024 * 1024
+}
+
+func (s *Slave) rootHasUploadSpace(root MountedRoot) (int64, bool) {
+	avail, _ := getDiskSpace(root.Path)
+	minFree := s.minUploadFreeBytes()
+	return avail, minFree <= 0 || avail >= minFree
+}
+
+func (s *Slave) lowUploadSpaceError(bestAvail int64) error {
+	return fmt.Errorf("disk full: free space %.1f MB is below free_space_mb %d MB", float64(bestAvail)/(1024*1024), s.freeSpaceMB)
 }
 
 func (s *Slave) selectRootForRelocate(sourceRoot MountedRoot, toDir string) (MountedRoot, error) {

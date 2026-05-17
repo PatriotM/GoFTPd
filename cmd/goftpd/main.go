@@ -574,6 +574,7 @@ func startSlave(cfg *core.Config) {
 		Timeout:              timeout,
 		IgnorePartialRemerge: ignorePartialRemerge,
 		TransferBufferSize:   transferBufferSize,
+		FreeSpaceMB:          cfg.FreeSpaceMB,
 		Debug:                cfg.Debug,
 	})
 
