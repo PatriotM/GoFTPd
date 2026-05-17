@@ -43,6 +43,24 @@ func (p *Plugin) Name() string { return "releaseguard" }
 
 func (p *Plugin) Init(svc *plugin.Services, cfg map[string]interface{}) error {
 	p.svc = svc
+	return p.applyConfig(cfg)
+}
+
+func (p *Plugin) ReloadConfig(cfg map[string]interface{}) error {
+	return p.applyConfig(cfg)
+}
+
+func (p *Plugin) applyConfig(cfg map[string]interface{}) error {
+	p.skipPaths = nil
+	p.denySameNameInParent = true
+	p.denyCaseConflicts = true
+	p.checkNukedNames = true
+	p.nukedPrefixes = []string{"[NUKED]-"}
+	p.denyGroups = nil
+	p.denyDirs = nil
+	p.allowDirs = nil
+	p.debug = false
+
 	p.skipPaths = pathList(cfg["skip_paths"])
 	if v, ok := cfg["deny_same_name_in_parent"].(bool); ok {
 		p.denySameNameInParent = v

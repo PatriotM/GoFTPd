@@ -19,7 +19,7 @@ func (b *testBridge) Symlink(linkPath, targetPath string) error { return nil }
 func (b *testBridge) VFSSymlink(linkPath, targetPath string) error {
 	return nil
 }
-func (b *testBridge) Chmod(path string, mode uint32) error      { return nil }
+func (b *testBridge) Chmod(path string, mode uint32) error { return nil }
 func (b *testBridge) CreateSparseFile(path string, size int64, owner, group string) error {
 	return nil
 }
@@ -33,7 +33,7 @@ func (b *testBridge) ProbeMediaInfo(path, binary string, timeoutSeconds int) (ma
 	return nil, nil
 }
 func (b *testBridge) CacheMediaInfo(path string, fields map[string]string) {}
-func (b *testBridge) GetDirMediaInfo(dirPath string) map[string]string    { return nil }
+func (b *testBridge) GetDirMediaInfo(dirPath string) map[string]string     { return nil }
 func (b *testBridge) FileExists(path string) bool                          { return false }
 func (b *testBridge) GetFileSize(path string) int64                        { return -1 }
 func (b *testBridge) GetSFVData(dirPath string) map[string]uint32          { return nil }
@@ -71,6 +71,36 @@ func TestValidateMKDirRejectsBannedGroup(t *testing.T) {
 	err := p.ValidateMKDir(&user.User{Name: "tester"}, "/0DAY/0424/Some.Release-2026-BAD")
 	if err == nil {
 		t.Fatal("expected banned group to be rejected")
+	}
+}
+
+func TestValidateMKDirRejectsScopedBluRayRule(t *testing.T) {
+	p := newPluginForTest(t, map[string]interface{}{
+		"deny_dirs": []interface{}{
+			map[string]interface{}{"path": "/TV-1080P", "pattern": `(?i)bluray`},
+		},
+	}, nil)
+	err := p.ValidateMKDir(&user.User{Name: "tester"}, "/TV-1080P/The.Disastrous.Life.Of.Saiki.K.E15.1080p.BluRay.x264-URANiME")
+	if err == nil {
+		t.Fatal("expected scoped BluRay release to be rejected")
+	}
+}
+
+func TestReloadConfigUpdatesDenyRules(t *testing.T) {
+	p := newPluginForTest(t, map[string]interface{}{}, nil)
+	target := "/TV-1080P/The.Disastrous.Life.Of.Saiki.K.E15.1080p.BluRay.x264-URANiME"
+	if err := p.ValidateMKDir(&user.User{Name: "tester"}, target); err != nil {
+		t.Fatalf("expected release to pass before reload, got %v", err)
+	}
+	if err := p.ReloadConfig(map[string]interface{}{
+		"deny_dirs": []interface{}{
+			map[string]interface{}{"path": "/TV-1080P", "pattern": `(?i)bluray`},
+		},
+	}); err != nil {
+		t.Fatalf("ReloadConfig failed: %v", err)
+	}
+	if err := p.ValidateMKDir(&user.User{Name: "tester"}, target); err == nil {
+		t.Fatal("expected release to be rejected after reload")
 	}
 }
 
