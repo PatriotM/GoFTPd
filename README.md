@@ -393,13 +393,17 @@ Built-in daemon plugins:
 | `tvmaze` | Writes `.tvmaze` metadata for configured TV sections |
 | `imdb` | Writes `.imdb` metadata for configured movie sections |
 | `pretime` | Looks up known pre times for new release dirs and emits appended `NEWPRETIME` / `OLDPRETIME` announces |
-| `mediainfo` | Emits audio/video metadata events after uploads |
 | `pre` | Provides SITE PRE and affil management commands |
 | `releaseguard` | Blocks bad release dir names before MKD creates them and provides `SITE BANNED` |
 | `request` | Provides SITE REQUEST/REQUESTS/REQFILL/REQTOP/REQDEL/REQWIPE |
 | `speedtest` | Creates speedtest files and emits SPEEDTEST events |
 | `slowkick` | Monitors live uploads and downloads and aborts/kicks users whose speed stays below a configured floor long enough to block slots |
 | `spacekeeper` | Watches slave free space and deletes the oldest eligible releases from configured virtual paths when a slave drops below its threshold |
+
+Audio and sample/video metadata are not a separate daemon plugin anymore. They
+are built into the zipscript upload flow under `zipscript.audio` and
+`zipscript.media`, and are announced through the sitebot announce plugin as
+`AUDIOINFO` / `MEDIAINFO` events.
 
 ### Speedtest
 
