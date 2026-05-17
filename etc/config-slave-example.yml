@@ -17,8 +17,18 @@ log_file: "logs/goftpd-slave.log"
 log_console: true
 log_keep_days: 2
 
-# Must match the master's TLS setting. Keep false unless master.control uses TLS.
-tls_enabled: false
+# TLS is shared top-level config. On a slave, tls_enabled controls encrypted
+# client data sockets, so the cert/key must exist here when the master requires
+# PROT P / encrypted transfers.
+tls_enabled: true
+tls_cert: "./etc/certs/server.crt"
+tls_key: "./etc/certs/server.key"
+
+# These two are master FTP policy flags. They are harmless in slave-only config
+# and are kept here so the TLS block can stay aligned with the master config.
+require_tls_control: true
+require_tls_data: true
+tls_exempt_users: []
 
 # Refuse uploads when the selected slave root has less free space than this.
 # Keep this aligned with the master config.

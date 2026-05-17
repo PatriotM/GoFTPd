@@ -121,7 +121,10 @@ You can also point the daemon at an explicit config file:
 In `mode: slave`, the slave-specific runtime comes from the `slave:` block.
 `slave.roots` is required, and slave mode no longer falls back to
 `storage_path` for roots. Shared top-level runtime settings such as `tls_*`,
-`log_*`, `debug`, and `timezone` still apply to both roles.
+`log_*`, `debug`, and `timezone` still apply to both roles. If the master
+requires encrypted data transfers, the slave config also needs matching
+`tls_enabled`, `tls_cert`, and `tls_key` values because the slave terminates
+the client data TLS session.
 
 For a slave-only box, start from the minimal sample instead of trimming down
 the full master config:
