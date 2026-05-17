@@ -257,6 +257,20 @@ On a full remerge, GoFTPd scans normal `roots` first and only scans
 larger archive trees catch up in the background, which makes `mounted_roots`
 especially suitable for archive-style storage.
 
+For slower local disks, NFS mounts, or archive disks, throttle slave remerge
+instead of letting a full scan pin one disk at 100% iowait:
+
+```yml
+slave:
+  remerge_delay_ms: 10
+  remerge_pause_on_active_transfers: 1
+```
+
+`remerge_delay_ms` sleeps after each streamed directory. Keep it at `0` on fast
+local disks; try `5-25` on slower disks. `remerge_pause_on_active_transfers`
+pauses remerge while the slave is serving uploads/downloads, so live traffic
+gets priority over background scans.
+
 On a slave host, the role-specific settings you normally care about are:
 
 - `mode: slave`

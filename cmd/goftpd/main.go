@@ -555,27 +555,31 @@ func startSlave(cfg *core.Config) {
 	timeout := intFromCfg(slaveCfg, "timeout", 60)
 	ignorePartialRemerge := boolFromCfg(slaveCfg, "ignore_partial_remerge", false)
 	transferBufferSize := intFromCfg(slaveCfg, "transfer_buffer_size", 0)
+	remergeDelayMS := intFromCfg(slaveCfg, "remerge_delay_ms", 0)
+	remergePauseOnActiveTransfers := intFromCfg(slaveCfg, "remerge_pause_on_active_transfers", 0)
 
-	log.Printf("[STARTUP] Slave mode [name=%s] [master=%s:%d] [roots=%v] [mounted_roots=%v] [bind_ip=%s] [pasv=%d-%d]",
-		name, masterHost, masterPort, roots, mountedRoots, bindIP, pasvMin, pasvMax)
+	log.Printf("[STARTUP] Slave mode [name=%s] [master=%s:%d] [roots=%v] [mounted_roots=%v] [bind_ip=%s] [pasv=%d-%d] [remerge_delay_ms=%d] [remerge_pause_on_active_transfers=%d]",
+		name, masterHost, masterPort, roots, mountedRoots, bindIP, pasvMin, pasvMax, remergeDelayMS, remergePauseOnActiveTransfers)
 
 	s := slave.NewSlave(slave.SlaveConfig{
-		Name:                 name,
-		MasterHost:           masterHost,
-		MasterPort:           masterPort,
-		Roots:                roots,
-		MountedRoots:         mountedRoots,
-		PasvPortMin:          pasvMin,
-		PasvPortMax:          pasvMax,
-		TLSEnabled:           cfg.TLSEnabled,
-		TLSCert:              cfg.TLSCert,
-		TLSKey:               cfg.TLSKey,
-		BindIP:               bindIP,
-		Timeout:              timeout,
-		IgnorePartialRemerge: ignorePartialRemerge,
-		TransferBufferSize:   transferBufferSize,
-		FreeSpaceMB:          cfg.FreeSpaceMB,
-		Debug:                cfg.Debug,
+		Name:                          name,
+		MasterHost:                    masterHost,
+		MasterPort:                    masterPort,
+		Roots:                         roots,
+		MountedRoots:                  mountedRoots,
+		PasvPortMin:                   pasvMin,
+		PasvPortMax:                   pasvMax,
+		TLSEnabled:                    cfg.TLSEnabled,
+		TLSCert:                       cfg.TLSCert,
+		TLSKey:                        cfg.TLSKey,
+		BindIP:                        bindIP,
+		Timeout:                       timeout,
+		IgnorePartialRemerge:          ignorePartialRemerge,
+		TransferBufferSize:            transferBufferSize,
+		FreeSpaceMB:                   cfg.FreeSpaceMB,
+		RemergeDelayMS:                remergeDelayMS,
+		RemergePauseOnActiveTransfers: remergePauseOnActiveTransfers,
+		Debug:                         cfg.Debug,
 	})
 
 	// Boot blocks until disconnected
