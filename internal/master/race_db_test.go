@@ -170,6 +170,49 @@ func TestRecordUploadDoesNotRewriteExistingPresentRaceWinner(t *testing.T) {
 	}
 }
 
+func TestReplaceReleaseFilesPreservesExistingRaceMetadataFromWeakRescan(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "race.db")
+	rdb, err := NewRaceDB(dbPath)
+	if err != nil {
+		t.Fatalf("NewRaceDB failed: %v", err)
+	}
+	defer rdb.Close()
+
+	releasePath := "/site/X265/Stable.Release-GRP"
+	entries := map[string]uint32{"file.r00": 1}
+	if err := rdb.SaveSFV(releasePath, "release.sfv", entries); err != nil {
+		t.Fatalf("SaveSFV failed: %v", err)
+	}
+	if err := rdb.RecordUpload(releasePath+"/file.r00", "Neptun", "iND", 100, 1000, 1); err != nil {
+		t.Fatalf("RecordUpload failed: %v", err)
+	}
+
+	err = rdb.ReplaceReleaseFiles(releasePath, "release.sfv", entries, map[string]ReleaseFileRecord{
+		"file.r00": {
+			FileName:   "file.r00",
+			Owner:      "GoFTPd",
+			Group:      "root",
+			SizeBytes:  100,
+			DurationMs: 0,
+			Checksum:   1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ReplaceReleaseFiles failed: %v", err)
+	}
+
+	users, groups, totalBytes, present, total := rdb.GetRaceStats(releasePath)
+	if total != 1 || present != 1 || totalBytes != 100 {
+		t.Fatalf("expected complete release, got present=%d total=%d bytes=%d", present, total, totalBytes)
+	}
+	if len(users) != 1 || users[0].Name != "Neptun" || users[0].Group != "iND" || users[0].DurationMs != 1000 {
+		t.Fatalf("expected original user metadata to survive weak rescan, got %+v", users)
+	}
+	if len(groups) != 1 || groups[0].Name != "iND" || groups[0].Files != 1 {
+		t.Fatalf("expected original group metadata to survive weak rescan, got %+v", groups)
+	}
+}
+
 func TestRaceDBGetRaceStatsUsesNormalizedFilenameKeys(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "race.db")
 	rdb, err := NewRaceDB(dbPath)
@@ -249,45 +292,6 @@ func TestRaceDBGetRaceStatsUsesAggregateUserSpeeds(t *testing.T) {
 	}
 }
 
-func TestRaceDBGetImmediateReleaseProgressReturnsDirectChildrenOnly(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "race.db")
-	rdb, err := NewRaceDB(dbPath)
-	if err != nil {
-		t.Fatalf("NewRaceDB failed: %v", err)
-	}
-	defer rdb.Close()
-
-	if err := rdb.SaveSFV("/site/MP3/0503/Direct-One", "one.sfv", map[string]uint32{"01.mp3": 1}); err != nil {
-		t.Fatalf("SaveSFV direct one failed: %v", err)
-	}
-	if err := rdb.RecordUpload("/site/MP3/0503/Direct-One/01.mp3", "u1", "G1", 100, 1000, 1); err != nil {
-		t.Fatalf("RecordUpload direct one failed: %v", err)
-	}
-	if err := rdb.SaveSFV("/site/MP3/0503/Direct-Two", "two.sfv", map[string]uint32{"02.mp3": 2, "03.mp3": 3}); err != nil {
-		t.Fatalf("SaveSFV direct two failed: %v", err)
-	}
-	if err := rdb.RecordUpload("/site/MP3/0503/Direct-Two/02.mp3", "u2", "G2", 200, 1000, 2); err != nil {
-		t.Fatalf("RecordUpload direct two failed: %v", err)
-	}
-	if err := rdb.SaveSFV("/site/MP3/0503/Direct-Two/CD1", "nested.sfv", map[string]uint32{"04.mp3": 4}); err != nil {
-		t.Fatalf("SaveSFV nested failed: %v", err)
-	}
-
-	progress := rdb.GetImmediateReleaseProgress("/site/MP3/0503")
-	if len(progress) != 2 {
-		t.Fatalf("expected 2 direct children, got %d: %+v", len(progress), progress)
-	}
-	if got := progress["/site/MP3/0503/Direct-One"]; got.Total != 1 || got.Present != 1 || !got.HasSFV {
-		t.Fatalf("unexpected direct-one progress: %+v", got)
-	}
-	if got := progress["/site/MP3/0503/Direct-Two"]; got.Total != 2 || got.Present != 1 || !got.HasSFV {
-		t.Fatalf("unexpected direct-two progress: %+v", got)
-	}
-	if _, ok := progress["/site/MP3/0503/Direct-Two/CD1"]; ok {
-		t.Fatalf("nested release should not be returned: %+v", progress)
-	}
-}
-
 func TestRaceDBGetRaceStatsIgnoresChecksumMismatches(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "race.db")
 	rdb, err := NewRaceDB(dbPath)
@@ -322,10 +326,5 @@ func TestRaceDBGetRaceStatsIgnoresChecksumMismatches(t *testing.T) {
 	}
 	if len(groups) != 1 || groups[0].Files != 1 {
 		t.Fatalf("expected one valid group file, got %+v", groups)
-	}
-
-	progress := rdb.GetImmediateReleaseProgress("/site/X265")
-	if got := progress[releasePath]; got.Total != 2 || got.Present != 1 {
-		t.Fatalf("expected immediate progress to ignore checksum mismatch, got %+v", got)
 	}
 }

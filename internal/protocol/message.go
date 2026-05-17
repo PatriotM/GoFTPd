@@ -96,6 +96,7 @@ type TransferStatus struct {
 	TransferIndex int32
 	Elapsed       int64
 	Transferred   int64
+	FileSize      int64
 	Checksum      uint32
 	Finished      bool
 	Error         string

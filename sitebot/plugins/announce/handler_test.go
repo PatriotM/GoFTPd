@@ -157,6 +157,88 @@ func TestUploadRaceAnnouncesStopAfterComplete(t *testing.T) {
 	}
 }
 
+func TestRequestReleaseDirEmitsNewAnnounce(t *testing.T) {
+	p := New()
+	evt := &event.Event{
+		Type:     event.EventMKDir,
+		Section:  "REQUESTS",
+		User:     "alice",
+		Filename: "Space.Haven.Linux-rG",
+		Path:     "/REQUESTS/REQ-Space.Haven.Linux-rG/Space.Haven.Linux-rG",
+		Data:     map[string]string{},
+	}
+
+	outs, err := p.OnEvent(evt)
+	if err != nil {
+		t.Fatalf("OnEvent failed: %v", err)
+	}
+	if len(outs) != 1 || outs[0].Type != "NEW" {
+		t.Fatalf("expected request release mkdir to emit NEW, got %#v", outs)
+	}
+}
+
+func TestDirectRequestUploadEmitsSingleSyntheticNewAnnounce(t *testing.T) {
+	p := New()
+	evt := &event.Event{
+		Type:     event.EventUpload,
+		Section:  "REQUESTS",
+		User:     "alice",
+		Filename: "space.haven.linux-rg.r00",
+		Path:     "/REQUESTS/REQ-Space.Haven.Linux-rG/space.haven.linux-rg.r00",
+		Size:     100,
+		Data: map[string]string{
+			"t_files": "10F",
+		},
+	}
+
+	outs, err := p.OnEvent(evt)
+	if err != nil {
+		t.Fatalf("OnEvent failed: %v", err)
+	}
+	newCount := 0
+	for _, out := range outs {
+		if out.Type == "NEW" {
+			newCount++
+		}
+	}
+	if newCount != 1 {
+		t.Fatalf("expected first direct request upload to emit one NEW, got %#v", outs)
+	}
+
+	outs, err = p.OnEvent(evt)
+	if err != nil {
+		t.Fatalf("OnEvent failed: %v", err)
+	}
+	for _, out := range outs {
+		if out.Type == "NEW" {
+			t.Fatalf("did not expect duplicate NEW for same direct request upload, got %#v", outs)
+		}
+	}
+}
+
+func TestMediaInfoIgnoresSectionRootEvent(t *testing.T) {
+	p := New()
+	evt := &event.Event{
+		Type:     event.EventMediaInfo,
+		Section:  "TV-1080P",
+		Filename: "TV-1080P",
+		Path:     "/TV-1080P",
+		Data: map[string]string{
+			"video_format": "AVC",
+			"audio_format": "AAC",
+			"duration":     "1m00s",
+		},
+	}
+
+	outs, err := p.OnEvent(evt)
+	if err != nil {
+		t.Fatalf("OnEvent failed: %v", err)
+	}
+	if len(outs) != 0 {
+		t.Fatalf("expected section-root media info event to be ignored, got %#v", outs)
+	}
+}
+
 func TestLoginFailDiskFullDoesNotSuggestBan(t *testing.T) {
 	p := New()
 	evt := &event.Event{

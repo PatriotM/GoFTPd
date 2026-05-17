@@ -10,8 +10,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"goftpd/internal/core"
 )
 
 // VFSFile represents a file or directory in the master's virtual file system.
@@ -34,8 +32,10 @@ type VFSFile struct {
 // VFSDirMeta holds per-directory metadata cached on the VFS (like drftpd's pluginMetaData).
 // Stored separately from file entries.
 type VFSDirMeta struct {
-	SFVEntries map[string]uint32 // filename -> CRC32 from parsed SFV
-	SFVName    string            // name of the .sfv file
+	SFVEntries          map[string]uint32 // filename -> CRC32 from parsed SFV
+	SFVName             string            // name of the .sfv file
+	SFVChecksum         uint32            // CRC32 of the .sfv file itself, when known
+	SFVAllowWithoutFile bool              // compatibility for direct test metadata injection
 }
 
 type VFSRaceCache struct {
@@ -60,6 +60,7 @@ type vfsSnapshot struct {
 
 type vfsReleaseSnapshot struct {
 	VisibleCount int
+	FileCount    int
 	HasSFV       bool
 	HasNFO       bool
 	Present      int
@@ -73,7 +74,6 @@ type VirtualFileSystem struct {
 	files          map[string]*VFSFile
 	children       map[string]map[string]struct{}
 	dirMeta        map[string]*VFSDirMeta // dir path -> metadata (SFV cache etc)
-	startupFacts   map[string]*vfsReleaseSnapshot
 	protectedDirs  map[string]bool
 	hiddenPaths    map[string]bool
 	excludePaths   map[string]bool
@@ -108,7 +108,6 @@ func NewVirtualFileSystem() *VirtualFileSystem {
 		files:         make(map[string]*VFSFile),
 		children:      make(map[string]map[string]struct{}),
 		dirMeta:       make(map[string]*VFSDirMeta),
-		startupFacts:  make(map[string]*vfsReleaseSnapshot),
 		protectedDirs: make(map[string]bool),
 		hiddenPaths:   make(map[string]bool),
 		excludePaths:  make(map[string]bool),
@@ -160,17 +159,22 @@ func (vfs *VirtualFileSystem) AddFile(path string, file VFSFile) {
 			file.IsDir = true
 		}
 	}
-	if existing := vfs.files[path]; existing != nil &&
-		!file.IsDir && !file.IsSymlink &&
-		!existing.IsDir && !existing.IsSymlink &&
-		existing.Size == file.Size &&
-		existing.LastModified == file.LastModified &&
-		existing.SlaveName == file.SlaveName {
-		if file.Checksum == 0 {
-			file.Checksum = existing.Checksum
+	if existing := vfs.files[path]; existing != nil {
+		if isWeakMetadataValue(file.Owner) && !isWeakMetadataValue(existing.Owner) {
+			file.Owner = existing.Owner
 		}
-		if file.XferTime == 0 {
-			file.XferTime = existing.XferTime
+		if isWeakMetadataValue(file.Group) && !isWeakMetadataValue(existing.Group) {
+			file.Group = existing.Group
+		}
+		if !file.IsDir && !file.IsSymlink &&
+			!existing.IsDir && !existing.IsSymlink &&
+			existing.Size == file.Size {
+			if file.Checksum == 0 {
+				file.Checksum = existing.Checksum
+			}
+			if file.XferTime == 0 {
+				file.XferTime = existing.XferTime
+			}
 		}
 	}
 
@@ -181,7 +185,6 @@ func (vfs *VirtualFileSystem) AddFile(path string, file VFSFile) {
 		vfs.ensureChildrenBucketLocked(path)
 	}
 	vfs.touchAncestorsLocked(path, file.LastModified)
-	vfs.invalidateStartupFactsForPathLocked(path, file.IsDir)
 	vfs.markPersistDirtyLocked()
 }
 
@@ -197,7 +200,6 @@ func (vfs *VirtualFileSystem) UpdateFileVerification(path string, checksum uint3
 		return false
 	}
 	file.Checksum = checksum
-	vfs.invalidateStartupFactsForPathLocked(path, false)
 	vfs.markPersistDirtyLocked()
 	return true
 }
@@ -262,7 +264,6 @@ func (vfs *VirtualFileSystem) AddSymlink(linkPath, targetPath string) {
 		vfs.ensureChildrenBucketLocked(linkPath)
 	}
 	vfs.touchAncestorsLocked(linkPath, time.Now().Unix())
-	vfs.invalidateStartupFactsForPathLocked(linkPath, isDir)
 	vfs.markPersistDirtyLocked()
 }
 
@@ -294,6 +295,26 @@ func (vfs *VirtualFileSystem) MarkAllUnseen(slaveName string) {
 	}
 }
 
+// MarkSubtreeUnseen flags files for a specific slave as unseen below rootPath
+// before a scoped remerge. This lets scoped remerges purge ghost entries
+// without touching unrelated sections.
+func (vfs *VirtualFileSystem) MarkSubtreeUnseen(slaveName, rootPath string) {
+	vfs.mu.Lock()
+	defer vfs.mu.Unlock()
+
+	rootPath = cleanVFSPath(rootPath)
+	for path, file := range vfs.files {
+		if vfs.protectedDirs[path] {
+			file.Seen = true
+			file.SlaveName = ""
+			continue
+		}
+		if file.SlaveName == slaveName && (path == rootPath || strings.HasPrefix(path, rootPath+"/")) {
+			file.Seen = false
+		}
+	}
+}
+
 // PurgeUnseen removes any files for a specific slave that were not seen during the remerge.
 func (vfs *VirtualFileSystem) PurgeUnseen(slaveName string) {
 	vfs.mu.Lock()
@@ -310,7 +331,28 @@ func (vfs *VirtualFileSystem) PurgeUnseen(slaveName string) {
 		}
 	}
 	if changed {
-		vfs.startupFacts = make(map[string]*vfsReleaseSnapshot)
+		vfs.markPersistDirtyLocked()
+	}
+}
+
+// PurgeUnseenSubtree removes stale files below rootPath after a scoped remerge.
+func (vfs *VirtualFileSystem) PurgeUnseenSubtree(slaveName, rootPath string) {
+	vfs.mu.Lock()
+	defer vfs.mu.Unlock()
+
+	rootPath = cleanVFSPath(rootPath)
+	changed := false
+	for path, file := range vfs.files {
+		if vfs.protectedDirs[path] {
+			file.Seen = true
+			file.SlaveName = ""
+			continue
+		}
+		if file.SlaveName == slaveName && !file.Seen && (path == rootPath || strings.HasPrefix(path, rootPath+"/")) {
+			changed = vfs.deletePathLocked(path) || changed
+		}
+	}
+	if changed {
 		vfs.markPersistDirtyLocked()
 	}
 }
@@ -339,7 +381,6 @@ func (vfs *VirtualFileSystem) PurgeUnseenChildren(slaveName, dirPath string) {
 		changed = vfs.deletePathLocked(childPath) || changed
 	}
 	if changed {
-		vfs.startupFacts = make(map[string]*vfsReleaseSnapshot)
 		vfs.markPersistDirtyLocked()
 	}
 }
@@ -435,7 +476,6 @@ func (vfs *VirtualFileSystem) DeleteFile(path string) {
 	}
 	parent := cleanVFSPath(filepath.Dir(path))
 	vfs.touchAncestorsLocked(parent, time.Now().Unix())
-	vfs.invalidateStartupFactsForPathLocked(path, false)
 	vfs.markPersistDirtyLocked()
 }
 
@@ -446,6 +486,8 @@ func (vfs *VirtualFileSystem) deletePathLocked(path string) bool {
 		if meta := vfs.dirMeta[parent]; meta != nil {
 			meta.SFVName = ""
 			meta.SFVEntries = nil
+			meta.SFVChecksum = 0
+			meta.SFVAllowWithoutFile = false
 			delete(vfs.dirMeta, parent)
 		}
 	}
@@ -509,82 +551,6 @@ func (vfs *VirtualFileSystem) ListDirectory(dirPath string) []*VFSFile {
 	return results
 }
 
-// GetImmediateChildDirFacts returns one-pass metadata about direct child
-// directories below parentDir, derived from the in-memory VFS.
-func (vfs *VirtualFileSystem) GetImmediateChildDirFacts(parentDir string) map[string]core.ReleaseChildFacts {
-	vfs.mu.RLock()
-	defer vfs.mu.RUnlock()
-
-	parentDir = cleanVFSPath(parentDir)
-	childPaths := vfs.children[parentDir]
-	if len(childPaths) == 0 {
-		return nil
-	}
-
-	out := make(map[string]core.ReleaseChildFacts, len(childPaths))
-	for childPath := range childPaths {
-		if vfs.isHiddenPathLocked(childPath) {
-			continue
-		}
-		child := vfs.files[childPath]
-		if child == nil || !child.IsDir || child.IsSymlink {
-			continue
-		}
-		snapshot := vfs.computeReleaseSnapshotLocked(childPath)
-		facts := core.ReleaseChildFacts{
-			Path:         childPath,
-			VisibleCount: snapshot.VisibleCount,
-			HasSFV:       snapshot.HasSFV,
-			HasNFO:       snapshot.HasNFO,
-		}
-		out[childPath] = facts
-	}
-
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-// GetImmediateChildDirProgress returns cached live SFV progress for direct
-// child release directories below parentDir.
-func (vfs *VirtualFileSystem) GetImmediateChildDirProgress(parentDir string) map[string]core.ReleaseProgressStat {
-	vfs.mu.RLock()
-	defer vfs.mu.RUnlock()
-
-	parentDir = cleanVFSPath(parentDir)
-	childPaths := vfs.children[parentDir]
-	if len(childPaths) == 0 {
-		return nil
-	}
-
-	out := make(map[string]core.ReleaseProgressStat, len(childPaths))
-	for childPath := range childPaths {
-		if vfs.isHiddenPathLocked(childPath) {
-			continue
-		}
-		child := vfs.files[childPath]
-		if child == nil || !child.IsDir || child.IsSymlink {
-			continue
-		}
-		snapshot := vfs.computeReleaseSnapshotLocked(childPath)
-		if snapshot.Total <= 0 && !snapshot.HasSFV {
-			continue
-		}
-		out[childPath] = core.ReleaseProgressStat{
-			Path:    childPath,
-			Present: snapshot.Present,
-			Total:   snapshot.Total,
-			HasSFV:  snapshot.HasSFV,
-		}
-	}
-
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
 func (vfs *VirtualFileSystem) GetReleaseStatusSnapshot(dirPath string) (*vfsReleaseSnapshot, int64, bool) {
 	vfs.mu.RLock()
 	defer vfs.mu.RUnlock()
@@ -625,7 +591,7 @@ func (vfs *VirtualFileSystem) GetVerifiedSFVPresentFilesFiltered(dirPath string,
 func (vfs *VirtualFileSystem) getVerifiedSFVPresentFilesLocked(dirPath string, excludeKeys map[string]bool) map[string]bool {
 	dirPath = cleanVFSPath(dirPath)
 	meta := vfs.dirMeta[dirPath]
-	if meta == nil || len(meta.SFVEntries) == 0 {
+	if !vfs.sfvMetaValidLocked(dirPath, meta) {
 		return nil
 	}
 
@@ -679,6 +645,7 @@ func (vfs *VirtualFileSystem) computeReleaseSnapshotLocked(dirPath string) *vfsR
 		if child.IsDir {
 			continue
 		}
+		snapshot.FileCount++
 		lower := strings.ToLower(name)
 		if strings.HasSuffix(lower, ".sfv") {
 			snapshot.HasSFV = true
@@ -687,7 +654,11 @@ func (vfs *VirtualFileSystem) computeReleaseSnapshotLocked(dirPath string) *vfsR
 			snapshot.HasNFO = true
 		}
 	}
-	cache := vfs.computeRaceStateFilteredLocked(dirPath, nil)
+	hasCurrentSFVFile := snapshot.HasSFV
+	cache := (*VFSRaceCache)(nil)
+	if hasCurrentSFVFile {
+		cache = vfs.computeRaceStateFilteredLocked(dirPath, nil)
+	}
 	if cache != nil {
 		snapshot.Present = cache.Present
 		snapshot.Total = cache.Total
@@ -695,85 +666,7 @@ func (vfs *VirtualFileSystem) computeReleaseSnapshotLocked(dirPath string) *vfsR
 			snapshot.HasSFV = true
 		}
 	}
-	if startup := vfs.startupFacts[dirPath]; startup != nil {
-		if startup.VisibleCount > snapshot.VisibleCount {
-			snapshot.VisibleCount = startup.VisibleCount
-		}
-		snapshot.HasSFV = snapshot.HasSFV || startup.HasSFV
-		snapshot.HasNFO = snapshot.HasNFO || startup.HasNFO
-		if startup.Total > snapshot.Total {
-			snapshot.Total = startup.Total
-		}
-		if startup.Present > snapshot.Present {
-			snapshot.Present = startup.Present
-		}
-	}
 	return snapshot
-}
-
-// SnapshotReleaseFacts captures lightweight per-release listing facts for all
-// visible directories so SlaveManager can persist and reuse them outside VFS.
-func (vfs *VirtualFileSystem) SnapshotReleaseFacts() map[string]*vfsReleaseSnapshot {
-	vfs.mu.RLock()
-	defer vfs.mu.RUnlock()
-
-	out := make(map[string]*vfsReleaseSnapshot)
-	for dirPath, file := range vfs.files {
-		if file == nil || !file.IsDir || file.IsSymlink || vfs.isHiddenPathLocked(dirPath) {
-			continue
-		}
-		snapshot := vfs.computeReleaseSnapshotLocked(dirPath)
-		if snapshot == nil {
-			continue
-		}
-		if snapshot.VisibleCount == 0 && !snapshot.HasSFV && !snapshot.HasNFO && snapshot.Present == 0 && snapshot.Total == 0 {
-			continue
-		}
-		copyState := *snapshot
-		out[dirPath] = &copyState
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-func (vfs *VirtualFileSystem) invalidateStartupFactsForPathLocked(path string, isDir bool) {
-	if len(vfs.startupFacts) == 0 {
-		return
-	}
-	path = cleanVFSPath(path)
-	dirPath := path
-	if !isDir {
-		dirPath = cleanVFSPath(filepath.Dir(path))
-	}
-	delete(vfs.startupFacts, dirPath)
-	if isDir {
-		prefix := strings.TrimRight(filepath.ToSlash(dirPath), "/") + "/"
-		for key := range vfs.startupFacts {
-			if key == dirPath || strings.HasPrefix(filepath.ToSlash(key), prefix) {
-				delete(vfs.startupFacts, key)
-			}
-		}
-	}
-}
-
-func (vfs *VirtualFileSystem) LoadStartupReleaseFacts(facts map[string]*vfsReleaseSnapshot) {
-	vfs.mu.Lock()
-	defer vfs.mu.Unlock()
-
-	if len(facts) == 0 {
-		vfs.startupFacts = make(map[string]*vfsReleaseSnapshot)
-		return
-	}
-	vfs.startupFacts = make(map[string]*vfsReleaseSnapshot, len(facts))
-	for dirPath, snapshot := range facts {
-		if snapshot == nil {
-			continue
-		}
-		copyState := *snapshot
-		vfs.startupFacts[cleanVFSPath(dirPath)] = &copyState
-	}
 }
 
 func (vfs *VirtualFileSystem) HydrateRaceFile(path, owner, group string, xferTime int64, checksum uint32) bool {
@@ -788,11 +681,11 @@ func (vfs *VirtualFileSystem) HydrateRaceFile(path, owner, group string, xferTim
 	changed := false
 	currentOwner := strings.TrimSpace(file.Owner)
 	currentGroup := strings.TrimSpace(file.Group)
-	if (currentOwner == "" || strings.EqualFold(currentOwner, "GoFTPd") || strings.EqualFold(currentOwner, "ftp")) && strings.TrimSpace(owner) != "" {
+	if isWeakMetadataValue(currentOwner) && !isWeakMetadataValue(owner) {
 		file.Owner = owner
 		changed = true
 	}
-	if (currentGroup == "" || strings.EqualFold(currentGroup, "GoFTPd") || strings.EqualFold(currentGroup, "ftp")) && strings.TrimSpace(group) != "" {
+	if isWeakMetadataValue(currentGroup) && !isWeakMetadataValue(group) {
 		file.Group = group
 		changed = true
 	}
@@ -808,6 +701,15 @@ func (vfs *VirtualFileSystem) HydrateRaceFile(path, owner, group string, xferTim
 		vfs.markPersistDirtyLocked()
 	}
 	return changed
+}
+
+func isWeakMetadataValue(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "goftpd", "ftp", "root", "0":
+		return true
+	default:
+		return false
+	}
 }
 
 // FileExists checks if a path exists in the VFS
@@ -891,7 +793,6 @@ func (vfs *VirtualFileSystem) RenameFile(from, to string) {
 	now := time.Now().Unix()
 	vfs.touchAncestorsLocked(fromParent, now)
 	vfs.touchAncestorsLocked(toParent, now)
-	vfs.startupFacts = make(map[string]*vfsReleaseSnapshot)
 	vfs.markPersistDirtyLocked()
 }
 
@@ -947,7 +848,6 @@ func (vfs *VirtualFileSystem) RelocateFile(from, to, newSlaveName string) {
 	now := time.Now().Unix()
 	vfs.touchAncestorsLocked(fromParent, now)
 	vfs.touchAncestorsLocked(toParent, now)
-	vfs.startupFacts = make(map[string]*vfsReleaseSnapshot)
 	vfs.markPersistDirtyLocked()
 }
 
@@ -970,7 +870,6 @@ func (vfs *VirtualFileSystem) ClearSlave(slaveName string) {
 			}
 		}
 		vfs.rebuildChildrenLocked()
-		vfs.startupFacts = make(map[string]*vfsReleaseSnapshot)
 		vfs.markPersistDirtyLocked()
 	}
 }
@@ -1104,6 +1003,8 @@ func (vfs *VirtualFileSystem) SaveToDisk(filePath string) error {
 			}
 		}
 		copyMeta.SFVName = meta.SFVName
+		copyMeta.SFVChecksum = meta.SFVChecksum
+		copyMeta.SFVAllowWithoutFile = meta.SFVAllowWithoutFile
 		snapshot.DirMeta[dirPath] = copyMeta
 	}
 	vfs.mu.RUnlock()
@@ -1282,11 +1183,22 @@ func cleanVFSPath(p string) string {
 	return p
 }
 
-// SetSFVData caches parsed SFV entries on a directory (like drftpd's pluginMetaData).
+// SetSFVData caches parsed SFV entries on a directory.
 func (vfs *VirtualFileSystem) SetSFVData(dirPath string, sfvName string, entries map[string]uint32) {
+	vfs.setSFVData(dirPath, sfvName, 0, entries, true)
+}
+
+// SetSFVDataWithChecksum caches parsed SFV entries plus the checksum of the
+// SFV file itself. The checksum lets stale metadata be ignored if the .sfv in
+// the current VFS no longer matches the parse result.
+func (vfs *VirtualFileSystem) SetSFVDataWithChecksum(dirPath string, sfvName string, sfvChecksum uint32, entries map[string]uint32) {
+	vfs.setSFVData(dirPath, sfvName, sfvChecksum, entries, false)
+}
+
+func (vfs *VirtualFileSystem) setSFVData(dirPath string, sfvName string, sfvChecksum uint32, entries map[string]uint32, allowWithoutFile bool) {
 	vfs.mu.Lock()
 	defer vfs.mu.Unlock()
-	dirPath = filepath.Clean(dirPath)
+	dirPath = cleanVFSPath(dirPath)
 	normalized := make(map[string]uint32, len(entries))
 	for name, crc := range entries {
 		name = raceFileKey(name)
@@ -1300,7 +1212,9 @@ func (vfs *VirtualFileSystem) SetSFVData(dirPath string, sfvName string, entries
 		vfs.dirMeta[dirPath] = meta
 	}
 	meta.SFVEntries = normalized
-	meta.SFVName = sfvName
+	meta.SFVName = strings.TrimSpace(filepath.Base(sfvName))
+	meta.SFVChecksum = sfvChecksum
+	meta.SFVAllowWithoutFile = allowWithoutFile
 	vfs.markPersistDirtyLocked()
 }
 
@@ -1308,7 +1222,12 @@ func (vfs *VirtualFileSystem) SetSFVData(dirPath string, sfvName string, entries
 func (vfs *VirtualFileSystem) GetSFVData(dirPath string) *VFSDirMeta {
 	vfs.mu.RLock()
 	defer vfs.mu.RUnlock()
-	return vfs.dirMeta[filepath.Clean(dirPath)]
+	dirPath = cleanVFSPath(dirPath)
+	meta := vfs.dirMeta[dirPath]
+	if !vfs.sfvMetaValidLocked(dirPath, meta) {
+		return nil
+	}
+	return meta
 }
 
 // RaceUserStat holds per-user race statistics computed from VFS.
@@ -1498,7 +1417,7 @@ func (vfs *VirtualFileSystem) rebuildChildrenLocked() {
 func (vfs *VirtualFileSystem) computeRaceStateFilteredLocked(dirPath string, excludeKeys map[string]bool) *VFSRaceCache {
 	dirPath = cleanVFSPath(dirPath)
 	meta := vfs.dirMeta[dirPath]
-	if meta == nil || len(meta.SFVEntries) == 0 {
+	if !vfs.sfvMetaValidLocked(dirPath, meta) {
 		return nil
 	}
 
@@ -1527,12 +1446,19 @@ func (vfs *VirtualFileSystem) computeRaceStateFilteredLocked(dirPath string, exc
 		if f == nil {
 			continue
 		}
-		if expectedCRC != 0 && f.Checksum != expectedCRC {
+		checksumVerified := expectedCRC == 0 || f.Checksum == expectedCRC
+		// Remerge can load physical files without re-reading CRCs. For visible
+		// completeness markers, an existing file with an unknown checksum still
+		// counts as present; known mismatches stay excluded.
+		if expectedCRC != 0 && f.Checksum != 0 && f.Checksum != expectedCRC {
 			continue
 		}
 		cache.Present++
 		cache.TotalBytes += f.Size
 
+		if !checksumVerified {
+			continue
+		}
 		if f.XferTime <= 0 {
 			continue
 		}
@@ -1631,6 +1557,25 @@ func (vfs *VirtualFileSystem) computeRaceStateFilteredLocked(dirPath string, exc
 	})
 
 	return cache
+}
+
+func (vfs *VirtualFileSystem) sfvMetaValidLocked(dirPath string, meta *VFSDirMeta) bool {
+	if meta == nil || len(meta.SFVEntries) == 0 {
+		return false
+	}
+	sfvName := strings.TrimSpace(meta.SFVName)
+	if sfvName == "" {
+		return false
+	}
+	sfvPath := cleanVFSPath(filepath.ToSlash(filepath.Join(dirPath, filepath.Base(sfvName))))
+	sfvFile := vfs.files[sfvPath]
+	if sfvFile == nil || sfvFile.IsDir || sfvFile.IsSymlink {
+		return meta.SFVAllowWithoutFile
+	}
+	if meta.SFVChecksum != 0 && sfvFile.Checksum != 0 && meta.SFVChecksum != sfvFile.Checksum {
+		return false
+	}
+	return true
 }
 
 func (vfs *VirtualFileSystem) markPersistDirtyLocked() {

@@ -77,6 +77,9 @@ func (h *Handler) OnEvent(evt *plugin.Event) error {
 			"speed_mbs": speed,
 		})
 	}
+	if evt.Type == plugin.EventUpload {
+		h.cleanupUploadedFile(evt.Path, evt.Filename)
+	}
 	return nil
 }
 
@@ -135,6 +138,26 @@ func (h *Handler) createMissingFiles() bool {
 		}
 	}
 	return complete
+}
+
+func (h *Handler) cleanupUploadedFile(filePath, fileName string) {
+	if h.svc == nil || h.svc.Bridge == nil {
+		return
+	}
+	clean := path.Clean("/" + strings.TrimSpace(strings.ReplaceAll(filePath, "\\", "/")))
+	if clean == "." || clean == "/" {
+		clean = path.Join(h.dir, fileName)
+	}
+	if !h.inSpeedtestDir(clean) || strings.EqualFold(clean, h.dir) {
+		return
+	}
+	if err := h.svc.Bridge.DeleteFile(clean); err != nil {
+		if h.debug {
+			log.Printf("[SPEEDTEST] cleanup upload %s failed: %v", clean, err)
+		}
+		return
+	}
+	go h.createMissingFiles()
 }
 
 func (h *Handler) inSpeedtestDir(filePath string) bool {

@@ -36,6 +36,53 @@ func TestRequestCreatesIndexFile(t *testing.T) {
 	}
 }
 
+func TestFTPRequestEmitsAnnounceEvent(t *testing.T) {
+	bridge := newRequestTestBridge()
+	p := New()
+	var eventType, eventPath string
+	var eventData map[string]string
+	p.svc = &plugin.Services{
+		Bridge: bridge,
+		EmitEvent: func(evtType, evtPath, filename, section string, size int64, speed float64, data map[string]string) {
+			eventType = evtType
+			eventPath = evtPath
+			eventData = data
+		},
+	}
+
+	ctx := &requestTestCtx{user: "alice", group: "iND", flags: "1"}
+	p.HandleSiteCommand(ctx, "REQUEST", []string{"Some.Release-TEST"})
+
+	if eventType != "CUSTOM" {
+		t.Fatalf("expected CUSTOM event, got %q", eventType)
+	}
+	if eventPath != "/REQUESTS/REQ-Some.Release-TEST" {
+		t.Fatalf("unexpected event path %q", eventPath)
+	}
+	if eventData["template"] != "REQUESTADD" || eventData["requester"] != "alice" {
+		t.Fatalf("unexpected request event data %#v", eventData)
+	}
+}
+
+func TestProxyRequestDoesNotEmitDuplicateAnnounceEvent(t *testing.T) {
+	bridge := newRequestTestBridge()
+	p := New()
+	emitted := false
+	p.svc = &plugin.Services{
+		Bridge: bridge,
+		EmitEvent: func(string, string, string, string, int64, float64, map[string]string) {
+			emitted = true
+		},
+	}
+
+	bot := &requestTestCtx{user: "goftpd", group: "sitebot", flags: "1"}
+	p.HandleSiteCommand(bot, "REQUEST", []string{"-by:ircUser", "Proxy.Request-TEST"})
+
+	if emitted {
+		t.Fatalf("did not expect proxied sitebot request to emit a duplicate announce event")
+	}
+}
+
 func TestReqFillRecoversExistingRequestDirWithoutIndexFile(t *testing.T) {
 	bridge := newRequestTestBridge()
 	bridge.addDir("/REQUESTS", "GoFTPd", "GoFTPd")

@@ -241,6 +241,8 @@ func (r *RaceDB) RecordUpload(filePath, owner, group string, size int64, duratio
             is_present = 1,
             updated_at = strftime('%s','now')
         WHERE release_files.is_present = 0
+           OR trim(release_files.uploader) = ''
+           OR lower(trim(release_files.uploader)) IN ('goftpd', 'ftp', 'root', '0')
     `, releaseID, fileName, owner, group, size, durationMs, int64(checksum))
 	return err
 }
@@ -270,6 +272,11 @@ func (r *RaceDB) ReplaceReleaseFiles(dirPath, sfvName string, entries map[string
 
 	var releaseID int64
 	if err := tx.QueryRow(`SELECT id FROM releases WHERE path = ?`, dirPath).Scan(&releaseID); err != nil {
+		return err
+	}
+
+	existingFiles, err := existingReleaseFilesTx(tx, releaseID)
+	if err != nil {
 		return err
 	}
 
@@ -308,6 +315,9 @@ func (r *RaceDB) ReplaceReleaseFiles(dirPath, sfvName string, entries map[string
 			}
 			continue
 		}
+		if existing, ok := existingFiles[fileName]; ok {
+			record = mergeRaceFileRecord(record, existing)
+		}
 		if _, err := tx.Exec(`
             INSERT INTO release_files(
                 release_id, filename, uploader, grp, size_bytes, duration_ms,
@@ -319,6 +329,55 @@ func (r *RaceDB) ReplaceReleaseFiles(dirPath, sfvName string, entries map[string
 	}
 
 	return tx.Commit()
+}
+
+func existingReleaseFilesTx(tx *sql.Tx, releaseID int64) (map[string]ReleaseFileRecord, error) {
+	rows, err := tx.Query(`
+        SELECT filename, uploader, grp, size_bytes, duration_ms, checksum
+        FROM release_files
+        WHERE release_id = ? AND is_present = 1
+    `, releaseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string]ReleaseFileRecord)
+	for rows.Next() {
+		var rec ReleaseFileRecord
+		var checksum int64
+		if err := rows.Scan(&rec.FileName, &rec.Owner, &rec.Group, &rec.SizeBytes, &rec.DurationMs, &checksum); err != nil {
+			return nil, err
+		}
+		rec.FileName = raceDBFileKey(rec.FileName)
+		rec.Checksum = uint32(checksum)
+		if rec.FileName != "" {
+			out[rec.FileName] = rec
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func mergeRaceFileRecord(next, existing ReleaseFileRecord) ReleaseFileRecord {
+	if isWeakMetadataValue(next.Owner) && !isWeakMetadataValue(existing.Owner) {
+		next.Owner = existing.Owner
+	}
+	if isWeakMetadataValue(next.Group) && !isWeakMetadataValue(existing.Group) {
+		next.Group = existing.Group
+	}
+	if next.SizeBytes <= 0 && existing.SizeBytes > 0 {
+		next.SizeBytes = existing.SizeBytes
+	}
+	if next.DurationMs <= 0 && existing.DurationMs > 0 {
+		next.DurationMs = existing.DurationMs
+	}
+	if next.Checksum == 0 && existing.Checksum != 0 {
+		next.Checksum = existing.Checksum
+	}
+	return next
 }
 
 func (r *RaceDB) DeletePath(path string, isDir bool) error {
@@ -422,45 +481,6 @@ func (r *RaceDB) Reconcile(vfs *VirtualFileSystem) error {
 	for _, dirPath := range stale {
 		if _, err := r.db.Exec(`DELETE FROM releases WHERE path = ?`, dirPath); err != nil {
 			return err
-		}
-	}
-
-	sfvRows, err := r.db.Query(`
-        SELECT rel.path, rel.sfv_name, rf.filename, rf.expected_crc32
-        FROM releases rel
-        JOIN release_files rf ON rf.release_id = rel.id
-        WHERE rel.sfv_name <> ''
-          AND rf.is_expected = 1
-        ORDER BY rel.path, rf.filename
-    `)
-	if err != nil {
-		return err
-	}
-	defer sfvRows.Close()
-
-	sfvNameByPath := make(map[string]string)
-	sfvByPath := make(map[string]map[string]uint32)
-	for sfvRows.Next() {
-		var dirPath, sfvName, fileName string
-		var expectedCRC int64
-		if err := sfvRows.Scan(&dirPath, &sfvName, &fileName, &expectedCRC); err != nil {
-			return err
-		}
-		if sfvByPath[dirPath] == nil {
-			sfvByPath[dirPath] = make(map[string]uint32)
-		}
-		sfvNameByPath[dirPath] = sfvName
-		fileName = raceDBFileKey(fileName)
-		if fileName != "" {
-			sfvByPath[dirPath][fileName] = uint32(expectedCRC)
-		}
-	}
-	if err := sfvRows.Err(); err != nil {
-		return err
-	}
-	for dirPath, entries := range sfvByPath {
-		if len(entries) > 0 {
-			vfs.SetSFVData(dirPath, sfvNameByPath[dirPath], entries)
 		}
 	}
 
@@ -756,64 +776,6 @@ func (r *RaceDB) HasRelease(dirPath string) bool {
 	var one int
 	err := r.db.QueryRow(`SELECT 1 FROM releases WHERE path = ? LIMIT 1`, dirPath).Scan(&one)
 	return err == nil && one == 1
-}
-
-func (r *RaceDB) GetImmediateReleaseProgress(parentDir string) map[string]core.ReleaseProgressStat {
-	if r == nil || r.db == nil {
-		return nil
-	}
-	parentDir = filepath.Clean(parentDir)
-	if parentDir == "." || parentDir == "" || parentDir == "/" {
-		return nil
-	}
-
-	rows, err := r.db.Query(`
-        WITH present_counts AS (
-            SELECT e.release_id AS release_id, COUNT(*) AS present
-            FROM release_files e
-            JOIN release_files p
-              ON p.release_id = e.release_id
-             AND p.is_present = 1
-             AND p.filename = e.filename
-             AND p.checksum = e.expected_crc32
-            WHERE e.is_expected = 1
-            GROUP BY e.release_id
-        )
-        SELECT rel.path, rel.total_expected, COALESCE(pc.present, 0), CASE WHEN rel.sfv_name <> '' THEN 1 ELSE 0 END
-        FROM releases rel
-        LEFT JOIN present_counts pc ON pc.release_id = rel.id
-        WHERE rel.path LIKE ?
-          AND rel.path NOT LIKE ?
-    `, parentDir+"/%", parentDir+"/%/%")
-	if err != nil {
-		log.Printf("[RaceDB] immediate release progress query failed for %s: %v", parentDir, err)
-		return nil
-	}
-	defer rows.Close()
-
-	out := map[string]core.ReleaseProgressStat{}
-	for rows.Next() {
-		var path string
-		var total, present, hasSFVInt int
-		if err := rows.Scan(&path, &total, &present, &hasSFVInt); err != nil {
-			log.Printf("[RaceDB] immediate release progress row scan failed for %s: %v", parentDir, err)
-			return nil
-		}
-		out[path] = core.ReleaseProgressStat{
-			Path:    path,
-			Present: present,
-			Total:   total,
-			HasSFV:  hasSFVInt != 0,
-		}
-	}
-	if err := rows.Err(); err != nil {
-		log.Printf("[RaceDB] immediate release progress iteration failed for %s: %v", parentDir, err)
-		return nil
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }
 
 func raceDBFileKey(name string) string {

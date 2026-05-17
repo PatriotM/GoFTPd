@@ -112,10 +112,25 @@ Edit `etc/config.yml` before running it for real. The same config file is used
 for master and slave mode; `mode: master` or `mode: slave` decides which blocks
 are active.
 
+You can also point the daemon at an explicit config file:
+
+```bash
+./goftpd --config config-slave-example.yml
+```
+
 In `mode: slave`, the slave-specific runtime comes from the `slave:` block.
 `slave.roots` is required, and slave mode no longer falls back to
 `storage_path` for roots. Shared top-level runtime settings such as `tls_*`,
 `log_*`, `debug`, and `timezone` still apply to both roles.
+
+For a slave-only box, start from the minimal sample instead of trimming down
+the full master config:
+
+```bash
+cp config-slave-example.yml config-slave.yml
+vim config-slave.yml
+./goftpd --config config-slave.yml
+```
 
 Edit `sitebot/etc/config.yml` before starting the sitebot. The daemon and
 sitebot must use the same `event_fifo` path.
@@ -133,6 +148,7 @@ Main files:
 |------|---------|
 | `etc/config.yml` | Active daemon config |
 | `etc/config-example.yml` | Annotated daemon example |
+| `config-slave-example.yml` | Minimal slave-only daemon example |
 | `etc/permissions.yml` | ACL rules |
 | `etc/passwd` | Password hashes |
 | `etc/users/` | User records |
@@ -157,6 +173,14 @@ plugins:
 This keeps site-local plugin settings out of Git-tracked example files.
 
 ## Slaves
+
+For a slave-only install, copy the minimal sample and run it from the same
+folder as the built binary:
+
+```bash
+cp config-slave-example.yml config-slave.yml
+./goftpd --config config-slave.yml
+```
 
 The master can route uploads by section, path, and weight:
 

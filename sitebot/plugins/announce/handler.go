@@ -201,7 +201,11 @@ func releaseName(evt *event.Event) string {
 	}
 	name := strings.ToLower(evt.Filename)
 	if strings.Contains(name, ".") {
-		return path.Base(path.Dir(clean))
+		releaseDir := path.Base(path.Dir(clean))
+		if strings.EqualFold(evt.Section, "REQUESTS") && isDirectRequestWrapperPath(path.Dir(clean)) {
+			return stripRequestWrapperPrefix(releaseDir)
+		}
+		return releaseDir
 	}
 	return base
 }
@@ -609,6 +613,9 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 			section, rel, formatAudioInfoSummary(vars))
 		outs = append(outs, plugin.Output{Type: "AUDIOINFO", Text: p.render("AUDIOINFO", vars, fallback)})
 	case event.EventMediaInfo:
+		if isSectionRootMetadataEvent(evt, section) {
+			return nil, nil
+		}
 		fallback := fmt.Sprintf("SAMPLE-INFO: [%s] %s - Video: %s - Audio: %s - Subs: %s - Duration: %s",
 			section, rel, formatSampleVideoLabel(vars), formatSampleAudioLabel(vars), formatSampleSubtitleLabel(vars), formatSampleDurationLabel(vars))
 		outs = append(outs, plugin.Output{Type: "MEDIAINFO", Text: p.render("MEDIAINFO", vars, fallback)})
@@ -663,6 +670,10 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 	case event.EventUpload:
 		if skipReleaseAnnounce {
 			return nil, nil
+		}
+		if isRequestRaceUploadPath(evt.Path, section) && !st.Created {
+			st.Created = true
+			outs = append(outs, plugin.Output{Type: "NEW", Text: p.renderNewLine(section, rel, vars)})
 		}
 		switch fileType {
 		case "nfo", "sample":
@@ -1206,12 +1217,74 @@ func isReleaseDir(eventPath, section string) bool {
 	if strings.EqualFold(path.Base(parent), sectionName) {
 		return true
 	}
+	if strings.EqualFold(sectionName, "REQUESTS") && isRequestWrapperName(path.Base(parent)) && strings.EqualFold(path.Base(path.Dir(parent)), "REQUESTS") {
+		return true
+	}
 
 	datedParent := path.Base(parent)
 	if !isDateDir(datedParent) {
 		return false
 	}
 	return strings.EqualFold(path.Base(path.Dir(parent)), sectionName)
+}
+
+func isRequestRaceUploadPath(eventPath, section string) bool {
+	if !strings.EqualFold(strings.Trim(section, "/"), "REQUESTS") {
+		return false
+	}
+	clean := strings.Trim(path.Clean("/"+strings.TrimSpace(eventPath)), "/")
+	if clean == "" {
+		return false
+	}
+	parts := strings.Split(clean, "/")
+	return len(parts) >= 3 && strings.EqualFold(parts[0], "REQUESTS") && isRequestWrapperName(parts[1])
+}
+
+func isDirectRequestWrapperPath(dirPath string) bool {
+	clean := strings.Trim(path.Clean("/"+strings.TrimSpace(dirPath)), "/")
+	if clean == "" {
+		return false
+	}
+	parts := strings.Split(clean, "/")
+	return len(parts) == 2 && strings.EqualFold(parts[0], "REQUESTS") && isRequestWrapperName(parts[1])
+}
+
+func isRequestWrapperName(name string) bool {
+	upper := strings.ToUpper(strings.TrimSpace(name))
+	return strings.HasPrefix(upper, "REQ-") || strings.HasPrefix(upper, "FILLED-")
+}
+
+func isSectionRootMetadataEvent(evt *event.Event, section string) bool {
+	if evt == nil {
+		return false
+	}
+	clean := strings.Trim(path.Clean("/"+strings.TrimSpace(evt.Path)), "/")
+	if clean == "" {
+		return false
+	}
+	parts := strings.Split(clean, "/")
+	section = strings.Trim(section, "/")
+	if len(parts) == 1 {
+		return strings.EqualFold(parts[0], section)
+	}
+	if len(parts) == 2 {
+		switch strings.ToUpper(parts[0]) {
+		case "FOREIGN", "PRE", "ARCHIVE":
+			return strings.EqualFold(parts[1], section)
+		}
+	}
+	return false
+}
+
+func stripRequestWrapperPrefix(name string) string {
+	trimmed := strings.TrimSpace(name)
+	upper := strings.ToUpper(trimmed)
+	for _, prefix := range []string{"FILLED-", "REQ-"} {
+		if strings.HasPrefix(upper, prefix) {
+			return strings.TrimSpace(trimmed[len(prefix):])
+		}
+	}
+	return trimmed
 }
 
 func isDateDir(name string) bool {

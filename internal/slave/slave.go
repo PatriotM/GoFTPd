@@ -28,6 +28,7 @@ import (
 const (
 	socketTimeout             = 10 * time.Second
 	actualTimeout             = 60 * time.Second
+	diskStatusInterval        = 15 * time.Second
 	minTransferBufferSize     = 32 * 1024
 	defaultTransferBufferSize = 256 * 1024
 )
@@ -72,6 +73,12 @@ func (s *Slave) writeObject(obj interface{}) error {
 		s.lastWriteTime.Store(time.Now().UnixMilli())
 	}
 	return err
+}
+
+func (s *Slave) writeObjectNoActivity(obj interface{}) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.stream.WriteObject(obj)
 }
 
 // SlaveConfig holds slave configuration loaded from YAML
@@ -349,8 +356,33 @@ func (s *Slave) connectAndRun() error {
 	s.online.Store(true)
 	log.Printf("[Slave] Registered as '%s', entering command loop", s.name)
 
+	stopDiskStatus := make(chan struct{})
+	defer close(stopDiskStatus)
+	go s.diskStatusLoop(stopDiskStatus)
+
 	// Block on command loop
 	return s.listenForCommands()
+}
+
+func (s *Slave) diskStatusLoop(stop <-chan struct{}) {
+	ticker := time.NewTicker(diskStatusInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if !s.online.Load() {
+				continue
+			}
+			if err := s.writeObjectNoActivity(&protocol.AsyncResponseDiskStatus{Status: s.getDiskStatus()}); err != nil {
+				log.Printf("[Slave] Error sending periodic disk status: %v", err)
+				s.shutdown()
+				return
+			}
+		case <-stop:
+			return
+		}
+	}
 }
 
 // listenForCommands reads AsyncCommand objects from master and dispatches them.

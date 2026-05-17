@@ -302,6 +302,32 @@ func TestVFSPurgeUnseenChildrenRemovesGhostFilesForScannedDir(t *testing.T) {
 	}
 }
 
+func TestVFSScopedRemergePurgesUnseenSubtreeOnly(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/TV-1080P", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	vfs.AddFile("/TV-1080P/old", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	vfs.AddFile("/TV-1080P/old/file.r00", VFSFile{Size: 100, Seen: true, SlaveName: "LOCAL"})
+	vfs.AddFile("/TV-1080P/keep", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	vfs.AddFile("/X265/other", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+
+	vfs.MarkSubtreeUnseen("LOCAL", "/TV-1080P")
+	vfs.AddFile("/TV-1080P/keep", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	vfs.PurgeUnseenSubtree("LOCAL", "/TV-1080P")
+
+	if got := vfs.GetFile("/TV-1080P/old"); got != nil {
+		t.Fatalf("expected scoped ghost dir to be purged, got %+v", got)
+	}
+	if got := vfs.GetFile("/TV-1080P/old/file.r00"); got != nil {
+		t.Fatalf("expected scoped ghost file to be purged, got %+v", got)
+	}
+	if got := vfs.GetFile("/TV-1080P/keep"); got == nil {
+		t.Fatalf("expected re-seen scoped dir to remain")
+	}
+	if got := vfs.GetFile("/X265/other"); got == nil {
+		t.Fatalf("expected unrelated dir outside scoped path to remain")
+	}
+}
+
 func TestParentDirModTimeBubblesOnChanges(t *testing.T) {
 	vfs := NewVirtualFileSystem()
 	vfs.AddFile("/site", VFSFile{IsDir: true, Seen: true, LastModified: 1})
@@ -506,33 +532,97 @@ func TestVFSAddFilePreservesVerifiedTransferDataAcrossRemerge(t *testing.T) {
 	}
 }
 
-func TestVFSImmediateChildDirProgressUsesLiveVerifiedFiles(t *testing.T) {
+func TestVFSAddFilePreservesStrongOwnerAcrossRescan(t *testing.T) {
 	vfs := NewVirtualFileSystem()
-	vfs.AddFile("/X265/release", VFSFile{IsDir: true, Seen: true})
-	vfs.SetSFVData("/X265/release", "release.sfv", map[string]uint32{
-		"good.r00": 1,
-		"bad.r01":  2,
-	})
-	vfs.AddFile("/X265/release/good.r00", VFSFile{
-		Size:         100,
-		Seen:         true,
-		Checksum:     1,
-		LastModified: 100,
-	})
-	vfs.AddFile("/X265/release/bad.r01", VFSFile{
-		Size:         100,
-		Seen:         true,
-		Checksum:     0,
-		LastModified: 100,
+
+	vfs.AddFile("/X265/release/file.r00", VFSFile{
+		Size:      476800000,
+		Seen:      true,
+		SlaveName: "LOCAL",
+		Owner:     "Neptun",
+		Group:     "iND",
+		Checksum:  12345,
+		XferTime:  5000,
 	})
 
-	progress := vfs.GetImmediateChildDirProgress("/X265")
-	stat, ok := progress["/X265/release"]
-	if !ok {
-		t.Fatalf("expected release progress entry, got %+v", progress)
+	vfs.AddFile("/X265/release/file.r00", VFSFile{
+		Size:      476800000,
+		Seen:      true,
+		SlaveName: "LOCAL",
+		Owner:     "GoFTPd",
+		Group:     "root",
+	})
+
+	got := vfs.GetFile("/X265/release/file.r00")
+	if got == nil {
+		t.Fatalf("expected file to remain present")
 	}
-	if stat.Present != 1 || stat.Total != 2 || !stat.HasSFV {
-		t.Fatalf("expected live verified progress 1/2 with sfv, got %+v", stat)
+	if got.Owner != "Neptun" || got.Group != "iND" {
+		t.Fatalf("expected strong owner/group to survive rescan, got %s/%s", got.Owner, got.Group)
+	}
+	if got.Checksum != 12345 || got.XferTime != 5000 {
+		t.Fatalf("expected transfer metadata to survive rescan, checksum=%d xfer=%d", got.Checksum, got.XferTime)
+	}
+}
+
+func TestVFSAddFilePreservesVerifiedTransferDataAcrossRemergeMtimeChange(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+
+	vfs.AddFile("/X265/release/file.r00", VFSFile{
+		Size:         476800000,
+		LastModified: 1714930000,
+		Seen:         true,
+		SlaveName:    "LOCAL",
+		Checksum:     12345,
+		XferTime:     5000,
+	})
+
+	vfs.AddFile("/X265/release/file.r00", VFSFile{
+		Size:         476800000,
+		LastModified: 1714931234,
+		Seen:         true,
+		SlaveName:    "LOCAL",
+	})
+
+	got := vfs.GetFile("/X265/release/file.r00")
+	if got == nil {
+		t.Fatalf("expected file to remain present")
+	}
+	if got.Checksum != 12345 {
+		t.Fatalf("expected checksum to survive same-size remerge, got %d", got.Checksum)
+	}
+	if got.XferTime != 5000 {
+		t.Fatalf("expected xfertime to survive same-size remerge, got %d", got.XferTime)
+	}
+}
+
+func TestVFSSFVMetadataRequiresCurrentSFVFileWhenStrict(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/X265/release", VFSFile{IsDir: true, Seen: true})
+	vfs.SetSFVDataWithChecksum("/X265/release", "release.sfv", 123, map[string]uint32{
+		"file.r00": 1,
+	})
+
+	if meta := vfs.GetSFVData("/X265/release"); meta != nil {
+		t.Fatalf("expected strict sfv metadata without current sfv file to be ignored, got %+v", meta)
+	}
+
+	vfs.AddFile("/X265/release/release.sfv", VFSFile{Seen: true, Checksum: 123})
+	if meta := vfs.GetSFVData("/X265/release"); meta == nil || len(meta.SFVEntries) != 1 {
+		t.Fatalf("expected metadata to become valid when current sfv file exists, got %+v", meta)
+	}
+}
+
+func TestVFSSFVMetadataRejectsMismatchedSFVChecksum(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/X265/release", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/X265/release/release.sfv", VFSFile{Seen: true, Checksum: 999})
+	vfs.SetSFVDataWithChecksum("/X265/release", "release.sfv", 123, map[string]uint32{
+		"file.r00": 1,
+	})
+
+	if meta := vfs.GetSFVData("/X265/release"); meta != nil {
+		t.Fatalf("expected mismatched sfv checksum metadata to be ignored, got %+v", meta)
 	}
 }
 
@@ -551,9 +641,17 @@ func TestVFSUpdateFileVerificationRefreshesRaceTruth(t *testing.T) {
 		Checksum: 0,
 	})
 
-	_, _, _, presentBefore, totalBefore := vfs.GetRaceStats("/X265/release")
-	if presentBefore != 0 || totalBefore != 1 {
-		t.Fatalf("expected file to be unverified before checksum refresh, got present=%d total=%d", presentBefore, totalBefore)
+	verifiedBefore := vfs.GetVerifiedSFVPresentFiles("/X265/release")
+	if len(verifiedBefore) != 0 {
+		t.Fatalf("expected file to be unverified before checksum refresh, got %+v", verifiedBefore)
+	}
+
+	usersBefore, _, totalBytesBefore, presentBefore, totalBefore := vfs.GetRaceStats("/X265/release")
+	if presentBefore != 1 || totalBefore != 1 || totalBytesBefore != 100 {
+		t.Fatalf("expected unknown-CRC file to count for visible completeness only, got present=%d total=%d bytes=%d", presentBefore, totalBefore, totalBytesBefore)
+	}
+	if len(usersBefore) != 0 {
+		t.Fatalf("expected unknown-CRC file to stay out of verified race stats, got %+v", usersBefore)
 	}
 
 	if !vfs.UpdateFileVerification("/X265/release/file1.r00", 1) {

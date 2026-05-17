@@ -316,25 +316,35 @@ func (b *Bridge) ListDir(dirPath string) []core.MasterFileEntry {
 	vfsFiles := b.sm.GetVFS().ListDirectory(dirPath)
 	entries := make([]core.MasterFileEntry, 0, len(vfsFiles)+3)
 	for _, f := range vfsFiles {
-		entries = append(entries, core.MasterFileEntry{
-			Name:       filepath.Base(f.Path),
-			Size:       f.Size,
-			IsDir:      f.IsDir,
-			IsSymlink:  f.IsSymlink,
-			LinkTarget: f.LinkTarget,
-			Mode:       f.Mode,
-			ModTime:    f.LastModified,
-			Owner:      f.Owner,
-			Group:      f.Group,
-			Slave:      f.SlaveName,
-			XferTime:   f.XferTime,
-		})
+		if f == nil {
+			continue
+		}
+		entries = append(entries, masterEntryFromVFSFile(f))
 	}
 	entries = append(entries, b.virtualNukeEntries(dirPath)...)
 	sort.SliceStable(entries, func(i, j int) bool {
 		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
 	})
 	return entries
+}
+
+func masterEntryFromVFSFile(f *VFSFile) core.MasterFileEntry {
+	if f == nil {
+		return core.MasterFileEntry{}
+	}
+	return core.MasterFileEntry{
+		Name:       filepath.Base(f.Path),
+		Size:       f.Size,
+		IsDir:      f.IsDir,
+		IsSymlink:  f.IsSymlink,
+		LinkTarget: f.LinkTarget,
+		Mode:       f.Mode,
+		ModTime:    f.LastModified,
+		Owner:      f.Owner,
+		Group:      f.Group,
+		Slave:      f.SlaveName,
+		XferTime:   f.XferTime,
+	}
 }
 
 func (b *Bridge) virtualNukeEntries(dirPath string) []core.MasterFileEntry {
@@ -543,11 +553,10 @@ func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group s
 		return status.Transferred, status.Checksum, fmt.Errorf("%s", status.Error)
 	}
 
-	finalSize := status.Transferred
+	finalSize := finalUploadFileSize(status, position)
 	xferTime = status.Elapsed
 	checksum = status.Checksum
 	if position > 0 {
-		finalSize += position
 		finalChecksum, err := b.ChecksumFile(filePath)
 		if err != nil {
 			return written, checksum, fmt.Errorf("resume checksum: %w", err)
@@ -572,6 +581,16 @@ func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group s
 	b.sm.SyncStatusMarkersForPath(filePath, false)
 
 	return finalSize, checksum, nil
+}
+
+func finalUploadFileSize(status protocol.TransferStatus, position int64) int64 {
+	if status.FileSize > 0 {
+		return status.FileSize
+	}
+	if position > 0 {
+		return status.Transferred + position
+	}
+	return status.Transferred
 }
 
 // DownloadFile routes a download from a slave to the FTP client.
@@ -1052,8 +1071,9 @@ func (b *Bridge) copyFileBetweenSlaves(sourceSlave, destSlave *RemoteSlave, from
 	if destStatus.Error != "" {
 		return fmt.Errorf("destination transfer error for %s: %s", toPath, destStatus.Error)
 	}
-	if size > 0 && destStatus.Transferred != size {
-		return fmt.Errorf("archive copy size mismatch for %s: expected %d got %d", toPath, size, destStatus.Transferred)
+	destSize := finalUploadFileSize(destStatus, 0)
+	if size > 0 && destSize != size {
+		return fmt.Errorf("archive copy size mismatch for %s: expected %d got %d", toPath, size, destSize)
 	}
 	return nil
 }
@@ -1188,19 +1208,7 @@ func (b *Bridge) GetPathEntry(filePath string) (core.MasterFileEntry, bool) {
 	if f == nil {
 		return core.MasterFileEntry{}, false
 	}
-	return core.MasterFileEntry{
-		Name:       filepath.Base(f.Path),
-		Size:       f.Size,
-		IsDir:      f.IsDir,
-		IsSymlink:  f.IsSymlink,
-		LinkTarget: f.LinkTarget,
-		Mode:       f.Mode,
-		ModTime:    f.LastModified,
-		Owner:      f.Owner,
-		Group:      f.Group,
-		Slave:      f.SlaveName,
-		XferTime:   f.XferTime,
-	}, true
+	return masterEntryFromVFSFile(f), true
 }
 
 func (b *Bridge) ResolvePath(filePath string) string {
@@ -1376,10 +1384,10 @@ func (b *Bridge) ProbeMediaInfo(filePath, binary string, timeoutSeconds int) (ma
 }
 
 // GetSFVInfo asks a slave to parse an SFV file and return the entries.
-func (b *Bridge) GetSFVInfo(sfvPath string) ([]core.SFVEntryInfo, error) {
+func (b *Bridge) GetSFVInfo(sfvPath string) (core.SFVInfo, error) {
 	candidates, candidateErr := b.candidateSlavesForPath(sfvPath)
 	if candidateErr != nil {
-		return nil, candidateErr
+		return core.SFVInfo{}, candidateErr
 	}
 	var lastErr error
 	for _, slave := range candidates {
@@ -1404,15 +1412,15 @@ func (b *Bridge) GetSFVInfo(sfvPath string) ([]core.SFVEntryInfo, error) {
 			for i, e := range sfv.Entries {
 				entries[i] = core.SFVEntryInfo{FileName: e.FileName, CRC32: e.CRC32}
 			}
-			return entries, nil
+			return core.SFVInfo{Entries: entries, Checksum: sfv.Checksum}, nil
 		}
 
 		lastErr = fmt.Errorf("%s: unexpected response type: %T", slave.Name(), resp)
 	}
 	if lastErr != nil {
-		return nil, lastErr
+		return core.SFVInfo{}, lastErr
 	}
-	return nil, fmt.Errorf("sfv not found: %s", sfvPath)
+	return core.SFVInfo{}, fmt.Errorf("sfv not found: %s", sfvPath)
 }
 
 // WriteFile writes a small file to a slave.
@@ -1777,19 +1785,18 @@ func (d vfsDirEntry) Type() os.FileMode          { return d.info.Mode().Type() }
 func (d vfsDirEntry) Info() (os.FileInfo, error) { return d.info, nil }
 
 // CacheSFV stores parsed SFV entries on the VFS directory and persists them.
-func (b *Bridge) CacheSFV(dirPath string, sfvName string, entries []core.SFVEntryInfo) {
-	sfvMap := make(map[string]uint32, len(entries))
-	for _, e := range entries {
+func (b *Bridge) CacheSFV(dirPath string, sfvName string, info core.SFVInfo) {
+	sfvMap := make(map[string]uint32, len(info.Entries))
+	for _, e := range info.Entries {
 		sfvMap[e.FileName] = e.CRC32
 	}
-	b.sm.ResetReleaseRaceWindow(filepath.Clean(dirPath))
-	b.sm.GetVFS().SetSFVData(dirPath, sfvName, sfvMap)
+	b.sm.GetVFS().SetSFVDataWithChecksum(dirPath, sfvName, info.Checksum, sfvMap)
 	if b.raceDB != nil {
 		if err := b.raceDB.SaveSFV(filepath.Clean(dirPath), sfvName, sfvMap); err != nil {
 			log.Printf("[Bridge] Race DB SFV sync failed for %s: %v", dirPath, err)
 		}
 	}
-	log.Printf("[Bridge] Cached SFV for %s: %d entries", dirPath, len(entries))
+	log.Printf("[Bridge] Cached SFV for %s: %d entries", dirPath, len(info.Entries))
 }
 
 func (b *Bridge) CacheMediaInfo(dirPath string, fields map[string]string) {
@@ -1877,76 +1884,6 @@ func (b *Bridge) GetVFSRaceStatsFresh(dirPath string) ([]core.VFSRaceUser, []cor
 	return coreUsers, coreGroups, totalBytes, present, total
 }
 
-func mergeReleaseProgress(primary, fallback map[string]core.ReleaseProgressStat) map[string]core.ReleaseProgressStat {
-	if len(primary) == 0 {
-		if len(fallback) == 0 {
-			return nil
-		}
-		out := make(map[string]core.ReleaseProgressStat, len(fallback))
-		for key, value := range fallback {
-			out[key] = value
-		}
-		return out
-	}
-	if len(fallback) == 0 {
-		return primary
-	}
-	out := make(map[string]core.ReleaseProgressStat, len(primary)+len(fallback))
-	for key, value := range fallback {
-		out[key] = value
-	}
-	for key, value := range primary {
-		out[key] = value
-	}
-	return out
-}
-
-func mergeReleaseChildFacts(primary, fallback map[string]core.ReleaseChildFacts) map[string]core.ReleaseChildFacts {
-	if len(primary) == 0 {
-		if len(fallback) == 0 {
-			return nil
-		}
-		out := make(map[string]core.ReleaseChildFacts, len(fallback))
-		for key, value := range fallback {
-			out[key] = value
-		}
-		return out
-	}
-	if len(fallback) == 0 {
-		return primary
-	}
-	out := make(map[string]core.ReleaseChildFacts, len(primary)+len(fallback))
-	for key, value := range fallback {
-		out[key] = value
-	}
-	for key, value := range primary {
-		out[key] = value
-	}
-	return out
-}
-
-func (b *Bridge) GetImmediateReleaseProgress(dirPath string) map[string]core.ReleaseProgressStat {
-	if b == nil || b.sm == nil {
-		return nil
-	}
-	cleanDirPath := filepath.Clean(dirPath)
-	return mergeReleaseProgress(
-		b.sm.GetImmediateReleaseProgress(cleanDirPath),
-		b.sm.GetVFS().GetImmediateChildDirProgress(cleanDirPath),
-	)
-}
-
-func (b *Bridge) GetImmediateReleaseChildFacts(dirPath string) map[string]core.ReleaseChildFacts {
-	if b == nil || b.sm == nil {
-		return nil
-	}
-	cleanDirPath := filepath.Clean(dirPath)
-	return mergeReleaseChildFacts(
-		b.sm.GetImmediateReleaseChildFacts(cleanDirPath),
-		b.sm.GetVFS().GetImmediateChildDirFacts(cleanDirPath),
-	)
-}
-
 func (b *Bridge) PluginGetVFSRaceStats(dirPath string) ([]plugin.RaceUser, []plugin.RaceGroup, int64, int, int) {
 	coreUsers, coreGroups, totalBytes, present, total := b.GetVFSRaceStats(dirPath)
 	users := make([]plugin.RaceUser, 0, len(coreUsers))
@@ -1978,6 +1915,13 @@ func (b *Bridge) PluginGetVFSRaceStats(dirPath string) ([]plugin.RaceUser, []plu
 // unknown.
 func (b *Bridge) GetRaceWallClockMilliseconds(dirPath string) int64 {
 	return b.sm.GetReleaseRaceWindowMilliseconds(filepath.Clean(dirPath))
+}
+
+func (b *Bridge) StartReleaseRaceWindow(dirPath string, startMs int64) {
+	if b == nil || b.sm == nil {
+		return
+	}
+	b.sm.StartReleaseRaceWindowAt(filepath.Clean(dirPath), startMs)
 }
 
 func (b *Bridge) NoteRacePayloadTransfer(dirPath, fileName string, durationMs int64) {
@@ -2039,10 +1983,16 @@ func (b *Bridge) CacheReleaseProgress(dirPath string, present, total int, hasMan
 		return
 	}
 	cleanDirPath := filepath.Clean(dirPath)
-	parent := filepath.Clean(filepath.Dir(cleanDirPath))
-	facts := b.sm.GetVFS().GetImmediateChildDirFacts(parent)[cleanDirPath]
+	facts := core.ReleaseChildFacts{Path: cleanDirPath}
+	if current, _, ok := b.sm.GetVFS().GetReleaseStatusSnapshot(cleanDirPath); ok && current != nil {
+		facts.VisibleCount = current.VisibleCount
+		facts.FileCount = current.FileCount
+		facts.HasSFV = current.HasSFV
+		facts.HasNFO = current.HasNFO
+	}
 	snapshot := &vfsReleaseSnapshot{
 		VisibleCount: facts.VisibleCount,
+		FileCount:    facts.FileCount,
 		HasSFV:       facts.HasSFV || hasManifest,
 		HasNFO:       facts.HasNFO,
 		Present:      present,
@@ -2232,10 +2182,9 @@ func (b *Bridge) SlaveReceivePassthrough(filePath string, transferIdx int32, sla
 		return status.Transferred, status.Checksum, status.Elapsed, fmt.Errorf("%s", status.Error)
 	}
 
-	finalSize := status.Transferred
+	finalSize := finalUploadFileSize(status, position)
 	finalChecksum := status.Checksum
 	if position > 0 {
-		finalSize += position
 		if checksum, err := b.ChecksumFile(filePath); err == nil {
 			finalChecksum = checksum
 		}
@@ -2360,10 +2309,9 @@ func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group strin
 		return status.Transferred, status.Checksum, status.Elapsed, fmt.Errorf("%s", status.Error)
 	}
 
-	finalSize := status.Transferred
+	finalSize := finalUploadFileSize(status, position)
 	finalChecksum := status.Checksum
 	if position > 0 {
-		finalSize += position
 		if checksum, err := b.ChecksumFile(filePath); err == nil {
 			finalChecksum = checksum
 		}

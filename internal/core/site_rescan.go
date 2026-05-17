@@ -361,12 +361,13 @@ func (s *Session) rescanSingleFile(bridge MasterBridge, filePath string, opts re
 	result.SFV = sfvName
 
 	sfvPath := path.Join(releasePath, sfvName)
-	entries, err := bridge.GetSFVInfo(sfvPath)
+	sfvInfo, err := bridge.GetSFVInfo(sfvPath)
 	if err != nil {
 		result.Errors = append(result.Errors, err.Error())
 		return result
 	}
-	bridge.CacheSFV(releasePath, sfvName, entries)
+	entries := sfvInfo.Entries
+	bridge.CacheSFV(releasePath, sfvName, sfvInfo)
 	result.Total = len(entries)
 
 	var matched *SFVEntryInfo
@@ -420,11 +421,12 @@ func (s *Session) rescanRelease(bridge MasterBridge, releasePath string, opts re
 		result.SFV = sfvName
 
 		sfvPath := path.Join(releasePath, sfvName)
-		entries, err := bridge.GetSFVInfo(sfvPath)
+		sfvInfo, err := bridge.GetSFVInfo(sfvPath)
 		if err != nil {
 			result.Errors = append(result.Errors, err.Error())
 		} else {
-			bridge.CacheSFV(releasePath, sfvName, entries)
+			entries := sfvInfo.Entries
+			bridge.CacheSFV(releasePath, sfvName, sfvInfo)
 			result.Total = len(entries)
 			reconcile := reconcileReleaseSFVEntries(bridge, releasePath, entries, opts, report)
 			result.OK = reconcile.OK
