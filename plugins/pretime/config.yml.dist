@@ -75,6 +75,8 @@ api:
     - name: "predb.club"
       url: "https://predb.club/api/v1/?q=%22{release}%22"
       unix_time_path: "data.rows.0.preAt"
+      name_path: "data.rows.0.name"
     - name: "predb.net"
       url: "https://api.predb.net/?release={release}"
       unix_time_path: "data.0.pretime"
+      name_path: "data.0.name"

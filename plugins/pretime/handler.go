@@ -97,14 +97,16 @@ type apiProvider struct {
 	Name         string
 	URL          string
 	UnixTimePath string
+	NamePath     string
 }
 
 type job struct {
-	path    string
-	relname string
-	section string
-	user    string
-	group   string
+	path      string
+	relname   string
+	section   string
+	user      string
+	group     string
+	createdAt time.Time
 }
 
 func New() *Handler {
@@ -136,11 +138,13 @@ func New() *Handler {
 					Name:         "predb.club",
 					URL:          "https://predb.club/api/v1/?q=%22{release}%22",
 					UnixTimePath: "data.rows.0.preAt",
+					NamePath:     "data.rows.0.name",
 				},
 				{
 					Name:         "predb.net",
 					URL:          "https://api.predb.net/?release={release}",
 					UnixTimePath: "data.0.pretime",
+					NamePath:     "data.0.name",
 				},
 			},
 		},
@@ -258,14 +262,15 @@ func (h *Handler) OnEvent(evt *plugin.Event) error {
 		return nil
 	}
 
+	now := time.Now()
 	h.seenMu.Lock()
-	if ts, ok := h.seen[evt.Path]; ok && time.Since(ts) < 10*time.Minute {
+	if ts, ok := h.seen[evt.Path]; ok && now.Sub(ts) < 10*time.Minute {
 		h.seenMu.Unlock()
 		return nil
 	}
-	h.seen[evt.Path] = time.Now()
+	h.seen[evt.Path] = now
 	if len(h.seen) > 2000 {
-		cutoff := time.Now().Add(-30 * time.Minute)
+		cutoff := now.Add(-30 * time.Minute)
 		for k, seenAt := range h.seen {
 			if seenAt.Before(cutoff) {
 				delete(h.seen, k)
@@ -275,9 +280,10 @@ func (h *Handler) OnEvent(evt *plugin.Event) error {
 	h.seenMu.Unlock()
 
 	j := job{
-		path:    evt.Path,
-		relname: evt.Filename,
-		section: evt.Section,
+		path:      evt.Path,
+		relname:   evt.Filename,
+		section:   evt.Section,
+		createdAt: now,
 	}
 	if evt.User != nil {
 		j.user = evt.User.Name
@@ -316,7 +322,11 @@ func (h *Handler) processJob(j job) {
 	}
 
 	preAt := time.Unix(preUnix, 0)
-	age := time.Since(preAt)
+	ageAt := j.createdAt
+	if ageAt.IsZero() {
+		ageAt = time.Now()
+	}
+	age := ageAt.Sub(preAt)
 	if age < 0 {
 		age = 0
 	}
@@ -332,6 +342,8 @@ func (h *Handler) processJob(j job) {
 		"preage":         formatPreAge(age),
 		"predate":        preAt.Format("2006-01-02"),
 		"pretime":        preAt.Format("15:04:05"),
+		"mkdir_unix":     strconv.FormatInt(ageAt.Unix(), 10),
+		"mkdir_time":     ageAt.Format("15:04:05"),
 		"provider":       provider,
 		"u_name":         j.user,
 		"g_name":         j.group,
@@ -449,6 +461,10 @@ func (h *Handler) lookupAPI(release string) (int64, string, error) {
 			errs = append(errs, fmt.Sprintf("%s json failed: %v", provider.Name, err))
 			continue
 		}
+		if !apiResultMatchesRelease(payload, provider, release) {
+			errs = append(errs, fmt.Sprintf("%s first result did not match release", provider.Name))
+			continue
+		}
 		ts, ok := extractUnixTime(payload, provider.UnixTimePath)
 		if ok && ts > 0 {
 			name := strings.TrimSpace(provider.Name)
@@ -463,6 +479,35 @@ func (h *Handler) lookupAPI(release string) (int64, string, error) {
 		return 0, "", errors.New(strings.Join(errs, "; "))
 	}
 	return 0, "", nil
+}
+
+func apiResultMatchesRelease(payload interface{}, provider apiProvider, release string) bool {
+	release = strings.TrimSpace(release)
+	if release == "" {
+		return true
+	}
+	paths := []string{}
+	if p := strings.TrimSpace(provider.NamePath); p != "" {
+		paths = append(paths, p)
+	}
+	paths = append(paths,
+		"data.rows.0.name",
+		"data.0.name",
+		"data.0.release",
+		"data.0.title",
+		"data.name",
+		"data.release",
+		"name",
+		"release",
+	)
+	for _, pathExpr := range paths {
+		name, ok := extractString(payload, pathExpr)
+		if !ok {
+			continue
+		}
+		return strings.EqualFold(strings.TrimSpace(name), release)
+	}
+	return true
 }
 
 func lookupSQL(driver, dsn, table, releaseField, unixTimeField, release string) (int64, error) {
@@ -591,6 +636,43 @@ func extractUnixTime(payload interface{}, pathExpr string) (int64, bool) {
 	return ts, err == nil && ts > 0
 }
 
+func extractString(payload interface{}, pathExpr string) (string, bool) {
+	current := payload
+	pathExpr = strings.ReplaceAll(strings.TrimSpace(pathExpr), "[", ".")
+	pathExpr = strings.ReplaceAll(pathExpr, "]", "")
+	for _, part := range strings.Split(pathExpr, ".") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		switch node := current.(type) {
+		case map[string]interface{}:
+			next, ok := node[part]
+			if !ok {
+				return "", false
+			}
+			current = next
+		case []interface{}:
+			idx, err := strconv.Atoi(part)
+			if err != nil || idx < 0 || idx >= len(node) {
+				return "", false
+			}
+			current = node[idx]
+		default:
+			return "", false
+		}
+	}
+	switch v := current.(type) {
+	case string:
+		return v, strings.TrimSpace(v) != ""
+	case []byte:
+		s := string(v)
+		return s, strings.TrimSpace(s) != ""
+	default:
+		return "", false
+	}
+}
+
 func unixFromAny(raw interface{}) (int64, error) {
 	switch v := raw.(type) {
 	case int64:
@@ -650,6 +732,7 @@ func decodeAPIProviders(raw interface{}) []apiProvider {
 					Name:         strings.TrimSpace(stringConfig(m["name"], "")),
 					URL:          strings.TrimSpace(stringConfig(m["url"], "")),
 					UnixTimePath: strings.TrimSpace(stringConfig(m["unix_time_path"], "")),
+					NamePath:     strings.TrimSpace(stringConfig(m["name_path"], "")),
 				}
 				if p.URL != "" && p.UnixTimePath != "" {
 					out = append(out, p)
