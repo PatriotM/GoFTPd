@@ -3,6 +3,7 @@ package pretime
 import (
 	"database/sql"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -124,6 +125,74 @@ func TestProcessJobPreservesOriginalSection(t *testing.T) {
 
 	if gotSection != "TV-DE" {
 		t.Fatalf("expected original section TV-DE, got %q", gotSection)
+	}
+}
+
+func TestProcessJobCalculatesAgeAtMkdirTime(t *testing.T) {
+	h := New()
+	h.sqlite.Enabled = true
+	h.sqlite.Path = filepath.Join(t.TempDir(), "releases.db")
+	db := openSQLiteForTest(t, h.sqlite.Path)
+	if _, err := db.Exec(`CREATE TABLE releases (release TEXT PRIMARY KEY, timestamp_unix INTEGER)`); err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+	preAt := time.Now().Add(-1 * time.Hour).Truncate(time.Second)
+	mkdirAt := preAt.Add(5 * time.Second)
+	if _, err := db.Exec(`INSERT INTO releases (release, timestamp_unix) VALUES (?, ?)`, "Fresh.Release-GRP", preAt.Unix()); err != nil {
+		t.Fatalf("insert row: %v", err)
+	}
+	_ = db.Close()
+
+	var got map[string]string
+	h.svc = &plugin.Services{
+		EmitEvent: func(eventType, p, filename, section string, size int64, speed float64, data map[string]string) {
+			got = data
+		},
+	}
+
+	h.processJob(job{
+		path:      "/TV-720P/Fresh.Release-GRP",
+		relname:   "Fresh.Release-GRP",
+		section:   "TV-720P",
+		createdAt: mkdirAt,
+	})
+
+	if got == nil {
+		t.Fatalf("expected pretime event")
+	}
+	if got["preage_seconds"] != "5" {
+		t.Fatalf("expected age at mkdir time to be 5 seconds, got %q", got["preage_seconds"])
+	}
+	if got["mkdir_unix"] != strconv.FormatInt(mkdirAt.Unix(), 10) {
+		t.Fatalf("expected mkdir_unix %d, got %q", mkdirAt.Unix(), got["mkdir_unix"])
+	}
+}
+
+func TestAPIResultMatchesReleaseRequiresExactNameWhenPresent(t *testing.T) {
+	payload := map[string]interface{}{
+		"data": map[string]interface{}{
+			"rows": []interface{}{
+				map[string]interface{}{"name": "Other.Release-GRP", "preAt": float64(1714200000)},
+			},
+		},
+	}
+
+	if apiResultMatchesRelease(payload, apiProvider{NamePath: "data.rows.0.name"}, "Wanted.Release-GRP") {
+		t.Fatalf("expected fuzzy API result to be rejected")
+	}
+}
+
+func TestAPIResultMatchesReleaseAllowsExactName(t *testing.T) {
+	payload := map[string]interface{}{
+		"data": map[string]interface{}{
+			"rows": []interface{}{
+				map[string]interface{}{"name": "Wanted.Release-GRP", "preAt": float64(1714200000)},
+			},
+		},
+	}
+
+	if !apiResultMatchesRelease(payload, apiProvider{NamePath: "data.rows.0.name"}, "Wanted.Release-GRP") {
+		t.Fatalf("expected exact API result to be accepted")
 	}
 }
 

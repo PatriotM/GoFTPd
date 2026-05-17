@@ -110,6 +110,14 @@ slave:
                                 # Keep this aligned with master.heartbeat_timeout.
   ignore_partial_remerge: false # If true, the slave ignores partial remerge requests
                                 # and always performs a full scan.
+  remerge_delay_ms: 0           # Optional sleep after each scanned directory.
+                                # Set 5-25 on slow/NFS/archive disks if remerge
+                                # causes high iowait.
+  remerge_pause_on_active_transfers: 0
+                                # Optional safety valve for slow disks. If >0,
+                                # pause remerge while this many uploads/downloads
+                                # are active on the slave. Example: 1 pauses
+                                # remerge while any transfer is running.
   transfer_buffer_size: 262144  # Optional slave data-transfer buffer size in bytes.
                                 # Default is 262144 (256 KiB). Minimum is 32768.
 

@@ -49,6 +49,7 @@ type Slave struct {
 	bindIP               string
 	ignorePartialRemerge bool
 	transferBufferSize   int
+	freeSpaceMB          int
 	debug                bool
 
 	conn            net.Conn
@@ -57,10 +58,13 @@ type Slave struct {
 	transfers       sync.Map   // transferIndex (int32) -> *Transfer
 	nextTransferIdx int32
 
-	online        atomic.Bool
-	lastWriteTime atomic.Int64 // UnixMilli of last successful write
-	timeout       time.Duration
-	remergePaused atomic.Bool
+	online                        atomic.Bool
+	lastWriteTime                 atomic.Int64 // UnixMilli of last successful write
+	timeout                       time.Duration
+	remergePaused                 atomic.Bool
+	remergeActive                 atomic.Bool
+	remergeDelay                  time.Duration
+	remergePauseOnActiveTransfers int
 }
 
 // writeObject sends an object to the master with mutex protection.
@@ -83,21 +87,24 @@ func (s *Slave) writeObjectNoActivity(obj interface{}) error {
 
 // SlaveConfig holds slave configuration loaded from YAML
 type SlaveConfig struct {
-	Name                 string        `yaml:"name"`
-	MasterHost           string        `yaml:"master_host"`
-	MasterPort           int           `yaml:"master_port"`
-	Roots                []string      `yaml:"roots"` // e.g. ["/data/site", "/data2/site"]
-	MountedRoots         []MountedRoot `yaml:"mounted_roots"`
-	PasvPortMin          int           `yaml:"pasv_port_min"`
-	PasvPortMax          int           `yaml:"pasv_port_max"`
-	TLSEnabled           bool          `yaml:"tls_enabled"`
-	TLSCert              string        `yaml:"tls_cert"`
-	TLSKey               string        `yaml:"tls_key"`
-	BindIP               string        `yaml:"bind_ip"`
-	Timeout              int           `yaml:"timeout"` // seconds, default 60
-	IgnorePartialRemerge bool          `yaml:"ignore_partial_remerge"`
-	TransferBufferSize   int           `yaml:"transfer_buffer_size"`
-	Debug                bool
+	Name                          string        `yaml:"name"`
+	MasterHost                    string        `yaml:"master_host"`
+	MasterPort                    int           `yaml:"master_port"`
+	Roots                         []string      `yaml:"roots"` // e.g. ["/data/site", "/data2/site"]
+	MountedRoots                  []MountedRoot `yaml:"mounted_roots"`
+	PasvPortMin                   int           `yaml:"pasv_port_min"`
+	PasvPortMax                   int           `yaml:"pasv_port_max"`
+	TLSEnabled                    bool          `yaml:"tls_enabled"`
+	TLSCert                       string        `yaml:"tls_cert"`
+	TLSKey                        string        `yaml:"tls_key"`
+	BindIP                        string        `yaml:"bind_ip"`
+	Timeout                       int           `yaml:"timeout"` // seconds, default 60
+	IgnorePartialRemerge          bool          `yaml:"ignore_partial_remerge"`
+	TransferBufferSize            int           `yaml:"transfer_buffer_size"`
+	FreeSpaceMB                   int           `yaml:"free_space_mb"`
+	RemergeDelayMS                int           `yaml:"remerge_delay_ms"`
+	RemergePauseOnActiveTransfers int           `yaml:"remerge_pause_on_active_transfers"`
+	Debug                         bool
 }
 
 type MountedRoot struct {
@@ -122,20 +129,23 @@ func NewSlave(cfg SlaveConfig) *Slave {
 		bufferSize = minTransferBufferSize
 	}
 	return &Slave{
-		name:                 cfg.Name,
-		masterHost:           cfg.MasterHost,
-		masterPort:           cfg.MasterPort,
-		roots:                roots,
-		pasvPortMin:          cfg.PasvPortMin,
-		pasvPortMax:          cfg.PasvPortMax,
-		tlsEnabled:           cfg.TLSEnabled,
-		tlsCert:              cfg.TLSCert,
-		tlsKey:               cfg.TLSKey,
-		bindIP:               cfg.BindIP,
-		timeout:              timeout,
-		ignorePartialRemerge: cfg.IgnorePartialRemerge,
-		transferBufferSize:   bufferSize,
-		debug:                cfg.Debug,
+		name:                          cfg.Name,
+		masterHost:                    cfg.MasterHost,
+		masterPort:                    cfg.MasterPort,
+		roots:                         roots,
+		pasvPortMin:                   cfg.PasvPortMin,
+		pasvPortMax:                   cfg.PasvPortMax,
+		tlsEnabled:                    cfg.TLSEnabled,
+		tlsCert:                       cfg.TLSCert,
+		tlsKey:                        cfg.TLSKey,
+		bindIP:                        cfg.BindIP,
+		timeout:                       timeout,
+		ignorePartialRemerge:          cfg.IgnorePartialRemerge,
+		transferBufferSize:            bufferSize,
+		freeSpaceMB:                   cfg.FreeSpaceMB,
+		remergeDelay:                  time.Duration(cfg.RemergeDelayMS) * time.Millisecond,
+		remergePauseOnActiveTransfers: cfg.RemergePauseOnActiveTransfers,
+		debug:                         cfg.Debug,
 	}
 }
 
@@ -1066,6 +1076,11 @@ func flattenEnvMap(env map[string]string) []string {
 
 // handleRemerge - slave scans its roots and sends all files to master.
 func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
+	if !s.remergeActive.CompareAndSwap(false, true) {
+		return &protocol.AsyncResponseError{Index: ac.Index, Message: "remerge already running on slave"}
+	}
+	defer s.remergeActive.Store(false)
+
 	basePath := "/"
 	if len(ac.Args) > 0 {
 		basePath = ac.Args[0]
@@ -1093,7 +1108,8 @@ func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
 	excludePaths := normalizeExcludeVFSPaths(ac.Args[excludePathsStart:])
 
 	scanTargets := s.scanTargetsForBase(basePath, rootsOnly)
-	log.Printf("[Slave] Starting remerge from %s across %d roots (rootsOnly=%v)", basePath, len(scanTargets), rootsOnly)
+	log.Printf("[Slave] Starting remerge from %s across %d roots (rootsOnly=%v delay=%s pause_on_active_transfers=%d)",
+		basePath, len(scanTargets), rootsOnly, s.remergeDelay, s.remergePauseOnActiveTransfers)
 
 	totalFiles := 0
 	totalDirs := 0
@@ -1110,95 +1126,135 @@ func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
 
 		log.Printf("[Slave] Remerge: scanning root %s", scanRoot)
 
-		// Stream directory-by-directory: collect files per dir, send when dir changes
-		currentDir := ""
-		var currentFiles []protocol.LightRemoteInode
-
-		sendCurrentDir := func() {
-			if currentDir == "" || len(currentFiles) == 0 {
-				return
-			}
-			resp := &protocol.AsyncResponseRemerge{
-				Path:         currentDir,
-				Files:        currentFiles,
-				LastModified: time.Now().Unix(),
-			}
-			if err := s.writeObject(resp); err != nil {
-				log.Printf("[Slave] Error sending remerge for %s: %v", currentDir, err)
-			}
-			sentDirs++
-			currentFiles = nil
+		counts := remergeScanCounts{}
+		if err := s.scanRemergeDirectory(target, scanRoot, excludePaths, partialRemerge, skipAgeCutoff, &counts); err != nil {
+			log.Printf("[Slave] Remerge root %s stopped: %v", target.root.Path, err)
 		}
-
-		// Walk the root - list each directory's direct children
-		filepath.Walk(scanRoot, func(fullPath string, info os.FileInfo, err error) error {
-			if err != nil {
-				return nil
-			}
-			for s.remergePaused.Load() && s.online.Load() {
-				time.Sleep(100 * time.Millisecond)
-			}
-
-			// Skip the root itself
-			if fullPath == scanRoot {
-				return nil
-			}
-
-			// Get VFS-relative path
-			relPath, _ := filepath.Rel(target.root.Path, fullPath)
-			relPath = cleanVirtualPath(path.Join(target.root.MountPath, filepath.ToSlash(relPath)))
-			if isExcludedVFSPath(relPath, excludePaths) {
-				if info.IsDir() {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if partialRemerge && !info.IsDir() && info.ModTime().UnixMilli() < skipAgeCutoff {
-				return nil
-			}
-			// Parent dir in VFS
-			parentDir := filepath.ToSlash(filepath.Dir(relPath))
-			if parentDir == "." {
-				parentDir = "/"
-			}
-
-			// If we moved to a new directory, send the previous one
-			if parentDir != currentDir {
-				sendCurrentDir()
-				currentDir = parentDir
-			}
-
-			currentFiles = append(currentFiles, protocol.LightRemoteInode{
-				Name:         info.Name(),
-				IsDir:        info.IsDir(),
-				IsSymlink:    info.Mode()&os.ModeSymlink != 0,
-				Size:         info.Size(),
-				LastModified: info.ModTime().Unix(),
-				Owner:        getFileOwner(info),
-				Group:        getFileGroup(info),
-			})
-			if info.Mode()&os.ModeSymlink != 0 {
-				if linkTarget, err := os.Readlink(fullPath); err == nil {
-					currentFiles[len(currentFiles)-1].LinkTarget = s.virtualSymlinkTarget(fullPath, linkTarget)
-				}
-			}
-
-			if info.IsDir() {
-				totalDirs++
-			} else {
-				totalFiles++
-			}
-			return nil
-		})
-
-		// Send last directory
-		sendCurrentDir()
+		totalFiles += counts.totalFiles
+		totalDirs += counts.totalDirs
+		sentDirs += counts.sentDirs
 
 		log.Printf("[Slave] Remerge root %s done: sent %d directories", target.root.Path, sentDirs)
 	}
 
 	log.Printf("[Slave] Remerge complete: %d files, %d dirs across %d sent directories", totalFiles, totalDirs, sentDirs)
 	return &protocol.AsyncResponse{Index: ac.Index}
+}
+
+type remergeScanCounts struct {
+	totalFiles int
+	totalDirs  int
+	sentDirs   int
+}
+
+func (s *Slave) scanRemergeDirectory(target scanTarget, dir string, excludePaths []string, partialRemerge bool, skipAgeCutoff int64, counts *remergeScanCounts) error {
+	if !s.waitForRemergeSlot() {
+		return fmt.Errorf("slave went offline")
+	}
+
+	virtualDir, ok := target.root.virtualPath(dir)
+	if !ok {
+		return nil
+	}
+	if dir != target.scanRoot && isExcludedVFSPath(virtualDir, excludePaths) {
+		return nil
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+
+	files := make([]protocol.LightRemoteInode, 0, len(entries))
+	childDirs := make([]string, 0)
+	for _, entry := range entries {
+		fullPath := filepath.Join(dir, entry.Name())
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		childVirtualPath, ok := target.root.virtualPath(fullPath)
+		if !ok || isExcludedVFSPath(childVirtualPath, excludePaths) {
+			continue
+		}
+		if partialRemerge && !info.IsDir() && info.ModTime().UnixMilli() < skipAgeCutoff {
+			continue
+		}
+
+		inode := protocol.LightRemoteInode{
+			Name:         info.Name(),
+			IsDir:        info.IsDir(),
+			IsSymlink:    info.Mode()&os.ModeSymlink != 0,
+			Size:         info.Size(),
+			LastModified: info.ModTime().Unix(),
+			Owner:        getFileOwner(info),
+			Group:        getFileGroup(info),
+		}
+		if inode.IsSymlink {
+			if linkTarget, err := os.Readlink(fullPath); err == nil {
+				inode.LinkTarget = s.virtualSymlinkTarget(fullPath, linkTarget)
+			}
+		}
+		files = append(files, inode)
+
+		if info.IsDir() {
+			counts.totalDirs++
+			childDirs = append(childDirs, fullPath)
+		} else {
+			counts.totalFiles++
+		}
+	}
+
+	resp := &protocol.AsyncResponseRemerge{
+		Path:         virtualDir,
+		Files:        files,
+		LastModified: time.Now().Unix(),
+	}
+	if err := s.writeObject(resp); err != nil {
+		return fmt.Errorf("send remerge for %s: %w", virtualDir, err)
+	}
+	counts.sentDirs++
+	if s.remergeDelay > 0 {
+		time.Sleep(s.remergeDelay)
+	}
+
+	for _, childDir := range childDirs {
+		if err := s.scanRemergeDirectory(target, childDir, excludePaths, partialRemerge, skipAgeCutoff, counts); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Slave) waitForRemergeSlot() bool {
+	for s.online.Load() {
+		if s.remergePaused.Load() {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		if s.remergePauseOnActiveTransfers > 0 && s.activeTransferCount() >= s.remergePauseOnActiveTransfers {
+			time.Sleep(250 * time.Millisecond)
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func (s *Slave) activeTransferCount() int {
+	count := 0
+	s.transfers.Range(func(_, value interface{}) bool {
+		t, ok := value.(*Transfer)
+		if !ok || t == nil {
+			return true
+		}
+		stat := t.SnapshotLiveStat()
+		if stat.Direction != TransferUnknown {
+			count++
+		}
+		return true
+	})
+	return count
 }
 
 func normalizeExcludeVFSPaths(paths []string) []string {
@@ -1706,7 +1762,15 @@ func (s *Slave) getDirForUpload(relPath string) (string, error) {
 	cleanRel := filepath.Clean(relPath)
 	dirPart := filepath.Dir(cleanRel)
 	roots := s.rootsForVirtualPath(relPath)
+	var bestSeenAvail int64 = -1
 	for _, root := range roots {
+		avail, ok := s.rootHasUploadSpace(root)
+		if avail > bestSeenAvail {
+			bestSeenAvail = avail
+		}
+		if !ok {
+			continue
+		}
 		existingDir := root.fullPath(dirPart)
 		if info, err := os.Stat(existingDir); err == nil && info.IsDir() {
 			if err := os.MkdirAll(existingDir, 0755); err != nil {
@@ -1720,7 +1784,13 @@ func (s *Slave) getDirForUpload(relPath string) (string, error) {
 	var bestAvail int64
 
 	for _, root := range roots {
-		avail, _ := getDiskSpace(root.Path)
+		avail, ok := s.rootHasUploadSpace(root)
+		if avail > bestSeenAvail {
+			bestSeenAvail = avail
+		}
+		if !ok {
+			continue
+		}
 		if avail > bestAvail {
 			bestAvail = avail
 			bestRoot = root
@@ -1728,6 +1798,9 @@ func (s *Slave) getDirForUpload(relPath string) (string, error) {
 	}
 
 	if bestRoot.Path == "" {
+		if bestSeenAvail >= 0 && s.minUploadFreeBytes() > 0 {
+			return "", s.lowUploadSpaceError(bestSeenAvail)
+		}
 		return "", fmt.Errorf("no root available")
 	}
 
@@ -1735,6 +1808,23 @@ func (s *Slave) getDirForUpload(relPath string) (string, error) {
 	os.MkdirAll(fullDir, 0755)
 
 	return bestRoot.fullPath(cleanRel), nil
+}
+
+func (s *Slave) minUploadFreeBytes() int64 {
+	if s == nil || s.freeSpaceMB <= 0 {
+		return 0
+	}
+	return int64(s.freeSpaceMB) * 1024 * 1024
+}
+
+func (s *Slave) rootHasUploadSpace(root MountedRoot) (int64, bool) {
+	avail, _ := getDiskSpace(root.Path)
+	minFree := s.minUploadFreeBytes()
+	return avail, minFree <= 0 || avail >= minFree
+}
+
+func (s *Slave) lowUploadSpaceError(bestAvail int64) error {
+	return fmt.Errorf("disk full: free space %.1f MB is below free_space_mb %d MB", float64(bestAvail)/(1024*1024), s.freeSpaceMB)
 }
 
 func (s *Slave) selectRootForRelocate(sourceRoot MountedRoot, toDir string) (MountedRoot, error) {

@@ -84,7 +84,7 @@ kick `SomeNick` from configured IRC channels.
 
 The shipped example lives at:
 
-- [C:\Users\nelis\Documents\GoFTPd\sitebot\plugins\quota\config.yml.dist](C:\Users\nelis\Documents\GoFTPd\sitebot\plugins\quota\config.yml.dist)
+- `sitebot/plugins/quota/config.yml.dist`
 
 Example:
 
@@ -125,7 +125,7 @@ kick_channels: []
 
 Enable it in:
 
-- [C:\Users\nelis\Documents\GoFTPd\sitebot\etc\config.yml.example](C:\Users\nelis\Documents\GoFTPd\sitebot\etc\config.yml.example)
+- `sitebot/etc/config.yml.example`
 
 Example:
 

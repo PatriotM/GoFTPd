@@ -9,6 +9,8 @@ release nuked, etc.) and doing work with the master's VFS bridge.
 - **tvmaze** - async TV show lookup on MKD, writes `.tvmaze` into the release dir
 - **imdb** - async movie lookup on MKD (via imdbapi.dev), writes `.imdb`
 - **pretime** - async pretime lookup on MKD via SQLite, MySQL, PostgreSQL, or HTTP/JSON sources, emits `NEWPRETIME` / `OLDPRETIME`
+- **pre** - handles SITE PRE and affil management, and emits PRE bandwidth / audio metadata events
+- **request** - handles SITE REQUEST/REQUESTS/REQFILL/REQTOP/REQDEL/REQWIPE and request fill stats
 - **speedtest** - creates fixed-size test files and emits SPEEDTEST events
 - **slowkick** - monitors live uploads and downloads, aborts/kicks slow transfers, and can briefly tempban the FTP user after a kick
 - **spacekeeper** - combines free-space cleanup and archive-style moves using virtual FTP path rules, with separate switches for each side
@@ -16,6 +18,11 @@ release nuked, etc.) and doing work with the master's VFS bridge.
 
 TVMaze and IMDb metadata files are shown on `CWD` via the daemon's
 `show_diz` mechanism.
+
+Audio and sample/video probing is part of the zipscript pipeline now, not a
+separate daemon plugin. Configure it with `zipscript.audio` and
+`zipscript.media`; the sitebot announce plugin renders the resulting
+`AUDIOINFO` / `MEDIAINFO` events.
 
 ## Writing a new plugin
 

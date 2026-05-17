@@ -115,21 +115,24 @@ are active.
 You can also point the daemon at an explicit config file:
 
 ```bash
-./goftpd --config config-slave-example.yml
+./goftpd --config etc/config-slave-example.yml
 ```
 
 In `mode: slave`, the slave-specific runtime comes from the `slave:` block.
 `slave.roots` is required, and slave mode no longer falls back to
 `storage_path` for roots. Shared top-level runtime settings such as `tls_*`,
-`log_*`, `debug`, and `timezone` still apply to both roles.
+`log_*`, `debug`, and `timezone` still apply to both roles. If the master
+requires encrypted data transfers, the slave config also needs matching
+`tls_enabled`, `tls_cert`, and `tls_key` values because the slave terminates
+the client data TLS session.
 
 For a slave-only box, start from the minimal sample instead of trimming down
 the full master config:
 
 ```bash
-cp config-slave-example.yml config-slave.yml
-vim config-slave.yml
-./goftpd --config config-slave.yml
+cp etc/config-slave-example.yml etc/config-slave.yml
+vim etc/config-slave.yml
+./goftpd --config etc/config-slave.yml
 ```
 
 Edit `sitebot/etc/config.yml` before starting the sitebot. The daemon and
@@ -148,7 +151,7 @@ Main files:
 |------|---------|
 | `etc/config.yml` | Active daemon config |
 | `etc/config-example.yml` | Annotated daemon example |
-| `config-slave-example.yml` | Minimal slave-only daemon example |
+| `etc/config-slave-example.yml` | Minimal slave-only daemon example |
 | `etc/permissions.yml` | ACL rules |
 | `etc/passwd` | Password hashes |
 | `etc/users/` | User records |
@@ -178,8 +181,8 @@ For a slave-only install, copy the minimal sample and run it from the same
 folder as the built binary:
 
 ```bash
-cp config-slave-example.yml config-slave.yml
-./goftpd --config config-slave.yml
+cp etc/config-slave-example.yml etc/config-slave.yml
+./goftpd --config etc/config-slave.yml
 ```
 
 The master can route uploads by section, path, and weight:
@@ -253,6 +256,20 @@ On a full remerge, GoFTPd scans normal `roots` first and only scans
 `mounted_roots` after that. That keeps the live site tree responsive while the
 larger archive trees catch up in the background, which makes `mounted_roots`
 especially suitable for archive-style storage.
+
+For slower local disks, NFS mounts, or archive disks, throttle slave remerge
+instead of letting a full scan pin one disk at 100% iowait:
+
+```yml
+slave:
+  remerge_delay_ms: 10
+  remerge_pause_on_active_transfers: 1
+```
+
+`remerge_delay_ms` sleeps after each streamed directory. Keep it at `0` on fast
+local disks; try `5-25` on slower disks. `remerge_pause_on_active_transfers`
+pauses remerge while the slave is serving uploads/downloads, so live traffic
+gets priority over background scans.
 
 On a slave host, the role-specific settings you normally care about are:
 
@@ -393,13 +410,17 @@ Built-in daemon plugins:
 | `tvmaze` | Writes `.tvmaze` metadata for configured TV sections |
 | `imdb` | Writes `.imdb` metadata for configured movie sections |
 | `pretime` | Looks up known pre times for new release dirs and emits appended `NEWPRETIME` / `OLDPRETIME` announces |
-| `mediainfo` | Emits audio/video metadata events after uploads |
 | `pre` | Provides SITE PRE and affil management commands |
 | `releaseguard` | Blocks bad release dir names before MKD creates them and provides `SITE BANNED` |
 | `request` | Provides SITE REQUEST/REQUESTS/REQFILL/REQTOP/REQDEL/REQWIPE |
 | `speedtest` | Creates speedtest files and emits SPEEDTEST events |
 | `slowkick` | Monitors live uploads and downloads and aborts/kicks users whose speed stays below a configured floor long enough to block slots |
 | `spacekeeper` | Watches slave free space and deletes the oldest eligible releases from configured virtual paths when a slave drops below its threshold |
+
+Audio and sample/video metadata are not a separate daemon plugin anymore. They
+are built into the zipscript upload flow under `zipscript.audio` and
+`zipscript.media`, and are announced through the sitebot announce plugin as
+`AUDIOINFO` / `MEDIAINFO` events.
 
 ### Speedtest
 

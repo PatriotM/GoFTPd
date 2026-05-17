@@ -1278,10 +1278,6 @@ func (sm *SlaveManager) ProcessRemerge(rs *RemoteSlave, resp *protocol.AsyncResp
 		sm.scheduleRemergeSFVParse(rs, sfvPath)
 	}
 
-	// Once a directory has been streamed from the slave, immediately purge any
-	// stale unseen children in that directory so clients do not try to download
-	// ghost files while the rest of the slave remerge is still running.
-	sm.vfs.PurgeUnseenChildren(rs.name, resp.Path)
 	touchedParents[path.Clean(resp.Path)] = struct{}{}
 	for dirPath := range touchedParents {
 		sm.pruneStaleStatusMarkersForDir(dirPath)

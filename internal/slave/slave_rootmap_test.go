@@ -3,6 +3,7 @@ package slave
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -46,6 +47,32 @@ func TestGetDirForUploadUsesMountedArchiveRoots(t *testing.T) {
 	want := filepath.Join(archiveRoot, "EBOOKS", "0514", "release")
 	if fullPath != want {
 		t.Fatalf("expected %s, got %s", want, fullPath)
+	}
+}
+
+func TestGetDirForUploadRejectsRootBelowFreeSpaceThreshold(t *testing.T) {
+	siteRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(siteRoot, "TV-1080P"), 0o755); err != nil {
+		t.Fatalf("mkdir site root: %v", err)
+	}
+	avail, _ := getDiskSpace(siteRoot)
+	if avail <= 0 {
+		t.Skip("filesystem free space is unavailable")
+	}
+
+	s := &Slave{
+		roots: []MountedRoot{
+			{Path: siteRoot, MountPath: "/"},
+		},
+		freeSpaceMB: int(avail/(1024*1024)) + 1,
+	}
+
+	_, err := s.getDirForUpload("/TV-1080P/release/file.r00")
+	if err == nil {
+		t.Fatalf("expected upload to be rejected below free_space_mb")
+	}
+	if !strings.Contains(err.Error(), "free_space_mb") {
+		t.Fatalf("expected free_space_mb error, got %v", err)
 	}
 }
 
