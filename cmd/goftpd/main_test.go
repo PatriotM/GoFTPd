@@ -6,6 +6,26 @@ import (
 	"goftpd/internal/core"
 )
 
+func TestConfigPathFromArgsDefaultsToEtcConfig(t *testing.T) {
+	got, err := configPathFromArgs(nil)
+	if err != nil {
+		t.Fatalf("configPathFromArgs() error = %v", err)
+	}
+	if got != "etc/config.yml" {
+		t.Fatalf("configPathFromArgs() = %q, want etc/config.yml", got)
+	}
+}
+
+func TestConfigPathFromArgsAcceptsConfigFlag(t *testing.T) {
+	got, err := configPathFromArgs([]string{"--config", "config-slave-example.yml"})
+	if err != nil {
+		t.Fatalf("configPathFromArgs() error = %v", err)
+	}
+	if got != "config-slave-example.yml" {
+		t.Fatalf("configPathFromArgs() = %q, want config-slave-example.yml", got)
+	}
+}
+
 func TestConfiguredSectionDirsSkipsWritablePluginRoots(t *testing.T) {
 	cfg := &core.Config{
 		Sections: []string{"/X265", "/REQUESTS", "/SPEEDTEST"},

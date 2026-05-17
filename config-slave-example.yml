@@ -1,0 +1,57 @@
+# Minimal slave-only config.
+#
+# Build the daemon, edit the values below, then start from this directory with:
+#
+#   ./goftpd --config config-slave-example.yml
+#
+# If you prefer the default config path, copy this file to etc/config.yml and
+# run ./goftpd without --config.
+
+mode: "slave"
+version: "dev"
+timezone: "Europe/Amsterdam"
+debug: false
+
+# Optional but useful when running the slave detached.
+log_file: "logs/goftpd-slave.log"
+log_console: true
+log_keep_days: 2
+
+# Must match the master's TLS setting. Keep false unless master.control uses TLS.
+tls_enabled: false
+
+slave:
+  # Must match a master-side slaves[].name policy if you use policies.
+  name: "LOCAL"
+
+  # Master control socket.
+  master_host: "127.0.0.1"
+  master_port: 1099
+
+  # Normal site root(s), exposed at virtual "/".
+  roots:
+    - "./site"
+
+  # Optional: expose separate physical disks under one virtual archive path.
+  # This is useful for NFS-mounted archive disks without putting mergerfs in
+  # front of GoFTPd.
+  mounted_roots: []
+  # To use archive mounts, replace mounted_roots: [] above with:
+  #
+  # mounted_roots:
+  #   - path: "/glftpd/DISK1"
+  #     mount_path: "/ARCHiVE"
+  #   - path: "/glftpd/DISK2"
+  #     mount_path: "/ARCHiVE"
+
+  # Passive ports used when clients connect directly to this slave.
+  pasv_port_min: 30000
+  pasv_port_max: 65000
+
+  # Public IP advertised by this slave in PASV replies. Leave empty only when
+  # auto-detect from the master connection is correct.
+  bind_ip: ""
+
+  timeout: 60
+  ignore_partial_remerge: false
+  transfer_buffer_size: 262144

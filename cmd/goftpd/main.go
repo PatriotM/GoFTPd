@@ -4,7 +4,9 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -38,13 +40,18 @@ import (
 )
 
 func main() {
-	// 1. Load Server Config from etc/config.yml
-	cfg, err := core.LoadConfig("etc/config.yml")
+	configPath, err := configPathFromArgs(os.Args[1:])
 	if err != nil {
-		log.Fatalf("Failed to load etc/config.yml: %v", err)
+		log.Fatalf("Invalid arguments: %v", err)
+	}
+
+	// 1. Load Server Config
+	cfg, err := core.LoadConfig(configPath)
+	if err != nil {
+		log.Fatalf("Failed to load %s: %v", configPath, err)
 	}
 	if err := timeutil.Set(cfg.Timezone); err != nil {
-		log.Fatalf("Invalid timezone %q in etc/config.yml: %v", cfg.Timezone, err)
+		log.Fatalf("Invalid timezone %q in %s: %v", cfg.Timezone, configPath, err)
 	}
 	// 1a. Install logging early. File logs always keep the full stream when
 	// log_file is set. Console stays full in debug mode, otherwise it is
@@ -514,6 +521,23 @@ func main() {
 		log.Println("Shutting down...")
 		return
 	}
+}
+
+func configPathFromArgs(args []string) (string, error) {
+	fs := flag.NewFlagSet("goftpd", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	configPath := fs.String("config", "etc/config.yml", "path to daemon config file")
+	if err := fs.Parse(args); err != nil {
+		return "", err
+	}
+	if fs.NArg() > 0 {
+		return "", fmt.Errorf("unexpected argument %q", fs.Arg(0))
+	}
+	cleanPath := strings.TrimSpace(*configPath)
+	if cleanPath == "" {
+		return "", fmt.Errorf("config path must not be empty")
+	}
+	return cleanPath, nil
 }
 
 // startSlave runs the slave daemon — no FTP server, just connect to master.
