@@ -581,7 +581,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				}
 
 				if raceStatusEligibleDir(s.CurrentDir) && zipscript.RaceStatsOnCWDForDir(s.Config.Zipscript, s.CurrentDir) {
-					users, groups, totalBytes, present, total := bridge.GetVFSRaceStats(s.CurrentDir)
+					users, groups, totalBytes, present, total := raceStatsForDir(bridge, s.Config, s.CurrentDir)
 					users = trimRaceUsers(s.Config, users)
 					groups = trimRaceGroups(s.Config, groups)
 
@@ -2717,16 +2717,7 @@ func dirRaceProgress(bridge MasterBridge, cfg *Config, dirPath string) (totalByt
 	if bridge == nil || cfg == nil {
 		return 0, 0, 0
 	}
-	if useZipRaceMode(bridge, cfg, dirPath, "") {
-		entries := bridge.ListDir(dirPath)
-		expected := zipExpectedPartsFromDIZ(bridge, dirPath)
-		_, totalBytes, present = zipDirRaceStats(bridge, dirPath, entries, expected)
-		if expected > 0 {
-			total = expected
-		}
-		return totalBytes, present, total
-	}
-	_, _, totalBytes, present, total = bridge.GetVFSRaceStats(dirPath)
+	_, _, totalBytes, present, total = raceStatsForDir(bridge, cfg, dirPath)
 	return totalBytes, present, total
 }
 
@@ -4261,6 +4252,44 @@ func zipDirPayloadCount(bridge MasterBridge, dirPath string, entries []MasterFil
 	return total
 }
 
+func zipPayloadSizesLookComplete(entries []MasterFileEntry) bool {
+	sizes := make([]int64, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir || e.IsSymlink || strings.HasPrefix(strings.TrimSpace(e.Name), ".") || !isZipPayloadName(e.Name) {
+			continue
+		}
+		sizes = append(sizes, e.Size)
+	}
+	if len(sizes) <= 1 {
+		return len(sizes) == 1
+	}
+
+	var maxSize int64
+	for _, size := range sizes {
+		if size > maxSize {
+			maxSize = size
+		}
+	}
+	if maxSize <= 0 {
+		return false
+	}
+
+	smallerCount := 0
+	for _, size := range sizes {
+		if size == maxSize {
+			continue
+		}
+		if size <= 0 || size > maxSize {
+			return false
+		}
+		smallerCount++
+		if smallerCount > 1 {
+			return false
+		}
+	}
+	return true
+}
+
 func zipExpectedPartsFromDIZ(bridge MasterBridge, dirPath string) int {
 	if bridge == nil {
 		return 0
@@ -4388,7 +4417,7 @@ func zipDirComplete(bridge MasterBridge, dirPath string, entries []MasterFileEnt
 		return false
 	}
 	total := zipDirPayloadCount(bridge, dirPath, entries)
-	return total == expected
+	return total == expected && zipPayloadSizesLookComplete(entries)
 }
 
 func zipDirCompleteAfterUpload(bridge MasterBridge, dirPath, fileName string, entries []MasterFileEntry, expected int) bool {
@@ -4422,6 +4451,32 @@ func cacheZipReleaseProgress(bridge MasterBridge, dirPath string, present, total
 		return
 	}
 	bridge.SyncStatusMarkersForPath(dirPath, true)
+}
+
+func raceStatsForDir(bridge MasterBridge, cfg *Config, dirPath string) (users []VFSRaceUser, groups []VFSRaceGroup, totalBytes int64, present int, total int) {
+	type freshRaceStatsBridge interface {
+		GetVFSRaceStatsFresh(dirPath string) (users []VFSRaceUser, groups []VFSRaceGroup, totalBytes int64, present int, total int)
+	}
+
+	if bridge == nil || cfg == nil {
+		return nil, nil, 0, 0, 0
+	}
+	if useZipRaceMode(bridge, cfg, dirPath, "") {
+		entries := bridge.ListDir(dirPath)
+		expected := zipExpectedPartsFromDIZ(bridge, dirPath)
+		users, totalBytes, present = zipDirRaceStats(bridge, dirPath, entries, expected)
+		if expected > 0 {
+			total = expected
+		} else {
+			total = present
+		}
+		groups = raceGroupsFromUsers(users, total)
+		return users, groups, totalBytes, present, total
+	}
+	if freshBridge, ok := bridge.(freshRaceStatsBridge); ok {
+		return freshBridge.GetVFSRaceStatsFresh(dirPath)
+	}
+	return bridge.GetVFSRaceStats(dirPath)
 }
 
 func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName string, fileSize int64, data map[string]string) ([]VFSRaceUser, []VFSRaceGroup, int64, int, int64, bool) {

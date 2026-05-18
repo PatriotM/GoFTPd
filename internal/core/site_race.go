@@ -28,7 +28,7 @@ func (s *Session) HandleSiteRace(args []string) bool {
 		dirPath = path.Clean(target)
 	}
 
-	users, groups, totalBytes, present, total := bridge.GetVFSRaceStats(dirPath)
+	users, groups, totalBytes, present, total := raceStatsForDir(bridge, s.Config, dirPath)
 	users = trimRaceUsers(s.Config, users)
 	groups = trimRaceGroups(s.Config, groups)
 	if !HasRaceStats(users, groups, totalBytes, present, total) {

@@ -22,3 +22,58 @@ func TestZipExpectedPartsFromDIZContentMatchesDrFTPDStyleMarkers(t *testing.T) {
 		})
 	}
 }
+
+func TestZipPayloadSizesLookComplete(t *testing.T) {
+	tests := []struct {
+		name    string
+		entries []MasterFileEntry
+		want    bool
+	}{
+		{
+			name: "uniform with one smaller tail",
+			entries: []MasterFileEntry{
+				{Name: "a.zip", Size: 5000},
+				{Name: "b.zip", Size: 5000},
+				{Name: "c.zip", Size: 3200},
+			},
+			want: true,
+		},
+		{
+			name: "multiple undersized parts",
+			entries: []MasterFileEntry{
+				{Name: "a.zip", Size: 5000},
+				{Name: "b.zip", Size: 3200},
+				{Name: "c.zip", Size: 2800},
+			},
+			want: false,
+		},
+		{
+			name: "all uniform",
+			entries: []MasterFileEntry{
+				{Name: "a.zip", Size: 5000},
+				{Name: "b.zip", Size: 5000},
+				{Name: "c.zip", Size: 5000},
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := zipPayloadSizesLookComplete(tt.entries); got != tt.want {
+				t.Fatalf("zipPayloadSizesLookComplete() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestZipDirCompleteRequiresSaneSizes(t *testing.T) {
+	entries := []MasterFileEntry{
+		{Name: "a.zip", Size: 5000},
+		{Name: "b.zip", Size: 3200},
+		{Name: "c.zip", Size: 2800},
+	}
+	if zipDirComplete(nil, "/0DAY/test", entries, 3) {
+		t.Fatalf("expected zipDirComplete to reject multiple undersized zip parts")
+	}
+}
