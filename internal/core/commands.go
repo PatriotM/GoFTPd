@@ -25,7 +25,7 @@ import (
 	"goftpd/internal/zipscript"
 )
 
-var zipDIZTotalRE = regexp.MustCompile(`[\\[\\(<:\\s](?:\\s)?[0-9oOxX\\*]*(?:\\s)?/(?:\\s)?([0-9oOxX]*[0-9oO])(?:\\s)?[\\]\\)>\\s]`)
+var zipDIZTotalRE = regexp.MustCompile(`[\\[\\(<:\\s]\\s*[0-9oOxX\\*]*\\s*/\\s*([0-9oOxX]*[0-9oO])\\s*[\\]\\)>\\s]`)
 
 // getMlsdPerm returns MLSD permissions string for a file
 func getMlsdPerm(info os.FileInfo, isSymlink bool) string {
