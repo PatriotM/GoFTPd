@@ -27,6 +27,7 @@ type Plugin struct {
 	allowDirs            []rule
 	nukedPrefixes        []string
 	checkNukedNames      bool
+	announceRejects      bool
 	debug                bool
 }
 
@@ -36,6 +37,7 @@ func New() *Plugin {
 		denyCaseConflicts:    true,
 		checkNukedNames:      true,
 		nukedPrefixes:        []string{"[NUKED]-"},
+		announceRejects:      true,
 	}
 }
 
@@ -56,6 +58,7 @@ func (p *Plugin) applyConfig(cfg map[string]interface{}) error {
 	p.denyCaseConflicts = true
 	p.checkNukedNames = true
 	p.nukedPrefixes = []string{"[NUKED]-"}
+	p.announceRejects = true
 	p.denyGroups = nil
 	p.denyDirs = nil
 	p.allowDirs = nil
@@ -73,6 +76,9 @@ func (p *Plugin) applyConfig(cfg map[string]interface{}) error {
 	}
 	if v, ok := cfg["debug"].(bool); ok {
 		p.debug = v
+	}
+	if v, ok := cfg["announce_rejects"].(bool); ok {
+		p.announceRejects = v
 	}
 	if prefixes := stringSlice(cfg["nuked_prefixes"]); len(prefixes) > 0 {
 		p.nukedPrefixes = prefixes
@@ -187,7 +193,7 @@ func (p *Plugin) ValidateMKDir(u *user.User, targetPath string) error {
 }
 
 func (p *Plugin) emitReject(u *user.User, targetPath, name, reason, rulePath, rulePattern, message string) {
-	if p == nil || p.svc == nil || p.svc.EmitEvent == nil {
+	if p == nil || !p.announceRejects || p.svc == nil || p.svc.EmitEvent == nil {
 		return
 	}
 	username := "unknown"

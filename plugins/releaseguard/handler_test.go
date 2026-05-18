@@ -140,6 +140,32 @@ func TestValidateMKDirEmitsRejectEvent(t *testing.T) {
 	}
 }
 
+func TestValidateMKDirCanDisableRejectAnnounce(t *testing.T) {
+	emitted := false
+	p := New()
+	err := p.Init(&plugin.Services{
+		Bridge: &testBridge{},
+		EmitEvent: func(eventType, eventPath, filename, section string, size int64, speed float64, data map[string]string) {
+			emitted = true
+		},
+	}, map[string]interface{}{
+		"announce_rejects": false,
+		"deny_dirs": []interface{}{
+			map[string]interface{}{"path": "/TV-1080P", "pattern": `(?i)bluray`},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+	err = p.ValidateMKDir(&user.User{Name: "steel", PrimaryGroup: "iND"}, "/TV-1080P/The.Disastrous.Life.Of.Saiki.K.E15.1080p.BluRay.x264-URANiME")
+	if err == nil {
+		t.Fatal("expected release to be rejected")
+	}
+	if emitted {
+		t.Fatal("expected reject event not to be emitted when announce_rejects is false")
+	}
+}
+
 func TestReloadConfigUpdatesDenyRules(t *testing.T) {
 	p := newPluginForTest(t, map[string]interface{}{}, nil)
 	target := "/TV-1080P/The.Disastrous.Life.Of.Saiki.K.E15.1080p.BluRay.x264-URANiME"
