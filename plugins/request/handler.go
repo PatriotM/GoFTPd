@@ -308,8 +308,14 @@ func (p *Plugin) handleReqFill(ctx plugin.SiteContext, args []string) bool {
 		return true
 	}
 	if err := p.recordFill(entry, filledBy); err != nil {
+		if byUser == "" {
+			p.emitRequestFilled(entry, filledBy, key)
+		}
 		p.reply(ctx, "200", fmt.Sprintf("%s : %s has been filled. Thank you. Fill stats were not saved: %v", key, entry.Release, err))
 		return true
+	}
+	if byUser == "" {
+		p.emitRequestFilled(entry, filledBy, key)
 	}
 	if p.showOnFill {
 		return p.replyStatus(ctx)
@@ -739,6 +745,43 @@ func (p *Plugin) emitRequestCreated(entry requestEntry, numbered string) {
 		"message":       message,
 	}
 	p.svc.EmitEvent("CUSTOM", p.requestDir(release), release, "REQUESTS", 0, 0, data)
+}
+
+func (p *Plugin) emitRequestFilled(entry requestEntry, filledBy, key string) {
+	if p == nil || p.svc == nil || p.svc.EmitEvent == nil {
+		return
+	}
+	release := strings.TrimSpace(entry.Release)
+	if release == "" {
+		return
+	}
+	filler := strings.TrimSpace(filledBy)
+	if filler == "" {
+		filler = "unknown"
+	}
+	requester := strings.TrimSpace(entry.By)
+	if requester == "" {
+		requester = "unknown"
+	}
+	numbered := strings.TrimSpace(p.numberedEntry(entry))
+	message := fmt.Sprintf("REQUEST: %s %s filled by %s", numbered, release, filler)
+	data := map[string]string{
+		"template":      "REQUESTFILL",
+		"announce_type": "REQUESTFILL",
+		"request":       release,
+		"relname":       release,
+		"requester":     requester,
+		"requested_by":  requester,
+		"filled_by":     filler,
+		"filler":        filler,
+		"number":        strconv.Itoa(entry.Num),
+		"numbered":      numbered,
+		"date":          entry.Date,
+		"for_user":      entry.For,
+		"fill_key":      strings.TrimSpace(key),
+		"message":       message,
+	}
+	p.svc.EmitEvent("CUSTOM", p.filledDir(release), release, "REQUESTS", 0, 0, data)
 }
 
 func (p *Plugin) ensureBaseDir(ctx plugin.SiteContext) error {

@@ -33,6 +33,8 @@ func NewPluginManager(debug bool) *PluginManager {
 }
 
 func (pm *PluginManager) SetConfig(cfg *Config) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
 	pm.cfg = cfg
 }
 
@@ -41,6 +43,8 @@ func (pm *PluginManager) SetConfig(cfg *Config) {
 // plugin.MasterBridge — our master.Bridge does, via its WriteFile/ReadFile
 // methods.
 func (pm *PluginManager) SetServices(svc *plugin.Services) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
 	pm.svc = svc
 }
 
@@ -66,8 +70,8 @@ func (pm *PluginManager) RegisterPlugin(p plugin.Plugin) error {
 // sub-map. The outer map is keyed by plugin name (e.g. {"tvmaze": {...}}).
 // Plugins without a config entry receive an empty map.
 func (pm *PluginManager) InitializePlugins(pluginConfigs map[string]map[string]interface{}) error {
-	pm.mu.RLock()
-	defer pm.mu.RUnlock()
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
 
 	if pm.svc == nil {
 		log.Printf("[PLUGIN-MANAGER] Warning: no Services set, plugins will have nil Bridge")

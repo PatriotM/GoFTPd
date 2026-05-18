@@ -64,6 +64,40 @@ func TestFTPRequestEmitsAnnounceEvent(t *testing.T) {
 	}
 }
 
+func TestFTPReqFillEmitsAnnounceEvent(t *testing.T) {
+	bridge := newRequestTestBridge()
+	p := New()
+	var eventType, eventPath string
+	var eventData map[string]string
+	p.svc = &plugin.Services{
+		Bridge: bridge,
+		EmitEvent: func(evtType, evtPath, filename, section string, size int64, speed float64, data map[string]string) {
+			eventType = evtType
+			eventPath = evtPath
+			eventData = data
+		},
+	}
+
+	ctx := &requestTestCtx{user: "alice", group: "iND", flags: "1"}
+	p.HandleSiteCommand(ctx, "REQUEST", []string{"Some.Release-TEST"})
+	bridge.files["/REQUESTS/REQ-Some.Release-TEST/file.rar"] = []byte("data")
+
+	eventType = ""
+	eventPath = ""
+	eventData = nil
+	p.HandleSiteCommand(ctx, "REQFILL", []string{"Some.Release-TEST"})
+
+	if eventType != "CUSTOM" {
+		t.Fatalf("expected CUSTOM event, got %q", eventType)
+	}
+	if eventPath != "/REQUESTS/FILLED-Some.Release-TEST" {
+		t.Fatalf("unexpected event path %q", eventPath)
+	}
+	if eventData["template"] != "REQUESTFILL" || eventData["filled_by"] != "alice" {
+		t.Fatalf("unexpected fill event data %#v", eventData)
+	}
+}
+
 func TestProxyRequestDoesNotEmitDuplicateAnnounceEvent(t *testing.T) {
 	bridge := newRequestTestBridge()
 	p := New()
@@ -147,11 +181,18 @@ func TestDuplicateRequestRepairsMissingDirectory(t *testing.T) {
 func TestReqFillProxyTracksProvidedUser(t *testing.T) {
 	bridge := newRequestTestBridge()
 	p := New()
-	p.svc = &plugin.Services{Bridge: bridge}
+	emitted := false
+	p.svc = &plugin.Services{
+		Bridge: bridge,
+		EmitEvent: func(string, string, string, string, int64, float64, map[string]string) {
+			emitted = true
+		},
+	}
 
 	requester := &requestTestCtx{user: "alice", group: "iND", flags: "1"}
 	p.HandleSiteCommand(requester, "REQUEST", []string{"Proxy.Release-TEST"})
 	bridge.files["/REQUESTS/REQ-Proxy.Release-TEST/file.rar"] = []byte("data")
+	emitted = false
 
 	bot := &requestTestCtx{user: "goftpd", group: "sitebot", flags: "1"}
 	p.HandleSiteCommand(bot, "REQFILL", []string{"-by:ircUser", "Proxy.Release-TEST"})
@@ -159,6 +200,9 @@ func TestReqFillProxyTracksProvidedUser(t *testing.T) {
 	stats := string(bridge.files["/REQUESTS/.reqfills"])
 	if !strings.Contains(stats, "filled by ircUser") {
 		t.Fatalf("expected proxy filler to be tracked, got %q", stats)
+	}
+	if emitted {
+		t.Fatalf("did not expect proxied reqfill to emit a duplicate announce event")
 	}
 }
 

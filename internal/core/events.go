@@ -242,6 +242,8 @@ func getOrInitEventDispatcher(cfg *Config) *EventDispatcher {
 	if cfg == nil {
 		return nil
 	}
+	cfg.rehashMu.Lock()
+	defer cfg.rehashMu.Unlock()
 	if cfg.EventDispatcher != nil {
 		return cfg.EventDispatcher
 	}
