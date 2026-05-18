@@ -510,6 +510,10 @@ func (p *AnnouncePlugin) emitInlinePretime(evt *event.Event, section, rel string
 	return true
 }
 
+func shouldSuppressLatePretime(st *releaseState) bool {
+	return st != nil && st.Completed
+}
+
 func loginFailKey(vars map[string]string) string {
 	username := strings.ToLower(strings.TrimSpace(vars["username"]))
 	reason := strings.ToLower(strings.TrimSpace(vars["reason"]))
@@ -1123,11 +1127,17 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 			p.emitInlinePretime(evt, section, rel, vars)
 			return nil, nil
 		}
+		if shouldSuppressLatePretime(st) {
+			return nil, nil
+		}
 		fallback := fmt.Sprintf("PRETiME: [%s] %s :: OK :: released %s ago", section, rel, vars["preage"])
 		outs = append(outs, plugin.Output{Type: "NEWPRETIME", Text: p.render("NEWPRETIME", vars, fallback)})
 	case event.EventOldPreTime:
 		if p.shouldInlinePretime() {
 			p.emitInlinePretime(evt, section, rel, vars)
+			return nil, nil
+		}
+		if shouldSuppressLatePretime(st) {
 			return nil, nil
 		}
 		fallback := fmt.Sprintf("PRETiME: [%s] %s :: BAD :: released %s ago", section, rel, vars["preage"])

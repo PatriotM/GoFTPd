@@ -157,6 +157,43 @@ func TestUploadRaceAnnouncesStopAfterComplete(t *testing.T) {
 	}
 }
 
+func TestPretimeAnnounceIsSuppressedAfterComplete(t *testing.T) {
+	p := New()
+
+	releasePath := "/EBOOKS/Anthony.Shadid.House.of.Stone.A.Memoir.of.Home.Family.and.a.Lost.Middle.East.2012.RETAiL.EPUB.eBook-NODE"
+	completeEvt := &event.Event{
+		Type:    event.EventRaceEnd,
+		Section: "EBOOKS",
+		Path:    releasePath,
+		Data: map[string]string{
+			"u_count":    "1",
+			"t_mbytes":   "2MB",
+			"t_files":    "1F",
+			"t_avgspeed": "1.57MB/s",
+			"t_duration": "1.0210s",
+		},
+	}
+	if _, err := p.OnEvent(completeEvt); err != nil {
+		t.Fatalf("OnEvent complete failed: %v", err)
+	}
+
+	pretimeEvt := &event.Event{
+		Type:    event.EventNewPreTime,
+		Section: "EBOOKS",
+		Path:    releasePath,
+		Data: map[string]string{
+			"preage": "0s",
+		},
+	}
+	outs, err := p.OnEvent(pretimeEvt)
+	if err != nil {
+		t.Fatalf("OnEvent pretime failed: %v", err)
+	}
+	if len(outs) != 0 {
+		t.Fatalf("expected late pretime to be suppressed, got %+v", outs)
+	}
+}
+
 func TestRequestReleaseDirEmitsNewAnnounce(t *testing.T) {
 	p := New()
 	evt := &event.Event{
