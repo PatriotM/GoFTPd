@@ -145,6 +145,8 @@ slave:
 # =============================================================================
 # slaves:
 #   - name: "SLAVE1"
+#     # Pin all /REQUESTS activity to one box:
+#     # paths: ["/REQUESTS/*"]
 #     sections: ["TV-1080P", "TV-720P"]
 #     paths: ["/TV-*/*"]
 #     weight: 2
@@ -288,7 +290,6 @@ show_diz:
   .message: "*"
   .imdb:    "*"
   .tvmaze:  "*"
-  .requests: "*"
   file_id.diz: "*"
 
 

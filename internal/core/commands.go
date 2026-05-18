@@ -19,12 +19,13 @@ import (
 	"sync"
 	"syscall"
 	"time"
-	"unicode"
 
 	"goftpd/internal/timeutil"
 	"goftpd/internal/user"
 	"goftpd/internal/zipscript"
 )
+
+var zipDIZTotalRE = regexp.MustCompile(`[\\[\\(<:\\s](?:\\s)?[0-9oOxX\\*]*(?:\\s)?/(?:\\s)?([0-9oOxX]*[0-9oO])(?:\\s)?[\\]\\)>\\s]`)
 
 // getMlsdPerm returns MLSD permissions string for a file
 func getMlsdPerm(info os.FileInfo, isSymlink bool) string {
@@ -2932,10 +2933,6 @@ type releaseUploadPipelineState struct {
 	ShouldAnnounceNR bool
 }
 
-type releaseProgressCacheBridge interface {
-	CacheReleaseProgress(dirPath string, present, total int, hasManifest bool)
-}
-
 func runReleaseUploadPipeline(s *Session, bridge MasterBridge, in releaseUploadPipelineInput) {
 	if s == nil || s.Config == nil || bridge == nil {
 		return
@@ -4265,142 +4262,49 @@ func zipDirPayloadCount(bridge MasterBridge, dirPath string, entries []MasterFil
 }
 
 func zipExpectedPartsFromDIZ(bridge MasterBridge, dirPath string) int {
-	content, err := bridge.ReadFile(path.Join(dirPath, "file_id.diz"))
+	if bridge == nil {
+		return 0
+	}
+	dizPath := path.Join(dirPath, "file_id.diz")
+	if expected, ok := bridge.GetZipExpectedParts(dirPath); ok {
+		return expected
+	}
+	content, err := bridge.ReadFile(dizPath)
 	if err != nil || len(content) == 0 {
 		recovered, recoverErr := recoverZipDIZFromDirectory(bridge, dirPath)
 		if recoverErr != nil || len(recovered) == 0 {
+			bridge.CacheZipExpectedParts(dirPath, 0, 0)
 			return 0
 		}
 		content = recovered
 	}
-	return zipExpectedPartsFromDIZContent(content)
+	expected := zipExpectedPartsFromDIZContent(content)
+	dizChecksum, ok := bridge.GetKnownChecksum(dizPath)
+	if !ok && len(content) > 0 {
+		dizChecksum = crc32.ChecksumIEEE(content)
+	}
+	bridge.CacheZipExpectedParts(dirPath, expected, dizChecksum)
+	return expected
 }
 
 func zipExpectedPartsFromDIZContent(content []byte) int {
 	if len(content) == 0 {
 		return 0
 	}
-	text := normalizeZipDIZText(string(content))
-	if text == "" {
+	match := zipDIZTotalRE.FindSubmatch(content)
+	if len(match) < 2 {
 		return 0
 	}
-
-	patterns := []string{
-		"[?!/##]",
-		"(?!/##)",
-		"[?!!/###]",
-		"(?!!/###)",
-		"[?/#]",
-		"[?/##]",
-		"(?/#)",
-		"[disk:!!/##]",
-		"[disk:?!/##]",
-		"o?/o#",
-		"disks[!!/##",
-		" !/# ",
-		" !!/##&/&!",
-		"&/!!/## ",
-		"[!!/#]",
-		": ?!/##&/",
-		"xx/##",
-		"<!!/##>",
-		"x/##",
-		"! of #",
-		"? of #",
-		"x of #",
-		"ox of o#",
-		"!! of ##",
-		"?! of ##",
-		"xx of ##",
-	}
-
-	best := 0
-	for start := 0; start < len(text); start++ {
-		for _, pattern := range patterns {
-			total, ok := matchZipDIZPattern(text, start, pattern)
-			if ok && total > best {
-				best = total
-			}
-		}
-	}
-	return best
-}
-
-func normalizeZipDIZText(text string) string {
-	var b strings.Builder
-	b.Grow(len(text))
-	lastSpace := false
-	for _, r := range text {
-		switch r {
-		case '\x00', '\r', '\n', '\t', ' ':
-			if !lastSpace {
-				b.WriteByte(' ')
-				lastSpace = true
-			}
-		default:
-			b.WriteRune(unicode.ToLower(r))
-			lastSpace = false
-		}
-	}
-	return b.String()
-}
-
-func matchZipDIZPattern(text string, start int, pattern string) (int, bool) {
-	if start >= len(text) {
-		return 0, false
-	}
-	var totalDigits strings.Builder
-	control := 0
-	matches := 0
-	for patIdx := 0; patIdx <= len(pattern)-control-1; patIdx++ {
-		textIdx := start + patIdx
-		if textIdx >= len(text) {
-			return 0, false
-		}
-		ch := text[textIdx]
-		token := pattern[patIdx+control]
-		switch token {
-		case '#':
-			if (ch >= '0' && ch <= '9') || ch == ' ' || ch == 'o' {
-				if ch == 'o' {
-					ch = '0'
-				}
-				matches++
-				totalDigits.WriteByte(ch)
-			}
-		case '?':
-			matches++
-		case '!':
-			if (ch >= '0' && ch <= '9') || ch == 'o' || ch == 'x' {
-				matches++
-			}
-		case '&':
-			control++
-			if patIdx+control >= len(pattern) {
-				return 0, false
-			}
-			next := pattern[patIdx+control]
-			if !(next == '!' && ((ch >= '0' && ch <= '9') || ch == 'o' || ch == 'x')) && ch != next {
-				matches++
-			}
-		default:
-			if token == ch {
-				matches++
-			}
-		}
-	}
-	if matches != len(pattern)-control {
-		return 0, false
-	}
-	raw := strings.TrimSpace(totalDigits.String())
+	raw := strings.TrimSpace(string(match[1]))
 	if raw == "" {
-		return 0, false
+		return 0
 	}
+	raw = strings.NewReplacer("o", "0", "O", "0", "x", "0", "X", "0").Replace(raw)
 	total, err := strconv.Atoi(raw)
 	if err != nil || total <= 0 {
-		return 0, false
+		return 0
 	}
-	return total, true
+	return total
 }
 
 func recoverZipDIZFromDirectory(bridge MasterBridge, dirPath string) ([]byte, error) {
@@ -4514,11 +4418,8 @@ func zipDirCompleteAfterUpload(bridge MasterBridge, dirPath, fileName string, en
 }
 
 func cacheZipReleaseProgress(bridge MasterBridge, dirPath string, present, total int) {
-	if bridge == nil || total <= 0 {
+	if bridge == nil {
 		return
-	}
-	if cacher, ok := bridge.(releaseProgressCacheBridge); ok {
-		cacher.CacheReleaseProgress(dirPath, present, total, true)
 	}
 	bridge.SyncStatusMarkersForPath(dirPath, true)
 }

@@ -10,6 +10,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"goftpd/internal/plugin"
+	"goftpd/internal/zipscript"
 )
 
 // VFSFile represents a file or directory in the master's virtual file system.
@@ -36,6 +39,10 @@ type VFSDirMeta struct {
 	SFVName             string            // name of the .sfv file
 	SFVChecksum         uint32            // CRC32 of the .sfv file itself, when known
 	SFVAllowWithoutFile bool              // compatibility for direct test metadata injection
+	ZipExpectedParts    int
+	ZipDIZChecksum      uint32
+	RequestEntries      []plugin.RequestRecord
+	RequestFillEntries  []plugin.RequestFillRecord
 }
 
 type VFSRaceCache struct {
@@ -482,6 +489,7 @@ func (vfs *VirtualFileSystem) DeleteFile(path string) {
 func (vfs *VirtualFileSystem) deletePathLocked(path string) bool {
 	path = cleanVFSPath(path)
 	parent := cleanVFSPath(filepath.Dir(path))
+	baseLower := strings.ToLower(filepath.Base(path))
 	if strings.HasSuffix(strings.ToLower(filepath.Base(path)), ".sfv") {
 		if meta := vfs.dirMeta[parent]; meta != nil {
 			meta.SFVName = ""
@@ -491,6 +499,7 @@ func (vfs *VirtualFileSystem) deletePathLocked(path string) bool {
 			delete(vfs.dirMeta, parent)
 		}
 	}
+	clearZipMeta := baseLower == "file_id.diz" || strings.HasSuffix(baseLower, ".zip")
 	removed := make([]string, 0, 8)
 	if _, ok := vfs.files[path]; ok {
 		delete(vfs.files, path)
@@ -523,6 +532,11 @@ func (vfs *VirtualFileSystem) deletePathLocked(path string) bool {
 		if metaPath == path || strings.HasPrefix(metaPath, prefix) {
 			delete(vfs.dirMeta, metaPath)
 		}
+	}
+	if clearZipMeta && !vfs.hasZipArchiveLocked(parent) {
+		vfs.clearZipMetaLocked(parent)
+	} else if baseLower == "file_id.diz" {
+		vfs.clearZipMetaLocked(parent)
 	}
 	return true
 }
@@ -665,6 +679,11 @@ func (vfs *VirtualFileSystem) computeReleaseSnapshotLocked(dirPath string) *vfsR
 		if cache.Total > 0 {
 			snapshot.HasSFV = true
 		}
+		return snapshot
+	}
+	if expected, ok := vfs.getZipExpectedPartsLocked(dirPath); ok {
+		snapshot.Present = vfs.zipPayloadCountLocked(dirPath)
+		snapshot.Total = expected
 	}
 	return snapshot
 }
@@ -788,6 +807,12 @@ func (vfs *VirtualFileSystem) RenameFile(from, to string) {
 			meta.SFVEntries = nil
 			delete(vfs.dirMeta, fromParent)
 		}
+	}
+	if fromBase == "file_id.diz" && (fromParent != toParent || toBase != "file_id.diz") {
+		vfs.clearZipMetaLocked(fromParent)
+	}
+	if strings.HasSuffix(fromBase, ".zip") && (fromParent != toParent || !strings.HasSuffix(toBase, ".zip")) && !vfs.hasZipArchiveLocked(fromParent) {
+		vfs.clearZipMetaLocked(fromParent)
 	}
 	vfs.rebuildChildrenLocked()
 	now := time.Now().Unix()
@@ -1005,6 +1030,14 @@ func (vfs *VirtualFileSystem) SaveToDisk(filePath string) error {
 		copyMeta.SFVName = meta.SFVName
 		copyMeta.SFVChecksum = meta.SFVChecksum
 		copyMeta.SFVAllowWithoutFile = meta.SFVAllowWithoutFile
+		copyMeta.ZipExpectedParts = meta.ZipExpectedParts
+		copyMeta.ZipDIZChecksum = meta.ZipDIZChecksum
+		if len(meta.RequestEntries) > 0 {
+			copyMeta.RequestEntries = append([]plugin.RequestRecord(nil), meta.RequestEntries...)
+		}
+		if len(meta.RequestFillEntries) > 0 {
+			copyMeta.RequestFillEntries = append([]plugin.RequestFillRecord(nil), meta.RequestFillEntries...)
+		}
 		snapshot.DirMeta[dirPath] = copyMeta
 	}
 	vfs.mu.RUnlock()
@@ -1228,6 +1261,97 @@ func (vfs *VirtualFileSystem) GetSFVData(dirPath string) *VFSDirMeta {
 		return nil
 	}
 	return meta
+}
+
+func (vfs *VirtualFileSystem) CacheZipExpectedParts(dirPath string, expected int, dizChecksum uint32) {
+	vfs.mu.Lock()
+	defer vfs.mu.Unlock()
+	dirPath = cleanVFSPath(dirPath)
+	if expected <= 0 {
+		if meta := vfs.dirMeta[dirPath]; meta != nil {
+			meta.ZipExpectedParts = 0
+			meta.ZipDIZChecksum = 0
+			if meta.SFVEntries == nil && len(meta.RequestEntries) == 0 && len(meta.RequestFillEntries) == 0 {
+				delete(vfs.dirMeta, dirPath)
+			}
+			vfs.markPersistDirtyLocked()
+		}
+		return
+	}
+	meta := vfs.dirMeta[dirPath]
+	if meta == nil {
+		meta = &VFSDirMeta{}
+		vfs.dirMeta[dirPath] = meta
+	}
+	meta.ZipExpectedParts = expected
+	meta.ZipDIZChecksum = dizChecksum
+	vfs.markPersistDirtyLocked()
+}
+
+func (vfs *VirtualFileSystem) clearZipMetaLocked(dirPath string) {
+	dirPath = cleanVFSPath(dirPath)
+	meta := vfs.dirMeta[dirPath]
+	if meta == nil {
+		return
+	}
+	meta.ZipExpectedParts = 0
+	meta.ZipDIZChecksum = 0
+	if meta.SFVEntries == nil && len(meta.RequestEntries) == 0 && len(meta.RequestFillEntries) == 0 {
+		delete(vfs.dirMeta, dirPath)
+	}
+}
+
+func (vfs *VirtualFileSystem) GetZipExpectedParts(dirPath string) (int, bool) {
+	vfs.mu.RLock()
+	defer vfs.mu.RUnlock()
+	return vfs.getZipExpectedPartsLocked(dirPath)
+}
+
+func (vfs *VirtualFileSystem) SetRequestData(dirPath string, requests []plugin.RequestRecord, fills []plugin.RequestFillRecord) {
+	vfs.mu.Lock()
+	defer vfs.mu.Unlock()
+	dirPath = cleanVFSPath(dirPath)
+	meta := vfs.dirMeta[dirPath]
+	if meta == nil {
+		meta = &VFSDirMeta{}
+		vfs.dirMeta[dirPath] = meta
+	}
+	meta.RequestEntries = append([]plugin.RequestRecord(nil), requests...)
+	meta.RequestFillEntries = append([]plugin.RequestFillRecord(nil), fills...)
+	vfs.markPersistDirtyLocked()
+}
+
+func (vfs *VirtualFileSystem) GetRequestData(dirPath string) ([]plugin.RequestRecord, []plugin.RequestFillRecord) {
+	vfs.mu.RLock()
+	defer vfs.mu.RUnlock()
+	dirPath = cleanVFSPath(dirPath)
+	meta := vfs.dirMeta[dirPath]
+	if meta == nil {
+		return nil, nil
+	}
+	requests := append([]plugin.RequestRecord(nil), meta.RequestEntries...)
+	fills := append([]plugin.RequestFillRecord(nil), meta.RequestFillEntries...)
+	return requests, fills
+}
+
+func (vfs *VirtualFileSystem) getZipExpectedPartsLocked(dirPath string) (int, bool) {
+	dirPath = cleanVFSPath(dirPath)
+	meta := vfs.dirMeta[dirPath]
+	if meta == nil || meta.ZipExpectedParts <= 0 {
+		return 0, false
+	}
+	dizPath := cleanVFSPath(filepath.Join(dirPath, "file_id.diz"))
+	dizFile := vfs.files[dizPath]
+	if dizFile == nil || dizFile.IsDir || dizFile.IsSymlink {
+		return 0, false
+	}
+	if meta.ZipDIZChecksum != 0 && dizFile.Checksum != 0 && meta.ZipDIZChecksum != dizFile.Checksum {
+		return 0, false
+	}
+	if !vfs.hasZipArchiveLocked(dirPath) {
+		return 0, false
+	}
+	return meta.ZipExpectedParts, true
 }
 
 // RaceUserStat holds per-user race statistics computed from VFS.
@@ -1576,6 +1700,37 @@ func (vfs *VirtualFileSystem) sfvMetaValidLocked(dirPath string, meta *VFSDirMet
 		return false
 	}
 	return true
+}
+
+func (vfs *VirtualFileSystem) zipPayloadCountLocked(dirPath string) int {
+	dirPath = cleanVFSPath(dirPath)
+	total := 0
+	for childPath := range vfs.children[dirPath] {
+		f := vfs.files[childPath]
+		if f == nil || f.IsDir || f.IsSymlink {
+			continue
+		}
+		name := strings.TrimSpace(filepath.Base(childPath))
+		if strings.HasPrefix(name, ".") || !zipscript.IsZipPayloadName(name) {
+			continue
+		}
+		total++
+	}
+	return total
+}
+
+func (vfs *VirtualFileSystem) hasZipArchiveLocked(dirPath string) bool {
+	dirPath = cleanVFSPath(dirPath)
+	for childPath := range vfs.children[dirPath] {
+		f := vfs.files[childPath]
+		if f == nil || f.IsDir || f.IsSymlink || f.Size <= 0 {
+			continue
+		}
+		if strings.HasSuffix(strings.ToLower(strings.TrimSpace(filepath.Base(childPath))), ".zip") {
+			return true
+		}
+	}
+	return false
 }
 
 func (vfs *VirtualFileSystem) markPersistDirtyLocked() {

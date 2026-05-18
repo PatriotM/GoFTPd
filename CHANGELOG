@@ -20,6 +20,8 @@ GoFTPd Changelog
   so weekly credit replacement survives restarts and only reapplies once per
   week.
 - Added banlist-backed login bans in `etc/banlist.txt`.
+- Clarified `SITE CHANGE` usage around canonical field names and removed the
+  extra compatibility aliases from that command.
 - Expanded the shipped userfile model and defaults:
   - fuller compatibility fields such as `LOGINS`, `LOGINSLOTS`, `MAXSIM`,
     `UPLOADSLOTS`, `DOWNLOADSLOTS`, `WKLYALLOTMENT`, `GROUPSLOTS`, and

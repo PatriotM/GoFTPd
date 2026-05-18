@@ -36,7 +36,12 @@ func (b *testBridge) CacheMediaInfo(path string, fields map[string]string) {}
 func (b *testBridge) FileExists(path string) bool                          { return false }
 func (b *testBridge) GetFileSize(path string) int64                        { return 0 }
 func (b *testBridge) GetSFVData(dirPath string) map[string]uint32          { return nil }
-func (b *testBridge) GetDirMediaInfo(dirPath string) map[string]string     { return nil }
+func (b *testBridge) GetRequestData(dirPath string) ([]plugin.RequestRecord, []plugin.RequestFillRecord) {
+	return nil, nil
+}
+func (b *testBridge) SetRequestData(dirPath string, requests []plugin.RequestRecord, fills []plugin.RequestFillRecord) {
+}
+func (b *testBridge) GetDirMediaInfo(dirPath string) map[string]string { return nil }
 func (b *testBridge) PluginGetVFSRaceStats(dirPath string) ([]plugin.RaceUser, []plugin.RaceGroup, int64, int, int) {
 	return nil, nil, 0, 0, 0
 }

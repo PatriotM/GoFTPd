@@ -46,7 +46,7 @@ var baseSiteHelpEntries = []siteHelpEntry{
 	{Command: "READD", Usage: "<user> [newpass]", Summary: "Restore a deleted user", Area: "Users/groups"},
 	{Command: "RENUSER", Usage: "<olduser> <newuser>", Summary: "Rename a user", Area: "Users/groups"},
 	{Command: "CHPASS", Usage: "<user> <newpass>", Summary: "Change a user's password", Area: "Users/groups"},
-	{Command: "CHANGE", Usage: "<user|group> <field> <value...>", Summary: "Generic user/group field editor", Area: "Users/groups"},
+	{Command: "CHANGE", Usage: "<user|group> <field> <value...>", Summary: "Generic user/group field editor (SITE CHANGE HELP for fields)", Area: "Users/groups"},
 	{Command: "CHRATIO", Usage: "<user> <ratio>", Summary: "Change a user's ratio", Area: "Users/groups"},
 	{Command: "CHNUMLOGINS", Usage: "<user> <count>", Summary: "Change a user's max concurrent logins", Area: "Users/groups"},
 	{Command: "CHMAXSIM", Usage: "<user> <count>", Summary: "Change a user's max concurrent transfers", Area: "Users/groups"},

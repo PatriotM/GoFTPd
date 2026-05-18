@@ -190,6 +190,21 @@ type FileEntry struct {
 	Slave      string
 }
 
+type RequestRecord struct {
+	Release string
+	By      string
+	Mode    string
+	For     string
+	Date    string
+}
+
+type RequestFillRecord struct {
+	Release     string
+	RequestedBy string
+	FilledBy    string
+	Date        string
+}
+
 // MasterBridge exposes the subset of the master's bridge that plugins need.
 // This is a minimal surface — we can add methods as plugins require them.
 type MasterBridge interface {
@@ -210,6 +225,8 @@ type MasterBridge interface {
 	FileExists(path string) bool
 	GetFileSize(path string) int64
 	GetSFVData(dirPath string) map[string]uint32
+	GetRequestData(dirPath string) ([]RequestRecord, []RequestFillRecord)
+	SetRequestData(dirPath string, requests []RequestRecord, fills []RequestFillRecord)
 	GetDirMediaInfo(dirPath string) map[string]string
 	PluginGetVFSRaceStats(dirPath string) (users []RaceUser, groups []RaceGroup, totalBytes int64, present int, total int)
 }

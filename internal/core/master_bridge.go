@@ -110,6 +110,15 @@ type MasterBridge interface {
 	// Returns nil if no SFV is cached for this directory.
 	GetSFVData(dirPath string) map[string]uint32
 
+	// GetZipExpectedParts returns cached file_id.diz-derived zip part count for
+	// a directory when valid according to current VFS state.
+	GetZipExpectedParts(dirPath string) (expected int, ok bool)
+
+	// CacheZipExpectedParts stores or clears the file_id.diz-derived expected zip
+	// part count for a directory. dizChecksum is the CRC32 of the current
+	// file_id.diz content when known. expected<=0 clears the cached zip metadata.
+	CacheZipExpectedParts(dirPath string, expected int, dizChecksum uint32)
+
 	// GetVerifiedSFVPresentFiles returns the expected SFV filenames that are
 	// currently present and checksum-valid according to live VFS state.
 	GetVerifiedSFVPresentFiles(dirPath string) map[string]bool

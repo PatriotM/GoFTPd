@@ -1,11 +1,9 @@
 package request
 
 import (
-	"bufio"
 	"fmt"
 	"log"
 	"path"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,8 +16,6 @@ import (
 type Plugin struct {
 	svc                       *plugin.Services
 	dir                       string
-	reqFile                   string
-	fillStatsFile             string
 	requestHead               string
 	filledHead                string
 	allowSpace                bool
@@ -54,24 +50,19 @@ type requestFillEntry struct {
 	Date        string
 }
 
-var reqLineRE = regexp.MustCompile(`^\[\s*(\d+):\]\s+(.+?)\s+~\s+by\s+(.+?)\s+\((.*?)\)(?:\s+for\s+(.+?))?\s+at\s+(.+)$`)
-var reqFillLineRE = regexp.MustCompile(`^(.+?)\s+~\s+requested by\s+(.+?)\s+filled by\s+(.+?)\s+at\s+(.+)$`)
-
 func New() *Plugin {
 	return &Plugin{
-		dir:           "/REQUESTS",
-		reqFile:       "/REQUESTS/.requests",
-		fillStatsFile: "/REQUESTS/.reqfills",
-		requestHead:   "REQ-",
-		filledHead:    "FILLED-",
-		replaceWith:   "_",
-		badChars:      `*{^~/,+&\`,
-		maxRequests:   30,
-		reqwipeFlags:  "1",
-		reqTopLimit:   10,
-		proxyUsers:    []string{"goftpd"},
-		sitename:      "GoFTPd",
-		stopCh:        make(chan struct{}),
+		dir:          "/REQUESTS",
+		requestHead:  "REQ-",
+		filledHead:   "FILLED-",
+		replaceWith:  "_",
+		badChars:     `*{^~/,+&\`,
+		maxRequests:  30,
+		reqwipeFlags: "1",
+		reqTopLimit:  10,
+		proxyUsers:   []string{"goftpd"},
+		sitename:     "GoFTPd",
+		stopCh:       make(chan struct{}),
 	}
 }
 
@@ -81,12 +72,6 @@ func (p *Plugin) Init(svc *plugin.Services, cfg map[string]interface{}) error {
 	p.svc = svc
 	if s := stringConfig(cfg, "dir", ""); strings.TrimSpace(s) != "" {
 		p.dir = cleanAbs(s)
-	}
-	if s := stringConfig(cfg, "reqfile", ""); strings.TrimSpace(s) != "" {
-		p.reqFile = cleanAbs(s)
-	}
-	if s := stringConfig(cfg, "fill_stats_file", ""); strings.TrimSpace(s) != "" {
-		p.fillStatsFile = cleanAbs(s)
 	}
 	if s := stringConfig(cfg, "request_head", ""); s != "" {
 		p.requestHead = s
@@ -132,16 +117,6 @@ func (p *Plugin) Init(svc *plugin.Services, cfg map[string]interface{}) error {
 	}
 	if b, ok := boolConfig(cfg["debug"]); ok {
 		p.debug = b
-	}
-	if _, configured := cfg["reqfile"]; !configured && p.dir != "/REQUESTS" {
-		p.reqFile = path.Join(p.dir, ".requests")
-	} else if strings.TrimSpace(p.reqFile) == "" {
-		p.reqFile = path.Join(p.dir, ".requests")
-	}
-	if _, configured := cfg["fill_stats_file"]; !configured && p.dir != "/REQUESTS" {
-		p.fillStatsFile = path.Join(p.dir, ".reqfills")
-	} else if strings.TrimSpace(p.fillStatsFile) == "" {
-		p.fillStatsFile = path.Join(p.dir, ".reqfills")
 	}
 	go p.ensureBaseDirOnStartup()
 	return nil
@@ -282,6 +257,15 @@ func (p *Plugin) handleReqFill(ctx plugin.SiteContext, args []string) bool {
 	if p.requestHead != "" && !p.doNotCreateDirUntilFilled {
 		if err := p.ensureRequestDir(ctx, entry.Release, entry.By); err != nil {
 			p.reply(ctx, "451", fmt.Sprintf("Failed to repair request dir: %v", err))
+			return true
+		}
+	}
+	if targetSlave := p.dirSlave(reqDir); targetSlave != "" {
+		// Older request trees may already be mixed across slaves. Normalize them
+		// onto the wrapper dir's owner before the fill rename so normal RETR keeps
+		// working after the request becomes FILLED-*.
+		if err := p.relocateRequestTreeToSlave(reqDir, targetSlave); err != nil {
+			p.reply(ctx, "451", fmt.Sprintf("Failed to prepare request dir for fill: %v", err))
 			return true
 		}
 	}
@@ -520,22 +504,16 @@ func (p *Plugin) parseKeyArgs(args []string) (string, string) {
 }
 
 func (p *Plugin) loadRequests() []requestEntry {
-	data, err := p.svc.Bridge.ReadFile(p.reqFile)
-	if err != nil && p.debug {
-		log.Printf("[REQUEST] read %s failed: %v", p.reqFile, err)
-	}
-	var entries []requestEntry
-	if err == nil && len(data) > 0 {
-		scanner := bufio.NewScanner(strings.NewReader(string(data)))
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if line == "" {
-				continue
-			}
-			if entry, ok := parseRequestLine(line); ok {
-				entries = append(entries, entry)
-			}
-		}
+	requests, _ := p.svc.Bridge.GetRequestData(p.dir)
+	entries := make([]requestEntry, 0, len(requests))
+	for _, request := range requests {
+		entries = append(entries, requestEntry{
+			Release: strings.TrimSpace(request.Release),
+			By:      firstNonEmpty(request.By, "unknown"),
+			Mode:    firstNonEmpty(request.Mode, "gl"),
+			For:     strings.TrimSpace(request.For),
+			Date:    strings.TrimSpace(request.Date),
+		})
 	}
 	entries = p.mergeRequestDirs(entries)
 	for i := range entries {
@@ -571,27 +549,12 @@ func (p *Plugin) mergeRequestDirs(entries []requestEntry) []requestEntry {
 			Release: release,
 			By:      firstNonEmpty(entry.Owner, "unknown"),
 			Mode:    "gl",
+			For:     "",
 			Date:    date,
 		})
 		known[strings.ToLower(release)] = struct{}{}
 	}
 	return entries
-}
-
-func parseRequestLine(line string) (requestEntry, bool) {
-	m := reqLineRE.FindStringSubmatch(line)
-	if len(m) == 0 {
-		return requestEntry{}, false
-	}
-	num, _ := strconv.Atoi(m[1])
-	return requestEntry{
-		Num:     num,
-		Release: strings.TrimSpace(m[2]),
-		By:      strings.TrimSpace(m[3]),
-		Mode:    strings.TrimSpace(m[4]),
-		For:     strings.TrimSpace(m[5]),
-		Date:    strings.TrimSpace(m[6]),
-	}, true
 }
 
 func (p *Plugin) recordFill(entry requestEntry, filledBy string) error {
@@ -606,63 +569,31 @@ func (p *Plugin) recordFill(entry requestEntry, filledBy string) error {
 }
 
 func (p *Plugin) loadFillStats() []requestFillEntry {
-	data, err := p.svc.Bridge.ReadFile(p.fillStatsFile)
-	if err != nil {
-		if p.debug {
-			log.Printf("[REQUEST] read %s failed: %v", p.fillStatsFile, err)
-		}
-		return nil
-	}
-	scanner := bufio.NewScanner(strings.NewReader(string(data)))
-	var out []requestFillEntry
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		if entry, ok := parseFillLine(line); ok {
-			out = append(out, entry)
-		}
+	_, fills := p.svc.Bridge.GetRequestData(p.dir)
+	out := make([]requestFillEntry, 0, len(fills))
+	for _, fill := range fills {
+		out = append(out, requestFillEntry{
+			Release:     strings.TrimSpace(fill.Release),
+			RequestedBy: firstNonEmpty(fill.RequestedBy, "unknown"),
+			FilledBy:    firstNonEmpty(fill.FilledBy, "unknown"),
+			Date:        strings.TrimSpace(fill.Date),
+		})
 	}
 	return out
 }
 
-func parseFillLine(line string) (requestFillEntry, bool) {
-	m := reqFillLineRE.FindStringSubmatch(line)
-	if len(m) == 0 {
-		return requestFillEntry{}, false
-	}
-	return requestFillEntry{
-		Release:     strings.TrimSpace(m[1]),
-		RequestedBy: strings.TrimSpace(m[2]),
-		FilledBy:    strings.TrimSpace(m[3]),
-		Date:        strings.TrimSpace(m[4]),
-	}, true
-}
-
 func (p *Plugin) saveFillStats(entries []requestFillEntry) error {
-	var b strings.Builder
+	requests, _ := p.svc.Bridge.GetRequestData(p.dir)
+	fills := make([]plugin.RequestFillRecord, 0, len(entries))
 	for _, entry := range entries {
-		line := fmt.Sprintf("%s ~ requested by %s filled by %s at %s",
-			entry.Release,
-			firstNonEmpty(entry.RequestedBy, "unknown"),
-			firstNonEmpty(entry.FilledBy, "unknown"),
-			entry.Date,
-		)
-		b.WriteString(line)
-		b.WriteByte('\n')
+		fills = append(fills, plugin.RequestFillRecord{
+			Release:     strings.TrimSpace(entry.Release),
+			RequestedBy: firstNonEmpty(entry.RequestedBy, "unknown"),
+			FilledBy:    firstNonEmpty(entry.FilledBy, "unknown"),
+			Date:        strings.TrimSpace(entry.Date),
+		})
 	}
-	if err := p.ensureBaseDir(nil); err != nil {
-		return err
-	}
-	if err := p.writeFile(p.fillStatsFile, []byte(b.String())); err != nil {
-		if retryErr := p.ensureBaseDir(nil); retryErr != nil {
-			return fmt.Errorf("%w; retry mkdir failed: %v", err, retryErr)
-		}
-		if retryErr := p.writeFile(p.fillStatsFile, []byte(b.String())); retryErr != nil {
-			return retryErr
-		}
-	}
+	p.svc.Bridge.SetRequestData(p.dir, requests, fills)
 	return nil
 }
 
@@ -694,27 +625,18 @@ func (p *Plugin) saveRequests(entries []requestEntry) error {
 			entries[i].Mode = "gl"
 		}
 	}
-	var b strings.Builder
+	requests := make([]plugin.RequestRecord, 0, len(entries))
 	for _, entry := range entries {
-		line := fmt.Sprintf("%s %s ~ by %s (%s)", p.numberedEntry(entry), entry.Release, entry.By, entry.Mode)
-		if entry.For != "" {
-			line += " for " + entry.For
-		}
-		line += " at " + entry.Date
-		b.WriteString(line)
-		b.WriteByte('\n')
+		requests = append(requests, plugin.RequestRecord{
+			Release: strings.TrimSpace(entry.Release),
+			By:      firstNonEmpty(entry.By, "unknown"),
+			Mode:    firstNonEmpty(entry.Mode, "gl"),
+			For:     strings.TrimSpace(entry.For),
+			Date:    strings.TrimSpace(entry.Date),
+		})
 	}
-	if err := p.ensureBaseDir(nil); err != nil {
-		return err
-	}
-	if err := p.writeFile(p.reqFile, []byte(b.String())); err != nil {
-		if retryErr := p.ensureBaseDir(nil); retryErr != nil {
-			return fmt.Errorf("%w; retry mkdir failed: %v", err, retryErr)
-		}
-		if retryErr := p.writeFile(p.reqFile, []byte(b.String())); retryErr != nil {
-			return retryErr
-		}
-	}
+	_, fills := p.svc.Bridge.GetRequestData(p.dir)
+	p.svc.Bridge.SetRequestData(p.dir, requests, fills)
 	return nil
 }
 
@@ -801,7 +723,6 @@ func (p *Plugin) ensureBaseDir(ctx plugin.SiteContext) error {
 
 type requestStorageBridge interface {
 	MakeDirOnSlave(dirPath, owner, group, slaveName string) error
-	WriteFileOnSlave(filePath string, content []byte, slaveName string) error
 }
 
 func (p *Plugin) makeDir(dirPath, owner, group string) error {
@@ -811,15 +732,6 @@ func (p *Plugin) makeDir(dirPath, owner, group string) error {
 		}
 	}
 	return p.svc.Bridge.MakeDir(dirPath, owner, group)
-}
-
-func (p *Plugin) writeFile(filePath string, content []byte) error {
-	if p.storageSlave != "" {
-		if bridge, ok := p.svc.Bridge.(requestStorageBridge); ok {
-			return bridge.WriteFileOnSlave(filePath, content, p.storageSlave)
-		}
-	}
-	return p.svc.Bridge.WriteFile(filePath, content)
 }
 
 func (p *Plugin) ensureBaseDirOnStartup() {
@@ -910,6 +822,70 @@ func (p *Plugin) childExists(parent, name string) bool {
 		}
 	}
 	return false
+}
+
+type requestTreeEntry struct {
+	Path  string
+	Slave string
+	IsDir bool
+}
+
+func (p *Plugin) dirSlave(dirPath string) string {
+	dirPath = cleanAbs(dirPath)
+	parent := path.Dir(dirPath)
+	name := path.Base(dirPath)
+	for _, entry := range p.svc.Bridge.PluginListDir(parent) {
+		if entry.IsDir && strings.EqualFold(entry.Name, name) {
+			return strings.TrimSpace(entry.Slave)
+		}
+	}
+	return ""
+}
+
+func (p *Plugin) relocateRequestTreeToSlave(dirPath, targetSlave string) error {
+	targetSlave = strings.TrimSpace(targetSlave)
+	if p == nil || p.svc == nil || p.svc.Bridge == nil || targetSlave == "" {
+		return nil
+	}
+	entries := p.collectRequestTreeEntries(dirPath)
+	sort.Slice(entries, func(i, j int) bool {
+		leftDepth := strings.Count(entries[i].Path, "/")
+		rightDepth := strings.Count(entries[j].Path, "/")
+		if entries[i].IsDir != entries[j].IsDir {
+			return !entries[i].IsDir
+		}
+		return leftDepth > rightDepth
+	})
+	for _, entry := range entries {
+		if entry.Path == cleanAbs(dirPath) || strings.TrimSpace(entry.Slave) == "" || strings.EqualFold(entry.Slave, targetSlave) {
+			continue
+		}
+		if err := p.svc.Bridge.RelocatePathToSlave(entry.Path, path.Dir(entry.Path), path.Base(entry.Path), targetSlave); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *Plugin) collectRequestTreeEntries(dirPath string) []requestTreeEntry {
+	var out []requestTreeEntry
+	var walk func(string)
+	walk = func(current string) {
+		current = cleanAbs(current)
+		for _, entry := range p.svc.Bridge.PluginListDir(current) {
+			childPath := cleanAbs(path.Join(current, entry.Name))
+			out = append(out, requestTreeEntry{
+				Path:  childPath,
+				Slave: strings.TrimSpace(entry.Slave),
+				IsDir: entry.IsDir,
+			})
+			if entry.IsDir {
+				walk(childPath)
+			}
+		}
+	}
+	walk(dirPath)
+	return out
 }
 
 func (p *Plugin) dirEmpty(dirPath string) bool {

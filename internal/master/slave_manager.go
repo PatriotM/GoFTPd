@@ -14,7 +14,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"goftpd/internal/core"
 	"goftpd/internal/protocol"
 	"goftpd/internal/zipscript"
 )
@@ -67,8 +66,6 @@ type SlaveManager struct {
 	releaseStateMu       sync.RWMutex
 	releaseMedia         map[string]map[string]string
 	releaseAnnouncements map[string]map[string]bool
-	releaseFacts         map[string]*vfsReleaseSnapshot
-	releaseFactsByParent map[string]map[string]*vfsReleaseSnapshot
 	releaseRaceWindows   map[string]*releaseRaceWindow
 	statusMarkerMu       sync.RWMutex
 	statusMarkerCfg      statusMarkerConfig
@@ -134,8 +131,6 @@ func NewSlaveManager(host string, port int, tlsEnabled bool, tlsCert, tlsKey str
 		vfs:                  NewVirtualFileSystem(),
 		releaseMedia:         make(map[string]map[string]string),
 		releaseAnnouncements: make(map[string]map[string]bool),
-		releaseFacts:         make(map[string]*vfsReleaseSnapshot),
-		releaseFactsByParent: make(map[string]map[string]*vfsReleaseSnapshot),
 		releaseRaceWindows:   make(map[string]*releaseRaceWindow),
 		authState:            make(map[string]*slaveAuthState),
 		remergeCRCSem:        make(chan struct{}, 16),
@@ -821,35 +816,6 @@ func cloneSlaveStringMap(src map[string]string) map[string]string {
 	return out
 }
 
-func cloneReleaseSnapshot(src *vfsReleaseSnapshot) *vfsReleaseSnapshot {
-	if src == nil {
-		return nil
-	}
-	copyState := *src
-	return &copyState
-}
-
-func (sm *SlaveManager) setReleaseFactLocked(dirPath string, snapshot *vfsReleaseSnapshot) {
-	dirPath = filepath.Clean(dirPath)
-	parent := filepath.Clean(filepath.Dir(dirPath))
-	if snapshot == nil {
-		delete(sm.releaseFacts, dirPath)
-		if byParent := sm.releaseFactsByParent[parent]; byParent != nil {
-			delete(byParent, dirPath)
-			if len(byParent) == 0 {
-				delete(sm.releaseFactsByParent, parent)
-			}
-		}
-		return
-	}
-	copyState := cloneReleaseSnapshot(snapshot)
-	sm.releaseFacts[dirPath] = copyState
-	if sm.releaseFactsByParent[parent] == nil {
-		sm.releaseFactsByParent[parent] = make(map[string]*vfsReleaseSnapshot)
-	}
-	sm.releaseFactsByParent[parent][dirPath] = copyState
-}
-
 func (sm *SlaveManager) SetReleaseMediaInfo(dirPath string, fields map[string]string) {
 	if sm == nil {
 		return
@@ -993,14 +959,11 @@ func (sm *SlaveManager) InvalidateReleaseStateForPath(filePath string, isDir boo
 		return
 	}
 	cleanPath := filepath.Clean(filePath)
-	parent := filepath.Clean(filepath.Dir(cleanPath))
 	sm.releaseStateMu.Lock()
 	defer sm.releaseStateMu.Unlock()
 	delete(sm.releaseMedia, cleanPath)
 	delete(sm.releaseAnnouncements, cleanPath)
 	delete(sm.releaseRaceWindows, cleanPath)
-	sm.setReleaseFactLocked(cleanPath, nil)
-	sm.setReleaseFactLocked(parent, nil)
 	if isDir {
 		prefix := strings.TrimRight(filepath.ToSlash(cleanPath), "/") + "/"
 		for key := range sm.releaseMedia {
@@ -1011,11 +974,6 @@ func (sm *SlaveManager) InvalidateReleaseStateForPath(filePath string, isDir boo
 		for key := range sm.releaseAnnouncements {
 			if key == cleanPath || strings.HasPrefix(filepath.ToSlash(key), prefix) {
 				delete(sm.releaseAnnouncements, key)
-			}
-		}
-		for key := range sm.releaseFacts {
-			if key == cleanPath || strings.HasPrefix(filepath.ToSlash(key), prefix) {
-				sm.setReleaseFactLocked(key, nil)
 			}
 		}
 		for key := range sm.releaseRaceWindows {
@@ -1046,10 +1004,6 @@ func (sm *SlaveManager) RenameReleaseState(from, to string, isDir bool) {
 		sm.releaseAnnouncements[to] = copied
 		delete(sm.releaseAnnouncements, from)
 	}
-	if snapshot, ok := sm.releaseFacts[from]; ok {
-		sm.setReleaseFactLocked(to, snapshot)
-		sm.setReleaseFactLocked(from, nil)
-	}
 	if window, ok := sm.releaseRaceWindows[from]; ok {
 		copyWindow := *window
 		sm.releaseRaceWindows[to] = &copyWindow
@@ -1077,13 +1031,6 @@ func (sm *SlaveManager) RenameReleaseState(from, to string, isDir bool) {
 			delete(sm.releaseAnnouncements, key)
 		}
 	}
-	for key, snapshot := range sm.releaseFacts {
-		if strings.HasPrefix(filepath.ToSlash(key), fromPrefix) {
-			newKey := to + key[len(from):]
-			sm.setReleaseFactLocked(newKey, snapshot)
-			sm.setReleaseFactLocked(key, nil)
-		}
-	}
 	for key, window := range sm.releaseRaceWindows {
 		if strings.HasPrefix(filepath.ToSlash(key), fromPrefix) {
 			newKey := to + key[len(from):]
@@ -1092,36 +1039,6 @@ func (sm *SlaveManager) RenameReleaseState(from, to string, isDir bool) {
 			delete(sm.releaseRaceWindows, key)
 		}
 	}
-}
-
-func (sm *SlaveManager) GetImmediateReleaseProgress(dirPath string) map[string]core.ReleaseProgressStat {
-	if sm == nil {
-		return nil
-	}
-	cleanDirPath := filepath.Clean(dirPath)
-	sm.releaseStateMu.RLock()
-	byParent := sm.releaseFactsByParent[cleanDirPath]
-	if len(byParent) == 0 {
-		sm.releaseStateMu.RUnlock()
-		return nil
-	}
-	out := make(map[string]core.ReleaseProgressStat, len(byParent))
-	for childPath, snapshot := range byParent {
-		if snapshot == nil || (snapshot.Total <= 0 && !snapshot.HasSFV) {
-			continue
-		}
-		out[childPath] = core.ReleaseProgressStat{
-			Path:    childPath,
-			Present: snapshot.Present,
-			Total:   snapshot.Total,
-			HasSFV:  snapshot.HasSFV,
-		}
-	}
-	sm.releaseStateMu.RUnlock()
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }
 
 // initializeSlaveAfterConnect triggers remerge and marks slave available.
@@ -1675,6 +1592,10 @@ func (sm *SlaveManager) GetVFS() *VirtualFileSystem {
 // uploadPath may be empty (e.g. legacy callers); in that case all available
 // slaves are considered and section affinity is skipped.
 func (sm *SlaveManager) SelectSlaveForUpload(uploadPath string) *RemoteSlave {
+	if preferred := sm.selectOwnedAncestorSlaveForUpload(uploadPath); preferred != nil {
+		return preferred
+	}
+
 	slaves := sm.GetAvailableSlaves()
 	if len(slaves) == 0 {
 		return nil
@@ -1741,6 +1662,29 @@ func (sm *SlaveManager) SelectSlaveForUpload(uploadPath string) *RemoteSlave {
 	return best
 }
 
+func (sm *SlaveManager) selectOwnedAncestorSlaveForUpload(uploadPath string) *RemoteSlave {
+	if sm == nil || sm.vfs == nil {
+		return nil
+	}
+	cleanPath := path.Clean("/" + strings.TrimSpace(uploadPath))
+	if cleanPath == "/" || cleanPath == "." {
+		return nil
+	}
+	for dirPath := path.Dir(cleanPath); ; dirPath = path.Dir(dirPath) {
+		entry := sm.vfs.GetFile(dirPath)
+		if entry != nil && entry.IsDir && !entry.IsSymlink && strings.TrimSpace(entry.SlaveName) != "" {
+			rs := sm.GetSlave(entry.SlaveName)
+			if rs != nil && rs.IsAvailable() && !sm.IsSlaveReadOnly(rs.Name()) {
+				return rs
+			}
+		}
+		if dirPath == "/" || dirPath == "." {
+			break
+		}
+	}
+	return nil
+}
+
 // sectionFromUploadPath returns the first path component uppercased,
 // e.g. "/TV-1080P/Foo.Bar.Baz" -> "TV-1080P".
 func sectionFromUploadPath(p string) string {
@@ -1773,18 +1717,20 @@ func slavePolicyAccepts(policy SlaveRoutePolicy, section, uploadPath string) boo
 		}
 	}
 	if uploadPath != "" {
+		normalizedUploadPath := strings.ToLower(uploadPath)
 		for _, pat := range policy.Paths {
 			pat = strings.TrimSpace(pat)
 			if pat == "" {
 				continue
 			}
-			if ok, _ := path.Match(pat, uploadPath); ok {
+			normalizedPattern := strings.ToLower(pat)
+			if ok, _ := path.Match(normalizedPattern, normalizedUploadPath); ok {
 				return true
 			}
-			// Also allow prefix-style patterns like "/TV-1080P/*"
-			if strings.HasSuffix(pat, "/*") {
-				prefix := strings.TrimSuffix(pat, "*")
-				if strings.HasPrefix(strings.ToLower(uploadPath), strings.ToLower(prefix)) {
+			// Also allow prefix-style patterns like "/TV-1080P/*".
+			if strings.HasSuffix(normalizedPattern, "/*") {
+				prefix := strings.TrimSuffix(normalizedPattern, "*")
+				if strings.HasPrefix(normalizedUploadPath, prefix) {
 					return true
 				}
 			}
