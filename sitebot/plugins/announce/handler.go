@@ -47,6 +47,7 @@ type AnnouncePlugin struct {
 	asyncEmit           func(outType, text, section, relpath string)
 	mu                  sync.Mutex
 	state               map[string]*releaseState
+	completedReleases   map[string]time.Time
 	pendingPretime      map[string]*pendingPretime
 	lastLoginFail       map[string]time.Time
 }
@@ -58,6 +59,7 @@ func New() *AnnouncePlugin {
 		pretimeInlineWait: 1500 * time.Millisecond,
 		loginFailCooldown: 10 * time.Second,
 		pendingPretime:    map[string]*pendingPretime{},
+		completedReleases: map[string]time.Time{},
 		lastLoginFail:     map[string]time.Time{},
 	}
 }
@@ -510,6 +512,59 @@ func (p *AnnouncePlugin) emitInlinePretime(evt *event.Event, section, rel string
 	return true
 }
 
+func shouldSuppressLatePretime(st *releaseState) bool {
+	return st != nil && st.Completed
+}
+
+func completedReleaseKeyByPath(relpath string) string {
+	return "path:" + strings.ToLower(path.Clean("/"+strings.TrimSpace(relpath)))
+}
+
+func completedReleaseKeyBySectionRel(section, rel string) string {
+	return "name:" + strings.ToLower(strings.TrimSpace(section)) + "|" + strings.ToLower(strings.TrimSpace(rel))
+}
+
+func (p *AnnouncePlugin) markReleaseCompleted(section, rel, relpath string) {
+	now := time.Now()
+	if relpath = strings.TrimSpace(relpath); relpath != "" {
+		p.completedReleases[completedReleaseKeyByPath(relpath)] = now
+	}
+	if rel = strings.TrimSpace(rel); rel != "" {
+		p.completedReleases[completedReleaseKeyBySectionRel(section, rel)] = now
+	}
+	if len(p.completedReleases) > 2000 {
+		cutoff := now.Add(-24 * time.Hour)
+		for key, seenAt := range p.completedReleases {
+			if seenAt.Before(cutoff) {
+				delete(p.completedReleases, key)
+			}
+		}
+	}
+}
+
+func (p *AnnouncePlugin) clearCompletedRelease(section, rel, relpath string) {
+	if relpath = strings.TrimSpace(relpath); relpath != "" {
+		delete(p.completedReleases, completedReleaseKeyByPath(relpath))
+	}
+	if rel = strings.TrimSpace(rel); rel != "" {
+		delete(p.completedReleases, completedReleaseKeyBySectionRel(section, rel))
+	}
+}
+
+func (p *AnnouncePlugin) isReleaseCompleted(section, rel, relpath string) bool {
+	if relpath = strings.TrimSpace(relpath); relpath != "" {
+		if _, ok := p.completedReleases[completedReleaseKeyByPath(relpath)]; ok {
+			return true
+		}
+	}
+	if rel = strings.TrimSpace(rel); rel != "" {
+		if _, ok := p.completedReleases[completedReleaseKeyBySectionRel(section, rel)]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 func loginFailKey(vars map[string]string) string {
 	username := strings.ToLower(strings.TrimSpace(vars["username"]))
 	reason := strings.ToLower(strings.TrimSpace(vars["reason"]))
@@ -659,6 +714,7 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 		if isReleaseDir(evt.Path, section) {
 			if !st.Created {
 				resetRaceOutputState(st)
+				p.clearCompletedRelease(section, rel, evt.Path)
 				st.Created = true
 				if p.shouldInlinePretime() && p.asyncEmit != nil {
 					p.queueInlinePretime(syntheticNewRelPath(evt, section), section, vars)
@@ -772,6 +828,7 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 		}
 		st.Completed = true
 		st.HalfwayDone = true
+		p.markReleaseCompleted(section, rel, evt.Path)
 		outs = append(outs, plugin.Output{Type: "COMPLETE", Text: p.render("COMPLETE", vars, fmt.Sprintf("COMPLETE: [%s] %s%s by %s racers - %s/%s/%s/%s", section, vars["subdir_prefix"], rel, vars["u_count"], vars["t_mbytes"], vars["t_files"], vars["t_avgspeed"], vars["t_duration"]))})
 	case event.EventRaceStats:
 		if skipReleaseAnnounce {
@@ -1123,11 +1180,17 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 			p.emitInlinePretime(evt, section, rel, vars)
 			return nil, nil
 		}
+		if shouldSuppressLatePretime(st) || p.isReleaseCompleted(section, rel, evt.Path) {
+			return nil, nil
+		}
 		fallback := fmt.Sprintf("PRETiME: [%s] %s :: OK :: released %s ago", section, rel, vars["preage"])
 		outs = append(outs, plugin.Output{Type: "NEWPRETIME", Text: p.render("NEWPRETIME", vars, fallback)})
 	case event.EventOldPreTime:
 		if p.shouldInlinePretime() {
 			p.emitInlinePretime(evt, section, rel, vars)
+			return nil, nil
+		}
+		if shouldSuppressLatePretime(st) || p.isReleaseCompleted(section, rel, evt.Path) {
 			return nil, nil
 		}
 		fallback := fmt.Sprintf("PRETiME: [%s] %s :: BAD :: released %s ago", section, rel, vars["preage"])

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"goftpd/sitebot/internal/event"
 	"goftpd/sitebot/internal/irc"
 )
 
@@ -49,6 +50,27 @@ func TestResolveSectionTreatsForeignChildAsSection(t *testing.T) {
 func TestPathMatchesIncludesSectionDirectoryForWildcardChildPattern(t *testing.T) {
 	if !pathMatches("/FOREIGN/TV-NL/*", "/FOREIGN/TV-NL") {
 		t.Fatalf("expected wildcard child pattern to match the section directory itself")
+	}
+}
+
+func TestRouteChannelsPrefersBestPathMatchOverDuplicateSectionName(t *testing.T) {
+	b := &Bot{
+		Config: &Config{
+			Sections: []SectionRoute{
+				{Name: "REQUESTS", Channels: []string{"#goftpd-chat"}, Paths: []string{"/REQUESTS/*/*"}},
+				{Name: "REQUESTS", Channels: []string{"#goftpd"}, Paths: []string{"/REQUESTS_SPECIAL/*/*"}},
+			},
+		},
+	}
+
+	evt := &event.Event{
+		Section: "REQUESTS",
+		Path:    "/REQUESTS_SPECIAL/Test.Release-GRP/file.r00",
+	}
+
+	got := b.routeChannels(evt, "RACE")
+	if len(got) != 1 || got[0] != "#goftpd" {
+		t.Fatalf("routeChannels() = %#v, want %#v", got, []string{"#goftpd"})
 	}
 }
 

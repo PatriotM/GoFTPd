@@ -155,8 +155,9 @@ func (s *Session) HandleSiteNuke(args []string) bool {
 		"users":      strconv.Itoa(len(uploaderBytes)),
 		"nukees":     nukeeLine,
 	})
+	totalMB := BytesToMB(SumBytes(uploaderBytes))
 	fmt.Fprintf(s.Conn, "200 Nuked: x%d multiplier, %d MB, %d users affected, %d credits removed. Reason: %s\r\n",
-		multiplier, len(uploaderBytes), len(uploaderBytes), totalNuked, reason)
+		multiplier, totalMB, len(uploaderBytes), totalNuked, reason)
 	return true
 }
 
@@ -262,8 +263,9 @@ func (s *Session) HandleSiteUnnuke(args []string) bool {
 	s.emitEvent(EventUnnuke, newPath, originalName, 0, 0, map[string]string{
 		"users": strconv.Itoa(len(uploaderBytes)),
 	})
+	totalMB := BytesToMB(SumBytes(uploaderBytes))
 	fmt.Fprintf(s.Conn, "200 Unnuked: %d MB, %d users affected, %d credits restored.\r\n",
-		len(uploaderBytes), len(uploaderBytes), totalRestored)
+		totalMB, len(uploaderBytes), totalRestored)
 	return true
 }
 

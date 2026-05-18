@@ -771,21 +771,38 @@ func inferNestedSection(pathValue, fallback string) string {
 	return strings.TrimSpace(fallback)
 }
 
+func bestSectionRouteByPath(sections []SectionRoute, pathValue string) *SectionRoute {
+	var best *SectionRoute
+	bestScore := -1
+	for i := range sections {
+		sec := &sections[i]
+		for _, pat := range sec.Paths {
+			if !pathMatches(pat, pathValue) {
+				continue
+			}
+			score := len(strings.TrimRight(strings.TrimSpace(pat), "*"))
+			if score > bestScore {
+				best = sec
+				bestScore = score
+			}
+		}
+	}
+	return best
+}
+
 func (b *Bot) routeChannels(evt *event.Event, outType string) []string {
 	if chs := b.Config.Announce.TypeRoutes[outType]; len(chs) > 0 {
 		return nonEmptyChannels(chs)
+	}
+	if best := bestSectionRouteByPath(b.Config.Sections, evt.Path); best != nil {
+		if chs := nonEmptyChannels(best.Channels); len(chs) > 0 {
+			return chs
+		}
 	}
 	for _, sec := range b.Config.Sections {
 		if strings.EqualFold(sec.Name, evt.Section) {
 			if chs := nonEmptyChannels(sec.Channels); len(chs) > 0 {
 				return chs
-			}
-		}
-		for _, pat := range sec.Paths {
-			if pathMatches(pat, evt.Path) {
-				if chs := nonEmptyChannels(sec.Channels); len(chs) > 0 {
-					return chs
-				}
 			}
 		}
 	}

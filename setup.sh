@@ -819,6 +819,48 @@ set_sitebot_scalar() {
     replace_matching_line "${file}" "^  ${key}:" "  ${key}: ${value}"
 }
 
+set_announce_type_route() {
+    local file="$1"
+    local route_key="$2"
+    local channel="$3"
+    awk -v route_key="${route_key}" -v channel="${channel}" '
+        BEGIN { in_routes = 0; found = 0 }
+        /^type_routes:$/ {
+            print
+            in_routes = 1
+            next
+        }
+        in_routes {
+            if ($0 ~ "^[[:space:]]{2}" route_key ":") {
+                print "  " route_key ": [\"" channel "\"]"
+                found = 1
+                next
+            }
+            if ($0 ~ /^[^[:space:]]/) {
+                if (!found) {
+                    print "  " route_key ": [\"" channel "\"]"
+                    found = 1
+                }
+                in_routes = 0
+                print
+                next
+            }
+            print
+            next
+        }
+        { print }
+        END {
+            if (!in_routes && !found) {
+                print "type_routes:"
+                print "  " route_key ": [\"" channel "\"]"
+            } else if (in_routes && !found) {
+                print "  " route_key ": [\"" channel "\"]"
+            }
+        }
+    ' "${file}" > "${file}.tmp"
+    mv "${file}.tmp" "${file}"
+}
+
 set_master_section_enabled() {
     local file="$1"
     local section_path="$2"
@@ -873,16 +915,21 @@ configure_sitebot_plugin_channels() {
     local nuke_channel="$4"
 
     if [ -f "sitebot/plugins/announce/config.yml" ]; then
-        cat > "sitebot/plugins/announce/config.yml" <<EOF
-default_channel: "${staff_channel}"
-theme_file: "./etc/templates/pzsng.theme"
-type_routes:
-  NUKE: ["${nuke_channel}"]
-  UNNUKE: ["${nuke_channel}"]
-  NEWDAY: ["${main_channel}"]
-  SPEEDTEST: ["${main_channel}"]
-  TOP: ["${chat_channel}"]
-EOF
+        replace_matching_line "sitebot/plugins/announce/config.yml" '^default_channel:' "default_channel: \"${staff_channel}\""
+        replace_matching_line "sitebot/plugins/announce/config.yml" '^theme_file:' "theme_file: \"./etc/templates/pzsng.theme\""
+        set_announce_type_route "sitebot/plugins/announce/config.yml" "NUKE" "${nuke_channel}"
+        set_announce_type_route "sitebot/plugins/announce/config.yml" "UNNUKE" "${nuke_channel}"
+        set_announce_type_route "sitebot/plugins/announce/config.yml" "NEWDAY" "${main_channel}"
+        set_announce_type_route "sitebot/plugins/announce/config.yml" "SPEEDTEST" "${main_channel}"
+        set_announce_type_route "sitebot/plugins/announce/config.yml" "TOP" "${chat_channel}"
+        set_announce_type_route "sitebot/plugins/announce/config.yml" "LOGIN" "${staff_channel}"
+        set_announce_type_route "sitebot/plugins/announce/config.yml" "SELFIP" "${staff_channel}"
+        set_announce_type_route "sitebot/plugins/announce/config.yml" "RELEASEGUARD" "${staff_channel}"
+        set_announce_type_route "sitebot/plugins/announce/config.yml" "SLAVEAUTH" "${staff_channel}"
+        set_announce_type_route "sitebot/plugins/announce/config.yml" "SLOWUPLOADWARN" "${staff_channel}"
+        set_announce_type_route "sitebot/plugins/announce/config.yml" "SLOWUPLOADKICK" "${staff_channel}"
+        set_announce_type_route "sitebot/plugins/announce/config.yml" "SLOWDOWNLOADWARN" "${staff_channel}"
+        set_announce_type_route "sitebot/plugins/announce/config.yml" "SLOWDOWNLOADKICK" "${staff_channel}"
     fi
 
     if [ -f "sitebot/plugins/news/config.yml" ]; then
