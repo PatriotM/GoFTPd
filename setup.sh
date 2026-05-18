@@ -882,6 +882,14 @@ type_routes:
   NEWDAY: ["${main_channel}"]
   SPEEDTEST: ["${main_channel}"]
   TOP: ["${chat_channel}"]
+  LOGIN: ["${staff_channel}"]
+  SELFIP: ["${staff_channel}"]
+  RELEASEGUARD: ["${staff_channel}"]
+  SLAVEAUTH: ["${staff_channel}"]
+  SLOWUPLOADWARN: ["${staff_channel}"]
+  SLOWUPLOADKICK: ["${staff_channel}"]
+  SLOWDOWNLOADWARN: ["${staff_channel}"]
+  SLOWDOWNLOADKICK: ["${staff_channel}"]
 EOF
     fi
 

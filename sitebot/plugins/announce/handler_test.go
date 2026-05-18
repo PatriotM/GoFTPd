@@ -194,6 +194,79 @@ func TestPretimeAnnounceIsSuppressedAfterComplete(t *testing.T) {
 	}
 }
 
+func TestPretimeAnnounceIsSuppressedAfterCompleteAcrossPathVariants(t *testing.T) {
+	p := New()
+
+	completeEvt := &event.Event{
+		Type:    event.EventRaceEnd,
+		Section: "EBOOKS",
+		Path:    "/EBOOKS/20260518/Cindy.Trimm.Commanding.Your.Morning.Unleash.the.Power.of.God.in.Your.Life.2010.RETAiL.EPUB.eBook-NODE",
+		Data: map[string]string{
+			"u_count":    "1",
+			"t_mbytes":   "2MB",
+			"t_files":    "1F",
+			"t_avgspeed": "1.57MB/s",
+			"t_duration": "1.0210s",
+		},
+	}
+	if _, err := p.OnEvent(completeEvt); err != nil {
+		t.Fatalf("OnEvent complete failed: %v", err)
+	}
+
+	pretimeEvt := &event.Event{
+		Type:    event.EventNewPreTime,
+		Section: "EBOOKS",
+		Path:    "/!Today_EBOOKS/Cindy.Trimm.Commanding.Your.Morning.Unleash.the.Power.of.God.in.Your.Life.2010.RETAiL.EPUB.eBook-NODE",
+		Data: map[string]string{
+			"preage": "0s",
+		},
+	}
+	outs, err := p.OnEvent(pretimeEvt)
+	if err != nil {
+		t.Fatalf("OnEvent pretime failed: %v", err)
+	}
+	if len(outs) != 0 {
+		t.Fatalf("expected late pretime across path variants to be suppressed, got %+v", outs)
+	}
+}
+
+func TestReleaseGuardCustomAnnounceTargetsStaffRoute(t *testing.T) {
+	p := New()
+	if err := p.Initialize(map[string]interface{}{
+		"type_routes": map[string]interface{}{
+			"RELEASEGUARD": []interface{}{"#goftpd-staff"},
+		},
+	}); err != nil {
+		t.Fatalf("Initialize failed: %v", err)
+	}
+
+	evt := &event.Event{
+		Type:    event.EventCustom,
+		Section: "EBOOKS",
+		Path:    "/!Today_EBOOKS/Test.Release-GRP",
+		Data: map[string]string{
+			"announce_type": "RELEASEGUARD",
+			"template":      "RELEASEGUARD",
+			"message":       "steel tried to create /!Today_EBOOKS/Test.Release-GRP: already exists",
+			"relname":       "Test.Release-GRP",
+		},
+	}
+
+	outs, err := p.OnEvent(evt)
+	if err != nil {
+		t.Fatalf("OnEvent failed: %v", err)
+	}
+	if len(outs) != 1 {
+		t.Fatalf("expected 1 output, got %#v", outs)
+	}
+	if outs[0].Type != "RELEASEGUARD" {
+		t.Fatalf("expected RELEASEGUARD output, got %#v", outs[0])
+	}
+	if outs[0].Target != "#goftpd-staff" {
+		t.Fatalf("expected staff target, got %#v", outs[0])
+	}
+}
+
 func TestRequestReleaseDirEmitsNewAnnounce(t *testing.T) {
 	p := New()
 	evt := &event.Event{
