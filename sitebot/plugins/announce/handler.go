@@ -41,7 +41,6 @@ type AnnouncePlugin struct {
 	slowUploadKickChans []string
 	slowDnWarnChans     []string
 	slowDnKickChans     []string
-	releaseGuardChans   []string
 	pretimeMode         string
 	pretimeInlineWait   time.Duration
 	loginFailCooldown   time.Duration
@@ -78,7 +77,6 @@ func (p *AnnouncePlugin) Initialize(config map[string]interface{}) error {
 	p.slowUploadKickChans = p.routeTargets(config, "SLOWUPLOADKICK", "SLOWKICK", "SLAVEAUTH", "LOGIN")
 	p.slowDnWarnChans = p.routeTargets(config, "SLOWDOWNLOADWARN", "SLOWKICK", "SLAVEAUTH", "LOGIN")
 	p.slowDnKickChans = p.routeTargets(config, "SLOWDOWNLOADKICK", "SLOWKICK", "SLAVEAUTH", "LOGIN")
-	p.releaseGuardChans = p.routeTargets(config, "RELEASEGUARD", "LOGIN", "SLAVEAUTH")
 	pretimeCfg := plugin.ConfigSection(config, "pretime")
 	if mode, ok := pretimeCfg["mode"].(string); ok && strings.TrimSpace(mode) != "" {
 		p.pretimeMode = strings.ToLower(strings.TrimSpace(mode))
@@ -689,12 +687,7 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 		if templateKey == "" {
 			templateKey = outType
 		}
-		rendered := p.render(templateKey, vars, p.render("CUSTOM", vars, message))
-		if outType == "RELEASEGUARD" {
-			outs = p.appendTargeted(outs, outType, rendered, p.releaseGuardChans)
-		} else {
-			outs = append(outs, plugin.Output{Type: outType, Text: rendered})
-		}
+		outs = append(outs, plugin.Output{Type: outType, Text: p.render(templateKey, vars, p.render("CUSTOM", vars, message))})
 	case event.EventSpeedtest:
 		nick := vars["nick"]
 		if nick == "" {

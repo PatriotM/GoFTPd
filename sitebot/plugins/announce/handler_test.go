@@ -230,43 +230,6 @@ func TestPretimeAnnounceIsSuppressedAfterCompleteAcrossPathVariants(t *testing.T
 	}
 }
 
-func TestReleaseGuardCustomAnnounceTargetsStaffRoute(t *testing.T) {
-	p := New()
-	if err := p.Initialize(map[string]interface{}{
-		"type_routes": map[string]interface{}{
-			"RELEASEGUARD": []interface{}{"#goftpd-staff"},
-		},
-	}); err != nil {
-		t.Fatalf("Initialize failed: %v", err)
-	}
-
-	evt := &event.Event{
-		Type:    event.EventCustom,
-		Section: "EBOOKS",
-		Path:    "/!Today_EBOOKS/Test.Release-GRP",
-		Data: map[string]string{
-			"announce_type": "RELEASEGUARD",
-			"template":      "RELEASEGUARD",
-			"message":       "steel tried to create /!Today_EBOOKS/Test.Release-GRP: already exists",
-			"relname":       "Test.Release-GRP",
-		},
-	}
-
-	outs, err := p.OnEvent(evt)
-	if err != nil {
-		t.Fatalf("OnEvent failed: %v", err)
-	}
-	if len(outs) != 1 {
-		t.Fatalf("expected 1 output, got %#v", outs)
-	}
-	if outs[0].Type != "RELEASEGUARD" {
-		t.Fatalf("expected RELEASEGUARD output, got %#v", outs[0])
-	}
-	if outs[0].Target != "#goftpd-staff" {
-		t.Fatalf("expected staff target, got %#v", outs[0])
-	}
-}
-
 func TestRequestReleaseDirEmitsNewAnnounce(t *testing.T) {
 	p := New()
 	evt := &event.Event{
