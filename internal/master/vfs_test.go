@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"goftpd/internal/plugin"
 )
 
 func TestVFSListDirectoryUsesDirectChildren(t *testing.T) {
@@ -764,5 +766,127 @@ func TestVFSRaceStatsFilteredExcludeUploading(t *testing.T) {
 	}
 	if len(groups) != 1 || groups[0].Files != 1 || groups[0].Bytes != 100 {
 		t.Fatalf("expected only completed group stats, got %+v", groups)
+	}
+}
+
+func TestVFSRequestMetadataRoundTrip(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/REQUESTS", VFSFile{IsDir: true, Seen: true})
+	vfs.SetRequestData("/REQUESTS",
+		[]plugin.RequestRecord{{
+			Release: "Some.Release-TEST",
+			By:      "alice",
+			Mode:    "gl",
+			For:     "bob",
+			Date:    "2026-05-18 18:00",
+		}},
+		[]plugin.RequestFillRecord{{
+			Release:     "Other.Release-TEST",
+			RequestedBy: "carol",
+			FilledBy:    "dave",
+			Date:        "2026-05-18 18:05",
+		}},
+	)
+
+	requests, fills := vfs.GetRequestData("/REQUESTS")
+	if len(requests) != 1 || requests[0].By != "alice" || requests[0].For != "bob" {
+		t.Fatalf("unexpected request metadata %+v", requests)
+	}
+	if len(fills) != 1 || fills[0].FilledBy != "dave" {
+		t.Fatalf("unexpected fill metadata %+v", fills)
+	}
+
+	requests[0].By = "mutated"
+	fills[0].FilledBy = "mutated"
+
+	requests, fills = vfs.GetRequestData("/REQUESTS")
+	if requests[0].By != "alice" || fills[0].FilledBy != "dave" {
+		t.Fatalf("expected metadata copies, got requests=%+v fills=%+v", requests, fills)
+	}
+}
+
+func TestVFSZipExpectedPartsRequiresCurrentDIZFile(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/0DAY/release", VFSFile{IsDir: true, Seen: true})
+	vfs.CacheZipExpectedParts("/0DAY/release", 12, 123)
+
+	if expected, ok := vfs.GetZipExpectedParts("/0DAY/release"); ok || expected != 0 {
+		t.Fatalf("expected zip metadata without current diz file to be ignored, got expected=%d ok=%v", expected, ok)
+	}
+
+	vfs.AddFile("/0DAY/release/release.zip", VFSFile{Seen: true, Size: 100})
+	vfs.AddFile("/0DAY/release/file_id.diz", VFSFile{Seen: true, Checksum: 123})
+	if expected, ok := vfs.GetZipExpectedParts("/0DAY/release"); !ok || expected != 12 {
+		t.Fatalf("expected zip metadata to become valid with current diz file, got expected=%d ok=%v", expected, ok)
+	}
+
+	vfs.CacheZipExpectedParts("/0DAY/release", 0, 0)
+	if expected, ok := vfs.GetZipExpectedParts("/0DAY/release"); ok || expected != 0 {
+		t.Fatalf("expected zip metadata clear to remove cached value, got expected=%d ok=%v", expected, ok)
+	}
+}
+
+func TestVFSZipExpectedPartsRejectsMismatchedDIZChecksum(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/0DAY/release", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/0DAY/release/release.zip", VFSFile{Seen: true, Size: 100})
+	vfs.AddFile("/0DAY/release/file_id.diz", VFSFile{Seen: true, Checksum: 999})
+	vfs.CacheZipExpectedParts("/0DAY/release", 12, 123)
+
+	if expected, ok := vfs.GetZipExpectedParts("/0DAY/release"); ok || expected != 0 {
+		t.Fatalf("expected mismatched diz checksum metadata to be ignored, got expected=%d ok=%v", expected, ok)
+	}
+}
+
+func TestVFSZipExpectedPartsRequireCurrentZipArchive(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/0DAY/release", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/0DAY/release/file_id.diz", VFSFile{Seen: true, Checksum: 123})
+	vfs.CacheZipExpectedParts("/0DAY/release", 12, 123)
+
+	if expected, ok := vfs.GetZipExpectedParts("/0DAY/release"); ok || expected != 0 {
+		t.Fatalf("expected zip metadata without a current zip archive to be ignored, got expected=%d ok=%v", expected, ok)
+	}
+}
+
+func TestVFSDeleteDIZClearsZipMetadata(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/0DAY/release", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/0DAY/release/release.zip", VFSFile{Seen: true, Size: 100})
+	vfs.AddFile("/0DAY/release/file_id.diz", VFSFile{Seen: true, Checksum: 123})
+	vfs.CacheZipExpectedParts("/0DAY/release", 12, 123)
+
+	vfs.DeleteFile("/0DAY/release/file_id.diz")
+
+	if expected, ok := vfs.GetZipExpectedParts("/0DAY/release"); ok || expected != 0 {
+		t.Fatalf("expected deleting file_id.diz to clear zip metadata, got expected=%d ok=%v", expected, ok)
+	}
+}
+
+func TestVFSRenameDIZAwayClearsZipMetadata(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/0DAY/release", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/0DAY/release/release.zip", VFSFile{Seen: true, Size: 100})
+	vfs.AddFile("/0DAY/release/file_id.diz", VFSFile{Seen: true, Checksum: 123})
+	vfs.CacheZipExpectedParts("/0DAY/release", 12, 123)
+
+	vfs.RenameFile("/0DAY/release/file_id.diz", "/0DAY/release/file_id.txt")
+
+	if expected, ok := vfs.GetZipExpectedParts("/0DAY/release"); ok || expected != 0 {
+		t.Fatalf("expected renaming file_id.diz away to clear zip metadata, got expected=%d ok=%v", expected, ok)
+	}
+}
+
+func TestVFSDeleteLastZipClearsZipMetadata(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/0DAY/release", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/0DAY/release/release.zip", VFSFile{Seen: true, Size: 100})
+	vfs.AddFile("/0DAY/release/file_id.diz", VFSFile{Seen: true, Checksum: 123})
+	vfs.CacheZipExpectedParts("/0DAY/release", 12, 123)
+
+	vfs.DeleteFile("/0DAY/release/release.zip")
+
+	if expected, ok := vfs.GetZipExpectedParts("/0DAY/release"); ok || expected != 0 {
+		t.Fatalf("expected deleting the last zip archive to clear zip metadata, got expected=%d ok=%v", expected, ok)
 	}
 }

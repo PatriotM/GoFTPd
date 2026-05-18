@@ -156,31 +156,6 @@ func (sm *SlaveManager) syncStatusMarkersForRelease(releasePath string) {
 	}
 }
 
-func statusMarkerCanUseCachedProgress(cfg zipscript.Config, releasePath string, facts core.ReleaseChildFacts, hasFacts bool, current core.ReleaseProgressStat, hasCurrent bool) bool {
-	if hasCurrent && (current.Total > 0 || current.Present > 0 || current.HasSFV) {
-		return true
-	}
-	if !hasFacts {
-		return false
-	}
-	if zipscript.UsesZipEntry(cfg, releasePath) && facts.FileCount > 0 {
-		return true
-	}
-	return false
-}
-
-func mergeStatusMarkerProgress(primary, fallback core.ReleaseProgressStat) core.ReleaseProgressStat {
-	out := primary
-	if fallback.Present > out.Present {
-		out.Present = fallback.Present
-	}
-	if fallback.Total > out.Total {
-		out.Total = fallback.Total
-	}
-	out.HasSFV = out.HasSFV || fallback.HasSFV
-	return out
-}
-
 func (sm *SlaveManager) statusMarkerReleaseForPath(cfg zipscript.Config, releasePath string, entry *VFSFile) (zipscript.StatusMarkerRelease, bool) {
 	releasePath = path.Clean("/" + strings.TrimSpace(releasePath))
 	if releasePath == "/" || releasePath == "." || entry == nil {
@@ -201,14 +176,6 @@ func (sm *SlaveManager) statusMarkerReleaseForPath(cfg zipscript.Config, release
 			stat.HasSFV = snapshot.HasSFV
 			ok = true
 		}
-	}
-	if cached, cachedOK := sm.GetImmediateReleaseProgress(path.Dir(releasePath))[releasePath]; cachedOK && statusMarkerCanUseCachedProgress(cfg, releasePath, facts, hasFacts, stat, ok) {
-		if ok {
-			stat = mergeStatusMarkerProgress(cached, stat)
-		} else {
-			stat = cached
-		}
-		ok = true
 	}
 	if !ok && !hasFacts {
 		return zipscript.StatusMarkerRelease{}, false

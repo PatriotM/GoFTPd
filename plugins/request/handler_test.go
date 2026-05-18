@@ -1,7 +1,6 @@
 package request
 
 import (
-	"errors"
 	"fmt"
 	"path"
 	"strings"
@@ -10,7 +9,7 @@ import (
 	"goftpd/internal/plugin"
 )
 
-func TestRequestCreatesIndexFile(t *testing.T) {
+func TestRequestStoresMetadata(t *testing.T) {
 	bridge := newRequestTestBridge()
 	p := New()
 	p.svc = &plugin.Services{Bridge: bridge}
@@ -18,15 +17,14 @@ func TestRequestCreatesIndexFile(t *testing.T) {
 	ctx := &requestTestCtx{user: "alice", group: "iND", flags: "1"}
 	p.HandleSiteCommand(ctx, "REQUEST", []string{"Some.Release-TEST"})
 
-	data, ok := bridge.files["/REQUESTS/.requests"]
-	if !ok {
-		t.Fatalf("expected /REQUESTS/.requests to be created")
+	if len(bridge.requestData) != 1 {
+		t.Fatalf("expected one request metadata entry, got %+v", bridge.requestData)
 	}
-	if !strings.Contains(string(data), "Some.Release-TEST") {
-		t.Fatalf("expected request file to contain release, got %q", string(data))
+	if bridge.requestData[0].Release != "Some.Release-TEST" || bridge.requestData[0].By != "alice" {
+		t.Fatalf("unexpected request metadata %+v", bridge.requestData[0])
 	}
-	if !strings.Contains(string(data), "by alice") {
-		t.Fatalf("expected FTP requester to be tracked, got %q", string(data))
+	if _, ok := bridge.files["/REQUESTS/.requests"]; ok {
+		t.Fatalf("did not expect legacy request sidecar file to be written")
 	}
 	if _, ok := bridge.dirs["/REQUESTS/REQ-Some.Release-TEST"]; !ok {
 		t.Fatalf("expected request directory to be created")
@@ -117,7 +115,7 @@ func TestProxyRequestDoesNotEmitDuplicateAnnounceEvent(t *testing.T) {
 	}
 }
 
-func TestReqFillRecoversExistingRequestDirWithoutIndexFile(t *testing.T) {
+func TestReqFillRecoversExistingRequestDirWithoutMetadata(t *testing.T) {
 	bridge := newRequestTestBridge()
 	bridge.addDir("/REQUESTS", "GoFTPd", "GoFTPd")
 	bridge.addDir("/REQUESTS/REQ-Old.Release-TEST", "alice", "iND")
@@ -132,12 +130,11 @@ func TestReqFillRecoversExistingRequestDirWithoutIndexFile(t *testing.T) {
 	if _, ok := bridge.dirs["/REQUESTS/FILLED-Old.Release-TEST"]; !ok {
 		t.Fatalf("expected existing request dir to be renamed to filled dir")
 	}
-	if _, ok := bridge.files["/REQUESTS/.requests"]; !ok {
-		t.Fatalf("expected request index file to be recreated")
+	if len(bridge.fillData) != 1 || bridge.fillData[0].FilledBy != "alice" {
+		t.Fatalf("expected fill metadata to track filler, got %+v", bridge.fillData)
 	}
-	stats := string(bridge.files["/REQUESTS/.reqfills"])
-	if !strings.Contains(stats, "filled by alice") {
-		t.Fatalf("expected fill stats to track filler, got %q", stats)
+	if _, ok := bridge.files["/REQUESTS/.reqfills"]; ok {
+		t.Fatalf("did not expect legacy fill sidecar file to be written")
 	}
 
 	p.HandleSiteCommand(ctx, "REQTOP", nil)
@@ -146,24 +143,15 @@ func TestReqFillRecoversExistingRequestDirWithoutIndexFile(t *testing.T) {
 	}
 }
 
-func TestRequestReportsIndexSaveFailure(t *testing.T) {
-	bridge := newRequestTestBridge()
-	bridge.writeErr = errors.New("disk full")
-	p := New()
-	p.svc = &plugin.Services{Bridge: bridge}
-
-	ctx := &requestTestCtx{user: "alice", group: "iND", flags: "1"}
-	p.HandleSiteCommand(ctx, "REQUEST", []string{"Broken.Release-TEST"})
-
-	if !ctx.hasReply("451 Failed to save request list") {
-		t.Fatalf("expected save failure reply, got %#v", ctx.replies)
-	}
-}
-
 func TestDuplicateRequestRepairsMissingDirectory(t *testing.T) {
 	bridge := newRequestTestBridge()
 	bridge.addDir("/REQUESTS", "GoFTPd", "GoFTPd")
-	bridge.files["/REQUESTS/.requests"] = []byte("[ 1:] Repair.Release-TEST ~ by alice (gl) at 2026-05-16 02:00\n")
+	bridge.requestData = []plugin.RequestRecord{{
+		Release: "Repair.Release-TEST",
+		By:      "alice",
+		Mode:    "gl",
+		Date:    "2026-05-16 02:00",
+	}}
 	p := New()
 	p.svc = &plugin.Services{Bridge: bridge}
 
@@ -197,9 +185,8 @@ func TestReqFillProxyTracksProvidedUser(t *testing.T) {
 	bot := &requestTestCtx{user: "goftpd", group: "sitebot", flags: "1"}
 	p.HandleSiteCommand(bot, "REQFILL", []string{"-by:ircUser", "Proxy.Release-TEST"})
 
-	stats := string(bridge.files["/REQUESTS/.reqfills"])
-	if !strings.Contains(stats, "filled by ircUser") {
-		t.Fatalf("expected proxy filler to be tracked, got %q", stats)
+	if len(bridge.fillData) != 1 || bridge.fillData[0].FilledBy != "ircUser" {
+		t.Fatalf("expected proxy filler to be tracked, got %+v", bridge.fillData)
 	}
 	if emitted {
 		t.Fatalf("did not expect proxied reqfill to emit a duplicate announce event")
@@ -214,9 +201,8 @@ func TestRequestProxyTracksProvidedUser(t *testing.T) {
 	bot := &requestTestCtx{user: "goftpd", group: "sitebot", flags: "1"}
 	p.HandleSiteCommand(bot, "REQUEST", []string{"-by:ircUser", "Proxy.Request-TEST"})
 
-	requests := string(bridge.files["/REQUESTS/.requests"])
-	if !strings.Contains(requests, "by ircUser") {
-		t.Fatalf("expected proxied requester to be tracked, got %q", requests)
+	if len(bridge.requestData) != 1 || bridge.requestData[0].By != "ircUser" {
+		t.Fatalf("expected proxied requester to be tracked, got %+v", bridge.requestData)
 	}
 	dir := bridge.dirs["/REQUESTS/REQ-Proxy.Request-TEST"]
 	if dir.Owner != "ircUser" {
@@ -239,8 +225,28 @@ func TestRequestUsesConfiguredStorageSlave(t *testing.T) {
 	if got := bridge.dirSlaves["/REQUESTS/REQ-Pinned.Release-TEST"]; got != "LOCAL" {
 		t.Fatalf("expected request dir on LOCAL, got %q", got)
 	}
-	if got := bridge.fileSlaves["/REQUESTS/.requests"]; got != "LOCAL" {
-		t.Fatalf("expected request index on LOCAL, got %q", got)
+	if len(bridge.requestData) != 1 || bridge.requestData[0].Release != "Pinned.Release-TEST" {
+		t.Fatalf("expected request metadata to be stored, got %+v", bridge.requestData)
+	}
+}
+
+func TestReqFillRelocatesMixedSlaveRequestTreeBeforeRename(t *testing.T) {
+	bridge := newRequestTestBridge()
+	bridge.addDir("/REQUESTS", "GoFTPd", "GoFTPd")
+	bridge.addDirOnSlave("/REQUESTS/REQ-Mixed.Release-TEST", "alice", "iND", "LOCAL")
+	bridge.addDirOnSlave("/REQUESTS/REQ-Mixed.Release-TEST/Mixed.Release-TEST", "alice", "iND", "OTHER")
+	bridge.addFileOnSlave("/REQUESTS/REQ-Mixed.Release-TEST/Mixed.Release-TEST/file.r00", []byte("data"), "OTHER")
+	p := New()
+	p.svc = &plugin.Services{Bridge: bridge}
+
+	ctx := &requestTestCtx{user: "alice", group: "iND", flags: "1"}
+	p.HandleSiteCommand(ctx, "REQFILL", []string{"Mixed.Release-TEST"})
+
+	if got := bridge.fileSlaves["/REQUESTS/FILLED-Mixed.Release-TEST/Mixed.Release-TEST/file.r00"]; got != "LOCAL" {
+		t.Fatalf("expected filled request payload to be relocated to LOCAL, got %q", got)
+	}
+	if _, ok := bridge.files["/REQUESTS/FILLED-Mixed.Release-TEST/Mixed.Release-TEST/file.r00"]; !ok {
+		t.Fatalf("expected relocated file under filled request path")
 	}
 }
 
@@ -270,11 +276,12 @@ func (c *requestTestCtx) hasReply(needle string) bool {
 }
 
 type requestTestBridge struct {
-	dirs       map[string]plugin.FileEntry
-	files      map[string][]byte
-	dirSlaves  map[string]string
-	fileSlaves map[string]string
-	writeErr   error
+	dirs        map[string]plugin.FileEntry
+	files       map[string][]byte
+	dirSlaves   map[string]string
+	fileSlaves  map[string]string
+	requestData []plugin.RequestRecord
+	fillData    []plugin.RequestFillRecord
 }
 
 func newRequestTestBridge() *requestTestBridge {
@@ -297,6 +304,24 @@ func (b *requestTestBridge) addDir(dirPath, owner, group string) {
 	}
 }
 
+func (b *requestTestBridge) addDirOnSlave(dirPath, owner, group, slave string) {
+	b.addDir(dirPath, owner, group)
+	b.dirs[cleanAbs(dirPath)] = plugin.FileEntry{
+		Name:    path.Base(cleanAbs(dirPath)),
+		IsDir:   true,
+		Owner:   owner,
+		Group:   group,
+		ModTime: 1,
+		Slave:   slave,
+	}
+	b.dirSlaves[cleanAbs(dirPath)] = slave
+}
+
+func (b *requestTestBridge) addFileOnSlave(filePath string, content []byte, slave string) {
+	b.files[cleanAbs(filePath)] = append([]byte(nil), content...)
+	b.fileSlaves[cleanAbs(filePath)] = slave
+}
+
 func (b *requestTestBridge) PluginListDir(dirPath string) []plugin.FileEntry {
 	dirPath = cleanAbs(dirPath)
 	var out []plugin.FileEntry
@@ -311,8 +336,9 @@ func (b *requestTestBridge) PluginListDir(dirPath string) []plugin.FileEntry {
 	for filePath, data := range b.files {
 		if path.Dir(filePath) == dirPath {
 			out = append(out, plugin.FileEntry{
-				Name: path.Base(filePath),
-				Size: int64(len(data)),
+				Name:  path.Base(filePath),
+				Size:  int64(len(data)),
+				Slave: b.fileSlaves[cleanAbs(filePath)],
 			})
 		}
 	}
@@ -329,6 +355,12 @@ func (b *requestTestBridge) MakeDir(dirPath, owner, group string) error {
 			b.addDir(parent, owner, group)
 			parent = path.Dir(parent)
 		}
+	}
+	if existing, ok := b.dirs[dirPath]; ok {
+		existing.Owner = owner
+		existing.Group = group
+		b.dirs[dirPath] = existing
+		return nil
 	}
 	b.addDir(dirPath, owner, group)
 	return nil
@@ -375,36 +407,93 @@ func (b *requestTestBridge) RenameFile(from, toDir, toName string) error {
 	delete(b.dirs, from)
 	entry.Name = path.Base(to)
 	b.dirs[to] = entry
+	if slave, ok := b.dirSlaves[from]; ok {
+		b.dirSlaves[to] = slave
+		delete(b.dirSlaves, from)
+	}
 
 	fromPrefix := strings.TrimRight(from, "/") + "/"
 	toPrefix := strings.TrimRight(to, "/") + "/"
+	fileMoves := make(map[string][]byte)
+	fileSlaves := make(map[string]string)
 	for filePath, data := range b.files {
 		if strings.HasPrefix(filePath, fromPrefix) {
 			rel := strings.TrimPrefix(filePath, fromPrefix)
-			b.files[toPrefix+rel] = data
+			newPath := toPrefix + rel
+			fileMoves[newPath] = data
+			if slave, ok := b.fileSlaves[filePath]; ok {
+				fileSlaves[newPath] = slave
+				delete(b.fileSlaves, filePath)
+			}
 			delete(b.files, filePath)
 		}
 	}
+	for newPath, data := range fileMoves {
+		b.files[newPath] = data
+	}
+	for newPath, slave := range fileSlaves {
+		b.fileSlaves[newPath] = slave
+	}
+	dirMoves := make(map[string]plugin.FileEntry)
+	dirSlaves := make(map[string]string)
+	for dirPath, dirEntry := range b.dirs {
+		if strings.HasPrefix(dirPath, fromPrefix) {
+			rel := strings.TrimPrefix(dirPath, fromPrefix)
+			newPath := toPrefix + rel
+			delete(b.dirs, dirPath)
+			dirEntry.Name = path.Base(newPath)
+			dirMoves[newPath] = dirEntry
+			if slave, ok := b.dirSlaves[dirPath]; ok {
+				dirSlaves[newPath] = slave
+				delete(b.dirSlaves, dirPath)
+			}
+		}
+	}
+	for newPath, dirEntry := range dirMoves {
+		b.dirs[newPath] = dirEntry
+	}
+	for newPath, slave := range dirSlaves {
+		b.dirSlaves[newPath] = slave
+	}
 	return nil
 }
 
-func (b *requestTestBridge) RelocatePath(string, string, string) error                { return nil }
-func (b *requestTestBridge) RelocatePathToSlave(string, string, string, string) error { return nil }
+func (b *requestTestBridge) RelocatePath(string, string, string) error { return nil }
+func (b *requestTestBridge) RelocatePathToSlave(from, toDir, toName, targetSlave string) error {
+	from = cleanAbs(from)
+	to := cleanAbs(path.Join(toDir, toName))
+	if data, ok := b.files[from]; ok {
+		delete(b.files, from)
+		b.files[to] = data
+		b.fileSlaves[to] = targetSlave
+		delete(b.fileSlaves, from)
+		return nil
+	}
+	if entry, ok := b.dirs[from]; ok {
+		delete(b.dirs, from)
+		entry.Name = path.Base(to)
+		b.dirs[to] = entry
+		b.dirSlaves[to] = targetSlave
+		delete(b.dirSlaves, from)
+		fromPrefix := strings.TrimRight(from, "/") + "/"
+		for filePath := range b.files {
+			if strings.HasPrefix(filePath, fromPrefix) {
+				b.fileSlaves[filePath] = targetSlave
+			}
+		}
+		for dirPath := range b.dirs {
+			if strings.HasPrefix(dirPath, fromPrefix) {
+				b.dirSlaves[dirPath] = targetSlave
+			}
+		}
+		return nil
+	}
+	return fmt.Errorf("path not found: %s", from)
+}
 
 func (b *requestTestBridge) WriteFile(filePath string, content []byte) error {
-	if b.writeErr != nil {
-		return b.writeErr
-	}
 	filePath = cleanAbs(filePath)
 	b.files[filePath] = append([]byte(nil), content...)
-	return nil
-}
-
-func (b *requestTestBridge) WriteFileOnSlave(filePath string, content []byte, slaveName string) error {
-	if err := b.WriteFile(filePath, content); err != nil {
-		return err
-	}
-	b.fileSlaves[cleanAbs(filePath)] = slaveName
 	return nil
 }
 
@@ -434,7 +523,14 @@ func (b *requestTestBridge) GetFileSize(p string) int64 {
 	}
 	return -1
 }
-func (b *requestTestBridge) GetSFVData(string) map[string]uint32      { return nil }
+func (b *requestTestBridge) GetSFVData(string) map[string]uint32 { return nil }
+func (b *requestTestBridge) GetRequestData(string) ([]plugin.RequestRecord, []plugin.RequestFillRecord) {
+	return append([]plugin.RequestRecord(nil), b.requestData...), append([]plugin.RequestFillRecord(nil), b.fillData...)
+}
+func (b *requestTestBridge) SetRequestData(_ string, requests []plugin.RequestRecord, fills []plugin.RequestFillRecord) {
+	b.requestData = append([]plugin.RequestRecord(nil), requests...)
+	b.fillData = append([]plugin.RequestFillRecord(nil), fills...)
+}
 func (b *requestTestBridge) GetDirMediaInfo(string) map[string]string { return nil }
 func (b *requestTestBridge) PluginGetVFSRaceStats(string) ([]plugin.RaceUser, []plugin.RaceGroup, int64, int, int) {
 	return nil, nil, 0, 0, 0

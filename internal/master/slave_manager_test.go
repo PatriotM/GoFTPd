@@ -8,6 +8,57 @@ import (
 	"goftpd/internal/zipscript"
 )
 
+func TestSelectSlaveForUploadPrefersOwnedAncestorDirectory(t *testing.T) {
+	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
+
+	local := NewRemoteSlave("LOCAL", nil, nil, 60*time.Second, nil)
+	local.available.Store(true)
+	local.diskStatus = protocol.DiskStatus{SpaceAvailable: 100}
+
+	other := NewRemoteSlave("OTHER", nil, nil, 60*time.Second, nil)
+	other.available.Store(true)
+	other.diskStatus = protocol.DiskStatus{SpaceAvailable: 1000}
+
+	sm.slavesMu.Lock()
+	sm.slaves[local.Name()] = local
+	sm.slaves[other.Name()] = other
+	sm.slavesMu.Unlock()
+
+	sm.vfs.AddFile("/REQUESTS", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.AddFile("/REQUESTS/REQ-Test.Release-GRP", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.AddFile("/REQUESTS/REQ-Test.Release-GRP/Test.Release-GRP", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+
+	got := sm.SelectSlaveForUpload("/REQUESTS/REQ-Test.Release-GRP/Test.Release-GRP/file.r00")
+	if got == nil || got.Name() != "LOCAL" {
+		t.Fatalf("expected upload to stick to LOCAL, got %+v", got)
+	}
+}
+
+func TestSelectSlaveForUploadFallsBackWhenOwnedAncestorSlaveUnavailable(t *testing.T) {
+	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
+
+	local := NewRemoteSlave("LOCAL", nil, nil, 60*time.Second, nil)
+	local.available.Store(false)
+	local.diskStatus = protocol.DiskStatus{SpaceAvailable: 100}
+
+	other := NewRemoteSlave("OTHER", nil, nil, 60*time.Second, nil)
+	other.available.Store(true)
+	other.diskStatus = protocol.DiskStatus{SpaceAvailable: 1000}
+
+	sm.slavesMu.Lock()
+	sm.slaves[local.Name()] = local
+	sm.slaves[other.Name()] = other
+	sm.slavesMu.Unlock()
+
+	sm.vfs.AddFile("/REQUESTS", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.AddFile("/REQUESTS/REQ-Test.Release-GRP", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+
+	got := sm.SelectSlaveForUpload("/REQUESTS/REQ-Test.Release-GRP/file.r00")
+	if got == nil || got.Name() != "OTHER" {
+		t.Fatalf("expected fallback upload slave OTHER, got %+v", got)
+	}
+}
+
 func TestRemoteSlaveOfflineClearsVFSFiles(t *testing.T) {
 	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
 	sm.vfs.AddFile("/X265/release", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
@@ -164,10 +215,11 @@ func TestCacheZipProgressRefreshesStatusMarkers(t *testing.T) {
 
 	sm.vfs.AddFile("/0DAY", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
 	sm.vfs.AddFile("/0DAY/release", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.AddFile("/0DAY/release/file_id.diz", VFSFile{Size: 32, Seen: true, SlaveName: "LOCAL"})
 	sm.vfs.AddFile("/0DAY/release/file.zip", VFSFile{Size: 100, Seen: true, SlaveName: "LOCAL"})
 
 	bridge := &Bridge{sm: sm}
-	bridge.CacheReleaseProgress("/0DAY/release", 1, 2, true)
+	bridge.CacheZipExpectedParts("/0DAY/release", 2, 123)
 	sm.SyncStatusMarkersForPath("/0DAY/release", true)
 
 	got, ok := bridge.GetPathEntry("/0DAY/[incomplete]-release")
@@ -181,10 +233,16 @@ func TestCacheZipProgressRefreshesStatusMarkers(t *testing.T) {
 		t.Fatalf("did not expect no-sfv marker for zip manifest progress, got %+v", noSFV)
 	}
 
-	bridge.CacheReleaseProgress("/0DAY/release", 2, 2, true)
+	sm.vfs.AddFile("/0DAY/release/file.z01", VFSFile{Size: 100, Seen: true, SlaveName: "LOCAL"})
 	sm.SyncStatusMarkersForPath("/0DAY/release", true)
 	if got, ok := bridge.GetPathEntry("/0DAY/[incomplete]-release"); ok {
 		t.Fatalf("did not expect zip incomplete marker after completion, got %+v", got)
+	}
+
+	bridge.CacheZipExpectedParts("/0DAY/release", 0, 0)
+	sm.SyncStatusMarkersForPath("/0DAY/release", true)
+	if expected, ok := bridge.GetZipExpectedParts("/0DAY/release"); ok || expected != 0 {
+		t.Fatalf("did not expect stale zip metadata to remain cached, got expected=%d ok=%v", expected, ok)
 	}
 }
 
@@ -288,33 +346,6 @@ func TestStatusMarkerSyncDeletesRemovedReleaseMarker(t *testing.T) {
 	sm.SyncStatusMarkersForPath("/X265/release", true)
 	if got := sm.vfs.GetFile("/X265/[incomplete]-release"); got != nil {
 		t.Fatalf("expected marker for removed release to be deleted, got %+v", got)
-	}
-}
-
-func TestStatusMarkerSyncIgnoresStaleCachedIncompleteFacts(t *testing.T) {
-	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
-	sm.SetStatusMarkerConfig(zipscript.Config{
-		Enabled: true,
-		Incomplete: zipscript.IncompleteConfig{
-			Enabled:        true,
-			Indicator:      "[incomplete]-%0",
-			NoSFVIndicator: "[no-sfv]-%0",
-			NFOIndicator:   "[no-nfo]-%0",
-		},
-	})
-
-	sm.vfs.AddFile("/X265", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
-	sm.vfs.AddFile("/X265/old.release", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
-	stale := &vfsReleaseSnapshot{HasSFV: true, Total: 20, Present: 0}
-	sm.releaseStateMu.Lock()
-	sm.setReleaseFactLocked("/X265/old.release", stale)
-	sm.releaseStateMu.Unlock()
-	sm.vfs.SetSFVData("/X265/old.release", "old.release.sfv", map[string]uint32{"file.r00": 1})
-	sm.vfs.AddSymlink("/X265/[incomplete]-old.release", "/X265/old.release")
-
-	sm.SyncStatusMarkersForPath("/X265", true)
-	if got := sm.vfs.GetFile("/X265/[incomplete]-old.release"); got != nil {
-		t.Fatalf("expected stale cached incomplete marker to be removed, got %+v", got)
 	}
 }
 

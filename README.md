@@ -455,9 +455,9 @@ SITE commands:
 `REQDEL` is owner-safe. A user can delete their own request. Privileged users
 can wipe requests with `REQWIPE`. The sitebot request plugin can pass the IRC
 nick through using `-by:<nick>` only when the FTP login is listed in
-`request.proxy_users`. Filled requests are tracked in the configured
-`fill_stats_file`, by default `/REQUESTS/.reqfills`, and `REQTOP` ranks users by
-filled request count.
+`request.proxy_users`. Filled requests are tracked in the request plugin's
+stored metadata on the request root, and `REQTOP` ranks users by filled
+request count without relying on `.reqfills` text files.
 
 ### Slowkick
 
@@ -586,6 +586,10 @@ Account command notes:
   entry.
 - `CHANGE` is a convenience wrapper for built-in user/group limit edits such as
   ratio, login limits, slot counts, weekly allotment, and group simult.
+- Use `SITE CHANGE HELP` to list the canonical field names.
+- Canonical `SITE CHANGE` fields are `RATIO`, `NUM_LOGINS`, `MAX_SIM`,
+  `WKLY_ALLOTMENT`, `UPLOADSLOTS`, `DOWNLOADSLOTS`, `GROUP_SLOTS`,
+  `GROUP_SIMULT`, and `TAGLINE`.
 - `GROUPSLOTS <gadmin-user> <slots> [leech_slots]` stores how many users that
   gadmin may create and how many of those may be leech users.
 - `CHWKLYALLOTMENT <user> <credits>` sets the weekly credit replacement amount.

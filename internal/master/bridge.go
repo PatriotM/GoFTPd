@@ -1466,6 +1466,7 @@ func (b *Bridge) writeFileOnSlave(filePath string, content []byte, slave *Remote
 		IsDir:        false,
 		LastModified: time.Now().Unix(),
 		SlaveName:    slave.Name(),
+		Checksum:     crc32.ChecksumIEEE(content),
 	})
 	b.cacheReadFileResult(filePath, content, nil)
 	b.sm.SyncStatusMarkersForPath(filePath, false)
@@ -1978,31 +1979,6 @@ func (b *Bridge) SyncReleaseRaceStats(dirPath string) error {
 	return b.raceDB.ReplaceReleaseFiles(cleanDirPath, meta.SFVName, meta.SFVEntries, files)
 }
 
-func (b *Bridge) CacheReleaseProgress(dirPath string, present, total int, hasManifest bool) {
-	if b == nil || b.sm == nil || total <= 0 {
-		return
-	}
-	cleanDirPath := filepath.Clean(dirPath)
-	facts := core.ReleaseChildFacts{Path: cleanDirPath}
-	if current, _, ok := b.sm.GetVFS().GetReleaseStatusSnapshot(cleanDirPath); ok && current != nil {
-		facts.VisibleCount = current.VisibleCount
-		facts.FileCount = current.FileCount
-		facts.HasSFV = current.HasSFV
-		facts.HasNFO = current.HasNFO
-	}
-	snapshot := &vfsReleaseSnapshot{
-		VisibleCount: facts.VisibleCount,
-		FileCount:    facts.FileCount,
-		HasSFV:       facts.HasSFV || hasManifest,
-		HasNFO:       facts.HasNFO,
-		Present:      present,
-		Total:        total,
-	}
-	b.sm.releaseStateMu.Lock()
-	b.sm.setReleaseFactLocked(cleanDirPath, snapshot)
-	b.sm.releaseStateMu.Unlock()
-}
-
 // GetSFVData returns cached SFV entries for a directory.
 func (b *Bridge) GetSFVData(dirPath string) map[string]uint32 {
 	meta := b.sm.GetVFS().GetSFVData(dirPath)
@@ -2010,6 +1986,34 @@ func (b *Bridge) GetSFVData(dirPath string) map[string]uint32 {
 		return nil
 	}
 	return meta.SFVEntries
+}
+
+func (b *Bridge) GetZipExpectedParts(dirPath string) (int, bool) {
+	if b == nil || b.sm == nil || b.sm.GetVFS() == nil {
+		return 0, false
+	}
+	return b.sm.GetVFS().GetZipExpectedParts(dirPath)
+}
+
+func (b *Bridge) CacheZipExpectedParts(dirPath string, expected int, dizChecksum uint32) {
+	if b == nil || b.sm == nil || b.sm.GetVFS() == nil {
+		return
+	}
+	b.sm.GetVFS().CacheZipExpectedParts(dirPath, expected, dizChecksum)
+}
+
+func (b *Bridge) GetRequestData(dirPath string) ([]plugin.RequestRecord, []plugin.RequestFillRecord) {
+	if b == nil || b.sm == nil || b.sm.GetVFS() == nil {
+		return nil, nil
+	}
+	return b.sm.GetVFS().GetRequestData(dirPath)
+}
+
+func (b *Bridge) SetRequestData(dirPath string, requests []plugin.RequestRecord, fills []plugin.RequestFillRecord) {
+	if b == nil || b.sm == nil || b.sm.GetVFS() == nil {
+		return
+	}
+	b.sm.GetVFS().SetRequestData(dirPath, requests, fills)
 }
 
 func (b *Bridge) GetVerifiedSFVPresentFiles(dirPath string) map[string]bool {

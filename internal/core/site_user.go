@@ -465,36 +465,50 @@ func (s *Session) HandleSiteChRatio(args []string) bool {
 }
 
 func (s *Session) HandleSiteChange(args []string) bool {
+	if len(args) == 1 {
+		switch strings.ToUpper(strings.TrimSpace(args[0])) {
+		case "HELP", "?":
+			fmt.Fprintf(s.Conn, "200 Usage: SITE CHANGE <user|group> <field> <value...>\r\n")
+			fmt.Fprintf(s.Conn, "200 Supported CHANGE fields: %s\r\n", siteChangeFieldSummary())
+			return false
+		}
+	}
 	if len(args) < 3 {
 		fmt.Fprintf(s.Conn, "501 Usage: SITE CHANGE <user|group> <field> <value...>\r\n")
+		fmt.Fprintf(s.Conn, "501 Supported CHANGE fields: %s\r\n", siteChangeFieldSummary())
 		return false
 	}
 	field := strings.ToUpper(strings.TrimSpace(args[1]))
 	switch field {
 	case "RATIO":
 		return s.HandleSiteChRatio([]string{args[0], args[2]})
-	case "NUM_LOGINS", "LOGINSLOTS":
+	case "NUM_LOGINS":
 		return s.HandleSiteChNumLogins([]string{args[0], args[2]})
-	case "MAX_SIM", "MAXSIM":
+	case "MAX_SIM":
 		return s.HandleSiteChMaxSim([]string{args[0], args[2]})
-	case "WKLY_ALLOTMENT", "WKLYALLOTMENT", "WEEKLYALLOTMENT":
+	case "WKLY_ALLOTMENT":
 		return s.HandleSiteChWklyAllotment([]string{args[0], args[2]})
 	case "UPLOADSLOTS":
 		return s.HandleSiteChUploadSlots([]string{args[0], args[2]})
 	case "DOWNLOADSLOTS":
 		return s.HandleSiteChDownloadSlots([]string{args[0], args[2]})
-	case "GROUP_SLOTS", "GROUPSLOTS":
+	case "GROUP_SLOTS":
 		groupArgs := append([]string{args[0]}, args[2:]...)
 		return s.HandleSiteGroupSlots(groupArgs)
-	case "GROUP_SIMULT", "GROUPSIMULT", "SIMULT":
+	case "GROUP_SIMULT":
 		return s.HandleSiteGroupSimult([]string{args[0], args[2]})
 	case "TAGLINE":
 		taglineArgs := append([]string{args[0]}, args[2:]...)
 		return s.HandleSiteTagline(taglineArgs)
 	default:
 		fmt.Fprintf(s.Conn, "550 Unknown CHANGE field %s.\r\n", field)
+		fmt.Fprintf(s.Conn, "550 Supported CHANGE fields: %s\r\n", siteChangeFieldSummary())
 		return false
 	}
+}
+
+func siteChangeFieldSummary() string {
+	return "RATIO, NUM_LOGINS, MAX_SIM, WKLY_ALLOTMENT, UPLOADSLOTS, DOWNLOADSLOTS, GROUP_SLOTS, GROUP_SIMULT, TAGLINE"
 }
 
 func (s *Session) HandleSiteBan(args []string) bool {
