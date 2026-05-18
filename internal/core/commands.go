@@ -4421,29 +4421,7 @@ func zipDirComplete(bridge MasterBridge, dirPath string, entries []MasterFileEnt
 }
 
 func zipDirCompleteAfterUpload(bridge MasterBridge, dirPath, fileName string, entries []MasterFileEntry, expected int) bool {
-	if zipDirComplete(bridge, dirPath, entries, expected) {
-		return true
-	}
-	if expected <= 0 || !isZipPayloadName(fileName) {
-		return false
-	}
-
-	currentPath := path.Join(dirPath, fileName)
-	if !activeUploadForPathWithBridge(bridge, currentPath) {
-		return false
-	}
-
-	for _, e := range entries {
-		if e.IsDir || e.IsSymlink {
-			continue
-		}
-		if !strings.EqualFold(strings.TrimSpace(e.Name), strings.TrimSpace(fileName)) {
-			continue
-		}
-		total := zipDirPayloadCount(bridge, dirPath, entries) + 1
-		return total == expected
-	}
-	return false
+	return zipDirComplete(bridge, dirPath, entries, expected)
 }
 
 func cacheZipReleaseProgress(bridge MasterBridge, dirPath string, present, total int) {
