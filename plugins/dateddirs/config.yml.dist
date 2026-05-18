@@ -15,6 +15,7 @@ today_symlink: true
 symlink_prefix: "!Today_"
 
 # After this age, the dated dir is made read-only.
+# Set to 0 to disable the read-only chmod entirely.
 readonly_after_minutes: 60
 
 debug: false

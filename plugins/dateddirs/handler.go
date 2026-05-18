@@ -44,7 +44,7 @@ func (h *Handler) Init(svc *plugin.Services, cfg map[string]interface{}) error {
 	h.symlinkPrefix = stringConfig(cfg, "symlink_prefix", "!Today_")
 	h.readOnlyAfterMinutes = intConfig(cfg, "readonly_after_minutes", 60)
 	h.debug = boolConfig(cfg, "debug", svc != nil && svc.Debug)
-	if h.readOnlyAfterMinutes <= 0 {
+	if h.readOnlyAfterMinutes < 0 {
 		h.readOnlyAfterMinutes = 60
 	}
 	h.startOnce.Do(func() { go h.loop() })
@@ -120,7 +120,7 @@ func (h *Handler) apply(now time.Time) {
 			})
 		}
 
-		if minutesSinceMidnight(now) >= h.readOnlyAfterMinutes {
+		if h.readOnlyAfterMinutes > 0 && minutesSinceMidnight(now) >= h.readOnlyAfterMinutes {
 			yesterdayPath := "/" + section + "/" + yesterday
 			if h.pathExists(yesterdayPath) && !h.pathMode(yesterdayPath, 0555) {
 				_ = h.svc.Bridge.Chmod(yesterdayPath, 0555)
