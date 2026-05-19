@@ -23,57 +23,50 @@ func TestZipExpectedPartsFromDIZContentMatchesDrFTPDStyleMarkers(t *testing.T) {
 	}
 }
 
-func TestZipPayloadSizesLookComplete(t *testing.T) {
+func TestZipDirCompleteFollowsDIZCountStyle(t *testing.T) {
 	tests := []struct {
-		name    string
-		entries []MasterFileEntry
-		want    bool
+		name     string
+		entries  []MasterFileEntry
+		expected int
+		want     bool
 	}{
 		{
-			name: "uniform with one smaller tail",
-			entries: []MasterFileEntry{
-				{Name: "a.zip", Size: 5000},
-				{Name: "b.zip", Size: 5000},
-				{Name: "c.zip", Size: 3200},
-			},
-			want: true,
-		},
-		{
-			name: "multiple undersized parts",
+			name: "exact expected count",
 			entries: []MasterFileEntry{
 				{Name: "a.zip", Size: 5000},
 				{Name: "b.zip", Size: 3200},
 				{Name: "c.zip", Size: 2800},
 			},
-			want: false,
+			expected: 3,
+			want:     true,
 		},
 		{
-			name: "all uniform",
+			name: "more zip files than expected still complete",
+			entries: []MasterFileEntry{
+				{Name: "a.zip", Size: 5000},
+				{Name: "b.zip", Size: 3200},
+				{Name: "c.zip", Size: 2800},
+				{Name: "d.zip", Size: 1200},
+			},
+			expected: 3,
+			want:     true,
+		},
+		{
+			name: "missing a zip file",
 			entries: []MasterFileEntry{
 				{Name: "a.zip", Size: 5000},
 				{Name: "b.zip", Size: 5000},
-				{Name: "c.zip", Size: 5000},
 			},
-			want: true,
+			expected: 3,
+			want:     false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := zipPayloadSizesLookComplete(tt.entries); got != tt.want {
-				t.Fatalf("zipPayloadSizesLookComplete() = %v, want %v", got, tt.want)
+			if got := zipDirComplete(nil, "/0DAY/test", tt.entries, tt.expected); got != tt.want {
+				t.Fatalf("zipDirComplete() = %v, want %v", got, tt.want)
 			}
 		})
-	}
-}
-
-func TestZipDirCompleteRequiresSaneSizes(t *testing.T) {
-	entries := []MasterFileEntry{
-		{Name: "a.zip", Size: 5000},
-		{Name: "b.zip", Size: 3200},
-		{Name: "c.zip", Size: 2800},
-	}
-	if zipDirComplete(nil, "/0DAY/test", entries, 3) {
-		t.Fatalf("expected zipDirComplete to reject multiple undersized zip parts")
 	}
 }

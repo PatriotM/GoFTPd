@@ -890,3 +890,66 @@ func TestVFSDeleteLastZipClearsZipMetadata(t *testing.T) {
 		t.Fatalf("expected deleting the last zip archive to clear zip metadata, got expected=%d ok=%v", expected, ok)
 	}
 }
+
+func TestVFSZipPayloadPreservesStrongerCompletedSizeOnWeakOverwrite(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/0DAY/release", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/0DAY/release/part1.zip", VFSFile{
+		Seen:         true,
+		Size:         4096,
+		Owner:        "steel",
+		Group:        "iND",
+		XferTime:     1500,
+		Checksum:     0x12345678,
+		LastModified: 1,
+	})
+
+	vfs.AddFile("/0DAY/release/part1.zip", VFSFile{
+		Seen:         true,
+		Size:         1024,
+		Owner:        "GoFTPd",
+		Group:        "root",
+		LastModified: 2,
+	})
+
+	got := vfs.GetFile("/0DAY/release/part1.zip")
+	if got == nil {
+		t.Fatalf("expected zip payload to remain present")
+	}
+	if got.Size != 4096 {
+		t.Fatalf("expected stronger completed size 4096 to survive weak overwrite, got %d", got.Size)
+	}
+	if got.Checksum != 0x12345678 || got.XferTime != 1500 {
+		t.Fatalf("expected transfer metadata to survive weak overwrite, checksum=%08X xfer=%d", got.Checksum, got.XferTime)
+	}
+}
+
+func TestVFSHydrateRaceFileRestoresStrongerZipSize(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/0DAY/release", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/0DAY/release/part1.zip", VFSFile{
+		Seen:         true,
+		Size:         1024,
+		Owner:        "GoFTPd",
+		Group:        "root",
+		LastModified: 1,
+	})
+
+	if !vfs.HydrateRaceFile("/0DAY/release/part1.zip", "steel", "iND", 4096, 1500, 0x12345678) {
+		t.Fatalf("expected hydrate to update weak zip payload metadata")
+	}
+
+	got := vfs.GetFile("/0DAY/release/part1.zip")
+	if got == nil {
+		t.Fatalf("expected hydrated zip payload to remain present")
+	}
+	if got.Size != 4096 {
+		t.Fatalf("expected hydrate to restore size 4096, got %d", got.Size)
+	}
+	if got.Owner != "steel" || got.Group != "iND" {
+		t.Fatalf("expected hydrate to restore owner/group steel/iND, got %s/%s", got.Owner, got.Group)
+	}
+	if got.Checksum != 0x12345678 || got.XferTime != 1500 {
+		t.Fatalf("expected hydrate to restore transfer metadata, checksum=%08X xfer=%d", got.Checksum, got.XferTime)
+	}
+}

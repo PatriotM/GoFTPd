@@ -175,6 +175,14 @@ func (vfs *VirtualFileSystem) AddFile(path string, file VFSFile) {
 		}
 		if !file.IsDir && !file.IsSymlink &&
 			!existing.IsDir && !existing.IsSymlink &&
+			zipscript.IsZipPayloadName(filepath.Base(path)) &&
+			file.XferTime == 0 && file.Checksum == 0 &&
+			existing.XferTime > 0 && existing.Checksum != 0 &&
+			existing.Size > file.Size {
+			file.Size = existing.Size
+		}
+		if !file.IsDir && !file.IsSymlink &&
+			!existing.IsDir && !existing.IsSymlink &&
 			existing.Size == file.Size {
 			if file.Checksum == 0 {
 				file.Checksum = existing.Checksum
@@ -688,7 +696,7 @@ func (vfs *VirtualFileSystem) computeReleaseSnapshotLocked(dirPath string) *vfsR
 	return snapshot
 }
 
-func (vfs *VirtualFileSystem) HydrateRaceFile(path, owner, group string, xferTime int64, checksum uint32) bool {
+func (vfs *VirtualFileSystem) HydrateRaceFile(path, owner, group string, sizeBytes int64, xferTime int64, checksum uint32) bool {
 	vfs.mu.Lock()
 	defer vfs.mu.Unlock()
 
@@ -706,6 +714,10 @@ func (vfs *VirtualFileSystem) HydrateRaceFile(path, owner, group string, xferTim
 	}
 	if isWeakMetadataValue(currentGroup) && !isWeakMetadataValue(group) {
 		file.Group = group
+		changed = true
+	}
+	if sizeBytes > 0 && file.Size > 0 && file.XferTime <= 0 && file.Checksum == 0 && sizeBytes > file.Size {
+		file.Size = sizeBytes
 		changed = true
 	}
 	if file.XferTime <= 0 && xferTime > 0 {

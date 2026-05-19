@@ -758,7 +758,7 @@ func rescanZipPostProcess(cfg *Config, bridge MasterBridge, dirPath string, opts
 		}
 	}
 	dirEntries := bridge.ListDir(dirPath)
-	if expected := zipExpectedPartsFromDIZ(bridge, dirPath); expected > 0 {
+	if expected := zipExpectedPartsFromDIZ(bridge, dirPath, true); expected > 0 {
 		_, _, present := zipDirRaceStats(bridge, dirPath, dirEntries, expected)
 		cacheZipReleaseProgress(bridge, dirPath, present, expected)
 	}

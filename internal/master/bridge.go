@@ -578,6 +578,7 @@ func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group s
 		XferTime:     xferTime,
 		Checksum:     checksum,
 	})
+	b.recordUploadMetadata(filePath, owner, group, finalSize, xferTime, checksum)
 	b.sm.SyncStatusMarkersForPath(filePath, false)
 
 	return finalSize, checksum, nil
@@ -591,6 +592,15 @@ func finalUploadFileSize(status protocol.TransferStatus, position int64) int64 {
 		return status.Transferred + position
 	}
 	return status.Transferred
+}
+
+func (b *Bridge) recordUploadMetadata(filePath, owner, group string, size int64, durationMs int64, checksum uint32) {
+	if b == nil || b.raceDB == nil || size <= 0 || durationMs <= 0 {
+		return
+	}
+	if err := b.raceDB.RecordUpload(filepath.Clean(filePath), owner, group, size, durationMs, checksum); err != nil {
+		log.Printf("[Bridge] Race DB record upload failed for %s: %v", filePath, err)
+	}
 }
 
 // DownloadFile routes a download from a slave to the FTP client.
@@ -2205,6 +2215,7 @@ func (b *Bridge) SlaveReceivePassthrough(filePath string, transferIdx int32, sla
 		XferTime:     status.Elapsed,
 		Checksum:     finalChecksum,
 	})
+	b.recordUploadMetadata(filePath, owner, group, finalSize, status.Elapsed, finalChecksum)
 	b.sm.SyncStatusMarkersForPath(filePath, false)
 
 	log.Printf("[Passthrough] Upload %s on %s (%d bytes, %dms, CRC=%08X)",
@@ -2332,6 +2343,7 @@ func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group strin
 		XferTime:     status.Elapsed,
 		Checksum:     finalChecksum,
 	})
+	b.recordUploadMetadata(filePath, owner, group, finalSize, status.Elapsed, finalChecksum)
 	b.sm.SyncStatusMarkersForPath(filePath, false)
 
 	log.Printf("[Passthrough-PORT] Upload %s on %s (%d bytes, %dms, CRC=%08X)",

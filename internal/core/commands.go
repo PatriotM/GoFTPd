@@ -3814,11 +3814,7 @@ func emitCWDZipDIZInfo(s *Session, bridge MasterBridge, dirPath string) {
 	}
 	content, err := bridge.ReadFile(path.Join(dirPath, "file_id.diz"))
 	if err != nil || len(content) == 0 {
-		recovered, recoverErr := recoverZipDIZFromDirectory(bridge, dirPath)
-		if recoverErr != nil || len(recovered) == 0 {
-			return
-		}
-		content = recovered
+		return
 	}
 	text := strings.ReplaceAll(string(content), "\r\n", "\n")
 	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
@@ -4073,9 +4069,6 @@ func zipDirRaceStats(bridge MasterBridge, dirPath string, entries []MasterFileEn
 		if e.IsDir || e.IsSymlink || strings.HasPrefix(strings.TrimSpace(e.Name), ".") || !isZipPayloadName(e.Name) {
 			continue
 		}
-		if activeUploadForPathWithBridge(bridge, path.Join(dirPath, e.Name)) {
-			continue
-		}
 		total++
 		totalBytes += e.Size
 		if e.XferTime <= 0 {
@@ -4244,53 +4237,12 @@ func zipDirPayloadCount(bridge MasterBridge, dirPath string, entries []MasterFil
 		if e.IsDir || e.IsSymlink || strings.HasPrefix(strings.TrimSpace(e.Name), ".") || !isZipPayloadName(e.Name) {
 			continue
 		}
-		if activeUploadForPathWithBridge(bridge, path.Join(dirPath, e.Name)) {
-			continue
-		}
 		total++
 	}
 	return total
 }
 
-func zipPayloadSizesLookComplete(entries []MasterFileEntry) bool {
-	sizes := make([]int64, 0, len(entries))
-	for _, e := range entries {
-		if e.IsDir || e.IsSymlink || strings.HasPrefix(strings.TrimSpace(e.Name), ".") || !isZipPayloadName(e.Name) {
-			continue
-		}
-		sizes = append(sizes, e.Size)
-	}
-	if len(sizes) <= 1 {
-		return len(sizes) == 1
-	}
-
-	var maxSize int64
-	for _, size := range sizes {
-		if size > maxSize {
-			maxSize = size
-		}
-	}
-	if maxSize <= 0 {
-		return false
-	}
-
-	smallerCount := 0
-	for _, size := range sizes {
-		if size == maxSize {
-			continue
-		}
-		if size <= 0 || size > maxSize {
-			return false
-		}
-		smallerCount++
-		if smallerCount > 1 {
-			return false
-		}
-	}
-	return true
-}
-
-func zipExpectedPartsFromDIZ(bridge MasterBridge, dirPath string) int {
+func zipExpectedPartsFromDIZ(bridge MasterBridge, dirPath string, allowRecover bool) int {
 	if bridge == nil {
 		return 0
 	}
@@ -4299,13 +4251,16 @@ func zipExpectedPartsFromDIZ(bridge MasterBridge, dirPath string) int {
 		return expected
 	}
 	content, err := bridge.ReadFile(dizPath)
-	if err != nil || len(content) == 0 {
+	if (err != nil || len(content) == 0) && allowRecover {
 		recovered, recoverErr := recoverZipDIZFromDirectory(bridge, dirPath)
 		if recoverErr != nil || len(recovered) == 0 {
 			bridge.CacheZipExpectedParts(dirPath, 0, 0)
 			return 0
 		}
 		content = recovered
+	} else if err != nil || len(content) == 0 {
+		bridge.CacheZipExpectedParts(dirPath, 0, 0)
+		return 0
 	}
 	expected := zipExpectedPartsFromDIZContent(content)
 	dizChecksum, ok := bridge.GetKnownChecksum(dizPath)
@@ -4351,9 +4306,6 @@ func recoverZipDIZFromDirectory(bridge MasterBridge, dirPath string) ([]byte, er
 		}
 		if isZipRecoverableArchiveName(entry.Name) {
 			archivePath := path.Join(dirPath, entry.Name)
-			if activeUploadForPathWithBridge(bridge, archivePath) {
-				continue
-			}
 			archives = append(archives, archivePath)
 		}
 	}
@@ -4417,7 +4369,7 @@ func zipDirComplete(bridge MasterBridge, dirPath string, entries []MasterFileEnt
 		return false
 	}
 	total := zipDirPayloadCount(bridge, dirPath, entries)
-	return total == expected && zipPayloadSizesLookComplete(entries)
+	return total >= expected
 }
 
 func zipDirCompleteAfterUpload(bridge MasterBridge, dirPath, fileName string, entries []MasterFileEntry, expected int) bool {
@@ -4441,7 +4393,7 @@ func raceStatsForDir(bridge MasterBridge, cfg *Config, dirPath string) (users []
 	}
 	if useZipRaceMode(bridge, cfg, dirPath, "") {
 		entries := bridge.ListDir(dirPath)
-		expected := zipExpectedPartsFromDIZ(bridge, dirPath)
+		expected := zipExpectedPartsFromDIZ(bridge, dirPath, false)
 		users, totalBytes, present = zipDirRaceStats(bridge, dirPath, entries, expected)
 		if expected > 0 {
 			total = expected
@@ -4472,24 +4424,10 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 		data["file_mbytes"] = mbString(fileSize)
 	}
 	if usesZip {
-		expected := zipExpectedPartsFromDIZ(bridge, dirPath)
+		expected := zipExpectedPartsFromDIZ(bridge, dirPath, true)
 		entries := bridge.ListDir(dirPath)
 		users, totalBytes, total := zipDirRaceStats(bridge, dirPath, entries, expected)
 		raceComplete := zipDirCompleteAfterUpload(bridge, dirPath, fileName, entries, expected)
-		if raceComplete && expected > 0 && total < expected {
-			for _, entry := range entries {
-				if !strings.EqualFold(strings.TrimSpace(entry.Name), strings.TrimSpace(fileName)) {
-					continue
-				}
-				var addedBytes int64
-				users, addedBytes = addZipRaceEntry(users, entry, expected)
-				if addedBytes > 0 {
-					totalBytes += addedBytes
-					total++
-				}
-				break
-			}
-		}
 		cacheZipReleaseProgress(bridge, dirPath, total, expected)
 		if total > 0 {
 			raceDurationMs := bridge.GetRaceWallClockMilliseconds(dirPath)

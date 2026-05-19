@@ -81,6 +81,28 @@ func TestParseRulesAcceptsGiBThresholds(t *testing.T) {
 	}
 }
 
+func TestParseRulesAcceptsIncomingDiskThresholdAliases(t *testing.T) {
+	rules := parseRules([]interface{}{
+		map[string]interface{}{
+			"name":                              "0day-clean",
+			"slave":                             "SLAVE1",
+			"action":                            "delete_oldest",
+			"paths":                             []interface{}{"/0DAY/*/*"},
+			"incoming_disk_threshold_min_gb":    float64(500),
+			"incoming_disk_threshold_target_gb": float64(650),
+		},
+	})
+	if len(rules) != 1 {
+		t.Fatalf("expected 1 rule, got %d", len(rules))
+	}
+	if rules[0].TriggerFreeBytes != 500*1024*1024*1024 {
+		t.Fatalf("unexpected trigger bytes: %d", rules[0].TriggerFreeBytes)
+	}
+	if rules[0].TargetFreeBytes != 650*1024*1024*1024 {
+		t.Fatalf("unexpected target bytes: %d", rules[0].TargetFreeBytes)
+	}
+}
+
 func TestEvaluateDeletesOldestEligibleCandidate(t *testing.T) {
 	now := time.Now().Add(-2 * time.Hour).Unix()
 	bridge := &testBridge{

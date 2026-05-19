@@ -328,3 +328,56 @@ func TestRaceDBGetRaceStatsIgnoresChecksumMismatches(t *testing.T) {
 		t.Fatalf("expected one valid group file, got %+v", groups)
 	}
 }
+
+func TestRaceDBHydrateVFSIncludesZipStyleUploadsWithoutExpectedManifest(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "race.db")
+	rdb, err := NewRaceDB(dbPath)
+	if err != nil {
+		t.Fatalf("NewRaceDB failed: %v", err)
+	}
+	defer rdb.Close()
+
+	releasePath := "/site/0DAY/Zip.Release-GRP"
+	filePath := releasePath + "/part1.zip"
+	if err := rdb.RecordUpload(filePath, "steel", "iND", 4096, 1500, 0x12345678); err != nil {
+		t.Fatalf("RecordUpload failed: %v", err)
+	}
+
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/site", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/site/0DAY", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile(releasePath, VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile(filePath, VFSFile{
+		Path:         filePath,
+		Size:         1024,
+		Seen:         true,
+		Owner:        "GoFTPd",
+		Group:        "root",
+		LastModified: 1,
+	})
+
+	hydrated, err := rdb.HydrateVFS(vfs)
+	if err != nil {
+		t.Fatalf("HydrateVFS failed: %v", err)
+	}
+	if hydrated != 1 {
+		t.Fatalf("expected 1 hydrated file, got %d", hydrated)
+	}
+
+	got := vfs.GetFile(filePath)
+	if got == nil {
+		t.Fatalf("expected hydrated file to remain present in VFS")
+	}
+	if got.Owner != "steel" || got.Group != "iND" {
+		t.Fatalf("expected hydrated owner/group steel/iND, got %s/%s", got.Owner, got.Group)
+	}
+	if got.Size != 4096 {
+		t.Fatalf("expected hydrated size 4096, got %d", got.Size)
+	}
+	if got.XferTime != 1500 {
+		t.Fatalf("expected hydrated xfertime 1500, got %d", got.XferTime)
+	}
+	if got.Checksum != 0x12345678 {
+		t.Fatalf("expected hydrated checksum 0x12345678, got %08X", got.Checksum)
+	}
+}
