@@ -953,3 +953,26 @@ func TestVFSHydrateRaceFileRestoresStrongerZipSize(t *testing.T) {
 		t.Fatalf("expected hydrate to restore transfer metadata, checksum=%08X xfer=%d", got.Checksum, got.XferTime)
 	}
 }
+
+func TestVFSListDirectoryIgnoresMislinkedDeepChildren(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/MP3", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/MP3/0519", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/MP3/0519/release", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/MP3/0519/release/track.mp3", VFSFile{Seen: true, Size: 1234})
+
+	vfs.mu.Lock()
+	vfs.ensureChildrenBucketLocked("/")
+	vfs.children["/"]["/MP3/0519/release/track.mp3"] = struct{}{}
+	vfs.mu.Unlock()
+
+	rootEntries := vfs.ListDirectory("/")
+	for _, entry := range rootEntries {
+		if entry == nil {
+			continue
+		}
+		if entry.Path == "/MP3/0519/release/track.mp3" {
+			t.Fatalf("expected root listing to ignore mislinked deep child")
+		}
+	}
+}

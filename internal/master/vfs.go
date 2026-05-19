@@ -565,6 +565,9 @@ func (vfs *VirtualFileSystem) ListDirectory(dirPath string) []*VFSFile {
 		if vfs.isHiddenPathLocked(childPath) {
 			continue
 		}
+		if cleanVFSPath(filepath.Dir(childPath)) != dirPath {
+			continue
+		}
 		if file := vfs.files[childPath]; file != nil {
 			results = append(results, file)
 		}
