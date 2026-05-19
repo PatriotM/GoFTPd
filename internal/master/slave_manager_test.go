@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"goftpd/internal/core"
 	"goftpd/internal/protocol"
 	"goftpd/internal/zipscript"
 )
@@ -180,10 +181,10 @@ func TestMarkFileMissingRefreshesStatusMarkers(t *testing.T) {
 }
 
 func TestMissingMarkerSyncPathsCreatesAndDeletesExpectedMarkers(t *testing.T) {
-	createPaths, deletePaths := missingMarkerSyncPaths("/X265/release", map[string]uint32{
-		"file.r00": 1,
-		"file.r01": 2,
-		"file.r02": 3,
+	createPaths, deletePaths := missingMarkerSyncPaths("/X265/release", core.ReleaseStatus{
+		Kind:          "sfv",
+		ExpectedFiles: []string{"file.r00", "file.r01", "file.r02"},
+		MissingFiles:  []string{"file.r02"},
 	}, []*VFSFile{
 		{Path: "/X265/release/file.r00", Size: 100},
 		{Path: "/X265/release/file.r00-MISSING"},

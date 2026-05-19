@@ -954,6 +954,52 @@ func TestVFSHydrateRaceFileRestoresStrongerZipSize(t *testing.T) {
 	}
 }
 
+func TestVFSGetReleaseStatusForSFVTracksMissingFiles(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/MP3/release", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/MP3/release/release.sfv", VFSFile{Seen: true, Size: 10, Checksum: 123})
+	vfs.AddFile("/MP3/release/release.nfo", VFSFile{Seen: true, Size: 10})
+	vfs.SetSFVDataWithChecksum("/MP3/release", "release.sfv", 123, map[string]uint32{
+		"01-track.mp3": 1,
+		"02-track.mp3": 2,
+	})
+	vfs.AddFile("/MP3/release/01-track.mp3", VFSFile{Seen: true, Size: 100, Checksum: 1})
+
+	status, ok := vfs.GetReleaseStatus("/MP3/release")
+	if !ok {
+		t.Fatalf("expected release status to be available")
+	}
+	if status.Kind != "sfv" {
+		t.Fatalf("expected sfv kind, got %q", status.Kind)
+	}
+	if status.Present != 1 || status.Total != 2 {
+		t.Fatalf("expected sfv present/total 1/2, got %d/%d", status.Present, status.Total)
+	}
+	if len(status.MissingFiles) != 1 || status.MissingFiles[0] != "02-track.mp3" {
+		t.Fatalf("expected one missing file 02-track.mp3, got %#v", status.MissingFiles)
+	}
+}
+
+func TestVFSGetReleaseStatusForZipUsesCachedExpectedParts(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/0DAY/release", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/0DAY/release/file_id.diz", VFSFile{Seen: true, Checksum: 321})
+	vfs.AddFile("/0DAY/release/a.zip", VFSFile{Seen: true, Size: 100})
+	vfs.AddFile("/0DAY/release/b.z01", VFSFile{Seen: true, Size: 100})
+	vfs.CacheZipExpectedParts("/0DAY/release", 3, 321)
+
+	status, ok := vfs.GetReleaseStatus("/0DAY/release")
+	if !ok {
+		t.Fatalf("expected release status to be available")
+	}
+	if status.Kind != "zip" {
+		t.Fatalf("expected zip kind, got %q", status.Kind)
+	}
+	if status.Present != 2 || status.Total != 3 {
+		t.Fatalf("expected zip present/total 2/3, got %d/%d", status.Present, status.Total)
+	}
+}
+
 func TestVFSListDirectoryIgnoresMislinkedDeepChildren(t *testing.T) {
 	vfs := NewVirtualFileSystem()
 	vfs.AddFile("/MP3", VFSFile{IsDir: true, Seen: true})

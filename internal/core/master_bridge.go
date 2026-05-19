@@ -123,6 +123,10 @@ type MasterBridge interface {
 	// currently present and checksum-valid according to live VFS state.
 	GetVerifiedSFVPresentFiles(dirPath string) map[string]bool
 
+	// GetReleaseStatus returns unified live completeness/missing state for one
+	// release directory.
+	GetReleaseStatus(dirPath string) (ReleaseStatus, bool)
+
 	// GetDirMediaInfo returns cached release-level media probe fields for a directory.
 	GetDirMediaInfo(dirPath string) map[string]string
 
@@ -231,6 +235,20 @@ type ReleaseChildFacts struct {
 	FileCount    int
 	HasSFV       bool
 	HasNFO       bool
+}
+
+type ReleaseStatus struct {
+	Path          string
+	Kind          string
+	VisibleCount  int
+	FileCount     int
+	HasSFV        bool
+	HasNFO        bool
+	Present       int
+	Total         int
+	TotalBytes    int64
+	ExpectedFiles []string
+	MissingFiles  []string
 }
 
 // SFVEntryInfo is a filename→CRC32 pair from a parsed SFV file.

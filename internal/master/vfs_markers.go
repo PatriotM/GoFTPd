@@ -4,7 +4,6 @@ import (
 	"path"
 	"strings"
 
-	"goftpd/internal/core"
 	"goftpd/internal/zipscript"
 )
 
@@ -161,23 +160,8 @@ func (sm *SlaveManager) statusMarkerReleaseForPath(cfg zipscript.Config, release
 	if releasePath == "/" || releasePath == "." || entry == nil {
 		return zipscript.StatusMarkerRelease{}, false
 	}
-	snapshot, _, hasFacts := sm.vfs.GetReleaseStatusSnapshot(releasePath)
-	facts := core.ReleaseChildFacts{Path: releasePath}
-	stat := core.ReleaseProgressStat{Path: releasePath}
-	ok := false
-	if hasFacts && snapshot != nil {
-		facts.VisibleCount = snapshot.VisibleCount
-		facts.FileCount = snapshot.FileCount
-		facts.HasSFV = snapshot.HasSFV
-		facts.HasNFO = snapshot.HasNFO
-		if snapshot.Total > 0 || snapshot.HasSFV {
-			stat.Present = snapshot.Present
-			stat.Total = snapshot.Total
-			stat.HasSFV = snapshot.HasSFV
-			ok = true
-		}
-	}
-	if !ok && !hasFacts {
+	status, ok := sm.vfs.GetReleaseStatus(releasePath)
+	if !ok {
 		return zipscript.StatusMarkerRelease{}, false
 	}
 	release := zipscript.StatusMarkerRelease{
@@ -185,19 +169,12 @@ func (sm *SlaveManager) statusMarkerReleaseForPath(cfg zipscript.Config, release
 		Path:    releasePath,
 		ModTime: entry.LastModified,
 	}
-	if ok {
-		release.Present = stat.Present
-		release.Total = stat.Total
-		release.HasSFV = stat.HasSFV
-	}
-	if hasFacts {
-		release.VisibleCount = facts.VisibleCount
-		release.FileCount = facts.FileCount
-		release.HasNFO = facts.HasNFO
-		if !release.HasSFV {
-			release.HasSFV = facts.HasSFV
-		}
-	}
+	release.Present = status.Present
+	release.Total = status.Total
+	release.HasSFV = status.HasSFV
+	release.VisibleCount = status.VisibleCount
+	release.FileCount = status.FileCount
+	release.HasNFO = status.HasNFO
 	return release, true
 }
 

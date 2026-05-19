@@ -1998,6 +1998,13 @@ func (b *Bridge) GetSFVData(dirPath string) map[string]uint32 {
 	return meta.SFVEntries
 }
 
+func (b *Bridge) GetReleaseStatus(dirPath string) (core.ReleaseStatus, bool) {
+	if b == nil || b.sm == nil || b.sm.GetVFS() == nil {
+		return core.ReleaseStatus{}, false
+	}
+	return b.sm.GetVFS().GetReleaseStatus(dirPath)
+}
+
 func (b *Bridge) GetZipExpectedParts(dirPath string) (int, bool) {
 	if b == nil || b.sm == nil || b.sm.GetVFS() == nil {
 		return 0, false

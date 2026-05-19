@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"goftpd/internal/core"
 	"goftpd/internal/protocol"
 	"goftpd/internal/zipscript"
 )
@@ -1318,8 +1319,12 @@ func (sm *SlaveManager) syncMissingMarkersAfterRemerge(rs *RemoteSlave, dirPath 
 	if !zipscript.ShowMissingFilesForDir(sm.statusMarkerConfig().Zipscript, dirPath) {
 		return
 	}
+	status, ok := sm.vfs.GetReleaseStatus(dirPath)
+	if !ok || status.Kind != "sfv" || len(status.ExpectedFiles) == 0 {
+		return
+	}
 
-	createPaths, deletePaths := missingMarkerSyncPaths(dirPath, sfvMap, sm.vfs.ListDirectory(dirPath))
+	createPaths, deletePaths := missingMarkerSyncPaths(dirPath, status, sm.vfs.ListDirectory(dirPath))
 	for _, missingPath := range deletePaths {
 		sm.vfs.DeleteFile(missingPath)
 		go func(missing string) {
@@ -1357,7 +1362,7 @@ func (sm *SlaveManager) syncMissingMarkersAfterRemerge(rs *RemoteSlave, dirPath 
 	}
 }
 
-func missingMarkerSyncPaths(dirPath string, sfvMap map[string]uint32, entries []*VFSFile) (createPaths []string, deletePaths []string) {
+func missingMarkerSyncPaths(dirPath string, status core.ReleaseStatus, entries []*VFSFile) (createPaths []string, deletePaths []string) {
 	filesByName := make(map[string]*VFSFile)
 	for _, entry := range entries {
 		if entry == nil || entry.IsDir {
@@ -1365,12 +1370,16 @@ func missingMarkerSyncPaths(dirPath string, sfvMap map[string]uint32, entries []
 		}
 		filesByName[strings.ToLower(path.Base(entry.Path))] = entry
 	}
-	for expectedName := range sfvMap {
+	missingSet := make(map[string]bool, len(status.MissingFiles))
+	for _, fileName := range status.MissingFiles {
+		missingSet[strings.ToLower(path.Base(fileName))] = true
+	}
+	for _, expectedName := range status.ExpectedFiles {
 		fileName := path.Base(expectedName)
 		realEntry := filesByName[strings.ToLower(fileName)]
 		missingName := fileName + "-MISSING"
 		missingEntry := filesByName[strings.ToLower(missingName)]
-		if realEntry != nil {
+		if realEntry != nil && !missingSet[strings.ToLower(fileName)] {
 			if missingEntry != nil {
 				deletePaths = append(deletePaths, missingEntry.Path)
 			}
