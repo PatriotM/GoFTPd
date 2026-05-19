@@ -2987,14 +2987,8 @@ func buildReleaseUploadPipelineState(s *Session, bridge MasterBridge, in release
 	}
 	state.SFVEntries = bridge.GetSFVData(in.UploadDir)
 	if state.SFVEntries != nil {
-		if state.SFVUpload {
-			syncMasterSFVMissingMarkers(s.Config, bridge, in.UploadDir)
-			bridge.SyncStatusMarkersForPath(in.UploadDir, true)
-		} else {
-			// Payload uploads only need their own marker cleared; full SFV rebuilds
-			// are O(files in release) and run when the SFV is parsed or rescanned.
-			clearMasterSFVMissingMarker(bridge, in.UploadDir, in.FileName)
-		}
+		syncMasterSFVMissingMarkers(s.Config, bridge, in.UploadDir)
+		bridge.SyncStatusMarkersForPath(in.UploadDir, true)
 	}
 
 	if err := refreshZipDIZFromArchive(bridge, in.UploadDir, in.FilePath, in.FileName); err != nil && s.Config.Debug {
