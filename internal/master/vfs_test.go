@@ -890,3 +890,180 @@ func TestVFSDeleteLastZipClearsZipMetadata(t *testing.T) {
 		t.Fatalf("expected deleting the last zip archive to clear zip metadata, got expected=%d ok=%v", expected, ok)
 	}
 }
+
+func TestVFSZipPayloadPreservesStrongerCompletedSizeOnWeakOverwrite(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/0DAY/release", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/0DAY/release/part1.zip", VFSFile{
+		Seen:         true,
+		Size:         4096,
+		Owner:        "steel",
+		Group:        "iND",
+		XferTime:     1500,
+		Checksum:     0x12345678,
+		LastModified: 1,
+	})
+
+	vfs.AddFile("/0DAY/release/part1.zip", VFSFile{
+		Seen:         true,
+		Size:         1024,
+		Owner:        "GoFTPd",
+		Group:        "root",
+		LastModified: 2,
+	})
+
+	got := vfs.GetFile("/0DAY/release/part1.zip")
+	if got == nil {
+		t.Fatalf("expected zip payload to remain present")
+	}
+	if got.Size != 4096 {
+		t.Fatalf("expected stronger completed size 4096 to survive weak overwrite, got %d", got.Size)
+	}
+	if got.Checksum != 0x12345678 || got.XferTime != 1500 {
+		t.Fatalf("expected transfer metadata to survive weak overwrite, checksum=%08X xfer=%d", got.Checksum, got.XferTime)
+	}
+}
+
+func TestVFSHydrateRaceFileRestoresStrongerZipSize(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/0DAY/release", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/0DAY/release/part1.zip", VFSFile{
+		Seen:         true,
+		Size:         1024,
+		Owner:        "GoFTPd",
+		Group:        "root",
+		LastModified: 1,
+	})
+
+	if !vfs.HydrateRaceFile("/0DAY/release/part1.zip", "steel", "iND", 4096, 1500, 0x12345678) {
+		t.Fatalf("expected hydrate to update weak zip payload metadata")
+	}
+
+	got := vfs.GetFile("/0DAY/release/part1.zip")
+	if got == nil {
+		t.Fatalf("expected hydrated zip payload to remain present")
+	}
+	if got.Size != 4096 {
+		t.Fatalf("expected hydrate to restore size 4096, got %d", got.Size)
+	}
+	if got.Owner != "steel" || got.Group != "iND" {
+		t.Fatalf("expected hydrate to restore owner/group steel/iND, got %s/%s", got.Owner, got.Group)
+	}
+	if got.Checksum != 0x12345678 || got.XferTime != 1500 {
+		t.Fatalf("expected hydrate to restore transfer metadata, checksum=%08X xfer=%d", got.Checksum, got.XferTime)
+	}
+}
+
+func TestVFSGetReleaseStatusForSFVTracksMissingFiles(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/MP3/release", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/MP3/release/release.sfv", VFSFile{Seen: true, Size: 10, Checksum: 123})
+	vfs.AddFile("/MP3/release/release.nfo", VFSFile{Seen: true, Size: 10})
+	vfs.SetSFVDataWithChecksum("/MP3/release", "release.sfv", 123, map[string]uint32{
+		"01-track.mp3": 1,
+		"02-track.mp3": 2,
+	})
+	vfs.AddFile("/MP3/release/01-track.mp3", VFSFile{Seen: true, Size: 100, Checksum: 1})
+
+	status, ok := vfs.GetReleaseStatus("/MP3/release")
+	if !ok {
+		t.Fatalf("expected release status to be available")
+	}
+	if status.Kind != "sfv" {
+		t.Fatalf("expected sfv kind, got %q", status.Kind)
+	}
+	if status.Present != 1 || status.Total != 2 {
+		t.Fatalf("expected sfv present/total 1/2, got %d/%d", status.Present, status.Total)
+	}
+	if len(status.MissingFiles) != 1 || status.MissingFiles[0] != "02-track.mp3" {
+		t.Fatalf("expected one missing file 02-track.mp3, got %#v", status.MissingFiles)
+	}
+}
+
+func TestVFSGetReleaseStatusForSFVUsesNormalizedPresentFileKeys(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/MP3/release", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/MP3/release/release.sfv", VFSFile{Seen: true, Size: 10, Checksum: 123})
+	vfs.SetSFVDataWithChecksum("/MP3/release", "release.sfv", 123, map[string]uint32{
+		"01-Track.MP3": 1,
+		"02-track.mp3": 2,
+	})
+	vfs.AddFile("/MP3/release/01-track.mp3", VFSFile{Seen: true, Size: 100, Checksum: 1})
+
+	status, ok := vfs.GetReleaseStatus("/MP3/release")
+	if !ok {
+		t.Fatalf("expected release status to be available")
+	}
+	if status.Present != 1 || status.Total != 2 {
+		t.Fatalf("expected sfv present/total 1/2, got %d/%d", status.Present, status.Total)
+	}
+	if len(status.MissingFiles) != 1 || status.MissingFiles[0] != "02-track.mp3" {
+		t.Fatalf("expected one missing file 02-track.mp3, got %#v", status.MissingFiles)
+	}
+}
+
+func TestVFSGetReleaseStatusForSFVTreatsChecksumMismatchAsMissing(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/MP3/release", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/MP3/release/release.sfv", VFSFile{Seen: true, Size: 10, Checksum: 123})
+	vfs.SetSFVDataWithChecksum("/MP3/release", "release.sfv", 123, map[string]uint32{
+		"01-track.mp3": 1,
+		"02-track.mp3": 2,
+	})
+	vfs.AddFile("/MP3/release/01-track.mp3", VFSFile{Seen: true, Size: 100, Checksum: 1})
+	vfs.AddFile("/MP3/release/02-track.mp3", VFSFile{Seen: true, Size: 100, Checksum: 999})
+
+	status, ok := vfs.GetReleaseStatus("/MP3/release")
+	if !ok {
+		t.Fatalf("expected release status to be available")
+	}
+	if status.Present != 1 || status.Total != 2 {
+		t.Fatalf("expected sfv present/total 1/2, got %d/%d", status.Present, status.Total)
+	}
+	if len(status.MissingFiles) != 1 || status.MissingFiles[0] != "02-track.mp3" {
+		t.Fatalf("expected checksum mismatch to be treated as missing, got %#v", status.MissingFiles)
+	}
+}
+
+func TestVFSGetReleaseStatusForZipUsesCachedExpectedParts(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/0DAY/release", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/0DAY/release/file_id.diz", VFSFile{Seen: true, Checksum: 321})
+	vfs.AddFile("/0DAY/release/a.zip", VFSFile{Seen: true, Size: 100})
+	vfs.AddFile("/0DAY/release/b.z01", VFSFile{Seen: true, Size: 100})
+	vfs.CacheZipExpectedParts("/0DAY/release", 3, 321)
+
+	status, ok := vfs.GetReleaseStatus("/0DAY/release")
+	if !ok {
+		t.Fatalf("expected release status to be available")
+	}
+	if status.Kind != "zip" {
+		t.Fatalf("expected zip kind, got %q", status.Kind)
+	}
+	if status.Present != 2 || status.Total != 3 {
+		t.Fatalf("expected zip present/total 2/3, got %d/%d", status.Present, status.Total)
+	}
+}
+
+func TestVFSListDirectoryIgnoresMislinkedDeepChildren(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/MP3", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/MP3/0519", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/MP3/0519/release", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/MP3/0519/release/track.mp3", VFSFile{Seen: true, Size: 1234})
+
+	vfs.mu.Lock()
+	vfs.ensureChildrenBucketLocked("/")
+	vfs.children["/"]["/MP3/0519/release/track.mp3"] = struct{}{}
+	vfs.mu.Unlock()
+
+	rootEntries := vfs.ListDirectory("/")
+	for _, entry := range rootEntries {
+		if entry == nil {
+			continue
+		}
+		if entry.Path == "/MP3/0519/release/track.mp3" {
+			t.Fatalf("expected root listing to ignore mislinked deep child")
+		}
+	}
+}

@@ -497,7 +497,7 @@ func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group s
 		return 0, 0, fmt.Errorf("unexpected response from slave")
 	}
 
-	slaveAddr := fmt.Sprintf("%s:%d", slave.GetPASVIP(), transferResp.Info.Port)
+	slaveAddr := net.JoinHostPort(slave.GetPASVIP(), strconv.Itoa(transferResp.Info.Port))
 	log.Printf("[Bridge] Connecting to slave %s at %s for upload of %s", slave.Name(), slaveAddr, filePath)
 
 	// Connect to slave's data port
@@ -578,6 +578,7 @@ func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group s
 		XferTime:     xferTime,
 		Checksum:     checksum,
 	})
+	b.recordUploadMetadata(filePath, owner, group, finalSize, xferTime, checksum)
 	b.sm.SyncStatusMarkersForPath(filePath, false)
 
 	return finalSize, checksum, nil
@@ -591,6 +592,15 @@ func finalUploadFileSize(status protocol.TransferStatus, position int64) int64 {
 		return status.Transferred + position
 	}
 	return status.Transferred
+}
+
+func (b *Bridge) recordUploadMetadata(filePath, owner, group string, size int64, durationMs int64, checksum uint32) {
+	if b == nil || b.raceDB == nil || size <= 0 || durationMs <= 0 {
+		return
+	}
+	if err := b.raceDB.RecordUpload(filepath.Clean(filePath), owner, group, size, durationMs, checksum); err != nil {
+		log.Printf("[Bridge] Race DB record upload failed for %s: %v", filePath, err)
+	}
 }
 
 // DownloadFile routes a download from a slave to the FTP client.
@@ -623,7 +633,7 @@ func (b *Bridge) DownloadFile(filePath string, clientData net.Conn, username, pr
 		return 0, fmt.Errorf("unexpected response from slave")
 	}
 
-	slaveAddr := fmt.Sprintf("%s:%d", slave.GetPASVIP(), transferResp.Info.Port)
+	slaveAddr := net.JoinHostPort(slave.GetPASVIP(), strconv.Itoa(transferResp.Info.Port))
 	log.Printf("[Bridge] Connecting to slave %s at %s for download of %s", slave.Name(), slaveAddr, filePath)
 
 	slaveConn, err := net.DialTimeout("tcp", slaveAddr, 10*time.Second)
@@ -667,7 +677,10 @@ func (b *Bridge) DownloadFile(filePath string, clientData net.Conn, username, pr
 	}
 
 	log.Printf("[Bridge] Downloaded %s from slave %s (%d bytes, offset=%d)", filePath, slave.Name(), written, position)
-	return 0, nil
+	if position > 0 {
+		return 0, nil
+	}
+	return status.Checksum, nil
 }
 
 // DeleteFile deletes from all slaves and VFS.
@@ -962,7 +975,7 @@ func (b *Bridge) selectWritableSlaveForCreate(path string) (*RemoteSlave, error)
 		if err != nil {
 			return nil, err
 		}
-		if slave != nil {
+		if slave != nil && slaveCanStorePath(slave, vfsPath) {
 			return slave, nil
 		}
 		if file.IsDir || file.IsSymlink {
@@ -975,7 +988,7 @@ func (b *Bridge) selectWritableSlaveForCreate(path string) (*RemoteSlave, error)
 			if err != nil {
 				return nil, err
 			}
-			if slave != nil {
+			if slave != nil && slaveCanStorePath(slave, vfsPath) {
 				return slave, nil
 			}
 			if !file.IsDir || file.IsSymlink {
@@ -1988,6 +2001,13 @@ func (b *Bridge) GetSFVData(dirPath string) map[string]uint32 {
 	return meta.SFVEntries
 }
 
+func (b *Bridge) GetReleaseStatus(dirPath string) (core.ReleaseStatus, bool) {
+	if b == nil || b.sm == nil || b.sm.GetVFS() == nil {
+		return core.ReleaseStatus{}, false
+	}
+	return b.sm.GetVFS().GetReleaseStatus(dirPath)
+}
+
 func (b *Bridge) GetZipExpectedParts(dirPath string) (int, bool) {
 	if b == nil || b.sm == nil || b.sm.GetVFS() == nil {
 		return 0, false
@@ -2205,6 +2225,7 @@ func (b *Bridge) SlaveReceivePassthrough(filePath string, transferIdx int32, sla
 		XferTime:     status.Elapsed,
 		Checksum:     finalChecksum,
 	})
+	b.recordUploadMetadata(filePath, owner, group, finalSize, status.Elapsed, finalChecksum)
 	b.sm.SyncStatusMarkersForPath(filePath, false)
 
 	log.Printf("[Passthrough] Upload %s on %s (%d bytes, %dms, CRC=%08X)",
@@ -2332,6 +2353,7 @@ func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group strin
 		XferTime:     status.Elapsed,
 		Checksum:     finalChecksum,
 	})
+	b.recordUploadMetadata(filePath, owner, group, finalSize, status.Elapsed, finalChecksum)
 	b.sm.SyncStatusMarkersForPath(filePath, false)
 
 	log.Printf("[Passthrough-PORT] Upload %s on %s (%d bytes, %dms, CRC=%08X)",

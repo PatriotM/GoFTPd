@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"goftpd/internal/core"
 	"goftpd/internal/plugin"
 	"goftpd/internal/zipscript"
 )
@@ -63,15 +64,6 @@ type VFSSearchResult struct {
 type vfsSnapshot struct {
 	Files   map[string]*VFSFile
 	DirMeta map[string]*VFSDirMeta
-}
-
-type vfsReleaseSnapshot struct {
-	VisibleCount int
-	FileCount    int
-	HasSFV       bool
-	HasNFO       bool
-	Present      int
-	Total        int
 }
 
 // VirtualFileSystem maintains the master's view of files across all slaves.
@@ -172,6 +164,14 @@ func (vfs *VirtualFileSystem) AddFile(path string, file VFSFile) {
 		}
 		if isWeakMetadataValue(file.Group) && !isWeakMetadataValue(existing.Group) {
 			file.Group = existing.Group
+		}
+		if !file.IsDir && !file.IsSymlink &&
+			!existing.IsDir && !existing.IsSymlink &&
+			zipscript.IsZipPayloadName(filepath.Base(path)) &&
+			file.XferTime == 0 && file.Checksum == 0 &&
+			existing.XferTime > 0 && existing.Checksum != 0 &&
+			existing.Size > file.Size {
+			file.Size = existing.Size
 		}
 		if !file.IsDir && !file.IsSymlink &&
 			!existing.IsDir && !existing.IsSymlink &&
@@ -557,6 +557,9 @@ func (vfs *VirtualFileSystem) ListDirectory(dirPath string) []*VFSFile {
 		if vfs.isHiddenPathLocked(childPath) {
 			continue
 		}
+		if cleanVFSPath(filepath.Dir(childPath)) != dirPath {
+			continue
+		}
 		if file := vfs.files[childPath]; file != nil {
 			results = append(results, file)
 		}
@@ -565,24 +568,103 @@ func (vfs *VirtualFileSystem) ListDirectory(dirPath string) []*VFSFile {
 	return results
 }
 
-func (vfs *VirtualFileSystem) GetReleaseStatusSnapshot(dirPath string) (*vfsReleaseSnapshot, int64, bool) {
+func (vfs *VirtualFileSystem) GetReleaseStatus(dirPath string) (core.ReleaseStatus, bool) {
 	vfs.mu.RLock()
 	defer vfs.mu.RUnlock()
 
 	dirPath = cleanVFSPath(dirPath)
 	if vfs.isHiddenPathLocked(dirPath) {
-		return nil, 0, false
+		return core.ReleaseStatus{}, false
 	}
 	entry := vfs.files[dirPath]
 	if entry == nil || !entry.IsDir || entry.IsSymlink {
-		return nil, 0, false
+		return core.ReleaseStatus{}, false
 	}
-	snapshot := vfs.computeReleaseSnapshotLocked(dirPath)
-	if snapshot == nil {
-		return nil, entry.LastModified, true
+
+	status := core.ReleaseStatus{Path: dirPath}
+	for childPath := range vfs.children[dirPath] {
+		if vfs.isHiddenPathLocked(childPath) {
+			continue
+		}
+		child := vfs.files[childPath]
+		if child == nil {
+			continue
+		}
+		name := strings.TrimSpace(filepath.Base(child.Path))
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		status.VisibleCount++
+		if child.IsDir {
+			continue
+		}
+		status.FileCount++
+		lower := strings.ToLower(name)
+		if strings.HasSuffix(lower, ".sfv") {
+			status.HasSFV = true
+		}
+		if strings.HasSuffix(lower, ".nfo") {
+			status.HasNFO = true
+		}
 	}
-	copyState := *snapshot
-	return &copyState, entry.LastModified, true
+
+	if meta := vfs.dirMeta[dirPath]; vfs.sfvMetaValidLocked(dirPath, meta) {
+		status.Kind = "sfv"
+		expectedFiles := make([]string, 0, len(meta.SFVEntries))
+		missingFiles := make([]string, 0, len(meta.SFVEntries))
+		presentFiles := make(map[string]*VFSFile, len(vfs.children[dirPath]))
+		for childPath := range vfs.children[dirPath] {
+			f := vfs.files[childPath]
+			if f == nil || f.IsDir {
+				continue
+			}
+			presentFiles[raceFileKey(filepath.Base(childPath))] = f
+		}
+		for sfvFile, expectedCRC := range meta.SFVEntries {
+			key := raceFileKey(sfvFile)
+			expectedFiles = append(expectedFiles, sfvFile)
+			f := presentFiles[key]
+			if f == nil {
+				missingFiles = append(missingFiles, sfvFile)
+				continue
+			}
+			if expectedCRC != 0 && f.Checksum != 0 && f.Checksum != expectedCRC {
+				missingFiles = append(missingFiles, sfvFile)
+				continue
+			}
+			status.Present++
+			status.TotalBytes += f.Size
+		}
+		sort.Strings(expectedFiles)
+		sort.Strings(missingFiles)
+		status.ExpectedFiles = expectedFiles
+		status.MissingFiles = missingFiles
+		status.Total = len(expectedFiles)
+		return status, true
+	}
+
+	if expected, ok := vfs.getZipExpectedPartsLocked(dirPath); ok {
+		status.Kind = "zip"
+		status.Total = expected
+		for childPath := range vfs.children[dirPath] {
+			if vfs.isHiddenPathLocked(childPath) {
+				continue
+			}
+			child := vfs.files[childPath]
+			if child == nil || child.IsDir || child.IsSymlink {
+				continue
+			}
+			name := strings.TrimSpace(filepath.Base(child.Path))
+			if strings.HasPrefix(name, ".") || !zipscript.IsZipPayloadName(name) {
+				continue
+			}
+			status.Present++
+			status.TotalBytes += child.Size
+		}
+		return status, true
+	}
+
+	return status, true
 }
 
 // GetVerifiedSFVPresentFiles returns the SFV-tracked filenames that are
@@ -640,55 +722,7 @@ func (vfs *VirtualFileSystem) getVerifiedSFVPresentFilesLocked(dirPath string, e
 	return verified
 }
 
-func (vfs *VirtualFileSystem) computeReleaseSnapshotLocked(dirPath string) *vfsReleaseSnapshot {
-	dirPath = cleanVFSPath(dirPath)
-	snapshot := &vfsReleaseSnapshot{}
-	for childPath := range vfs.children[dirPath] {
-		if vfs.isHiddenPathLocked(childPath) {
-			continue
-		}
-		child := vfs.files[childPath]
-		if child == nil {
-			continue
-		}
-		name := strings.TrimSpace(filepath.Base(child.Path))
-		if strings.HasPrefix(name, ".") {
-			continue
-		}
-		snapshot.VisibleCount++
-		if child.IsDir {
-			continue
-		}
-		snapshot.FileCount++
-		lower := strings.ToLower(name)
-		if strings.HasSuffix(lower, ".sfv") {
-			snapshot.HasSFV = true
-		}
-		if strings.HasSuffix(lower, ".nfo") {
-			snapshot.HasNFO = true
-		}
-	}
-	hasCurrentSFVFile := snapshot.HasSFV
-	cache := (*VFSRaceCache)(nil)
-	if hasCurrentSFVFile {
-		cache = vfs.computeRaceStateFilteredLocked(dirPath, nil)
-	}
-	if cache != nil {
-		snapshot.Present = cache.Present
-		snapshot.Total = cache.Total
-		if cache.Total > 0 {
-			snapshot.HasSFV = true
-		}
-		return snapshot
-	}
-	if expected, ok := vfs.getZipExpectedPartsLocked(dirPath); ok {
-		snapshot.Present = vfs.zipPayloadCountLocked(dirPath)
-		snapshot.Total = expected
-	}
-	return snapshot
-}
-
-func (vfs *VirtualFileSystem) HydrateRaceFile(path, owner, group string, xferTime int64, checksum uint32) bool {
+func (vfs *VirtualFileSystem) HydrateRaceFile(path, owner, group string, sizeBytes int64, xferTime int64, checksum uint32) bool {
 	vfs.mu.Lock()
 	defer vfs.mu.Unlock()
 
@@ -706,6 +740,10 @@ func (vfs *VirtualFileSystem) HydrateRaceFile(path, owner, group string, xferTim
 	}
 	if isWeakMetadataValue(currentGroup) && !isWeakMetadataValue(group) {
 		file.Group = group
+		changed = true
+	}
+	if sizeBytes > 0 && file.Size > 0 && file.XferTime <= 0 && file.Checksum == 0 && sizeBytes > file.Size {
+		file.Size = sizeBytes
 		changed = true
 	}
 	if file.XferTime <= 0 && xferTime > 0 {

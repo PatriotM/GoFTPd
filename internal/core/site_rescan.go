@@ -521,6 +521,9 @@ func reconcileReleaseSFVEntries(bridge MasterBridge, releasePath string, entries
 			if checksum == 0 && bridge.GetFileSize(filePath) == 0 && !opts.DeleteZeroByte {
 				result.Bad++
 				result.BadFiles = append(result.BadFiles, entry.FileName)
+				if err := bridge.WriteFile(missingPath, []byte{}); err != nil {
+					result.Errors = append(result.Errors, fmt.Sprintf("%s missing marker failed: %v", entry.FileName, err))
+				}
 				if !opts.Quiet {
 					result.Errors = append(result.Errors, fmt.Sprintf("%s (ZEROBYTE) SFV: %08X SLAVE: %08X", entry.FileName, entry.CRC32, checksum))
 				}
@@ -538,14 +541,14 @@ func reconcileReleaseSFVEntries(bridge MasterBridge, releasePath string, entries
 			if report != nil {
 				report(fmt.Sprintf("BAD: %s SFV:%08X SLAVE:%08X", entry.FileName, entry.CRC32, checksum))
 			}
+			if err := bridge.WriteFile(missingPath, []byte{}); err != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("%s missing marker failed: %v", entry.FileName, err))
+			}
 			if opts.DeleteBad || (checksum == 0 && opts.DeleteZeroByte) {
 				if err := bridge.DeleteFile(filePath); err != nil {
 					result.Errors = append(result.Errors, fmt.Sprintf("%s delete failed: %v", entry.FileName, err))
 				}
 				_ = bridge.MarkFileMissing(filePath)
-				if err := bridge.WriteFile(missingPath, []byte{}); err != nil {
-					result.Errors = append(result.Errors, fmt.Sprintf("%s missing marker failed: %v", entry.FileName, err))
-				}
 			}
 			continue
 		}
@@ -751,16 +754,16 @@ func rescanZipPostProcess(cfg *Config, bridge MasterBridge, dirPath string, opts
 	}
 
 	if bridge.GetFileSize(path.Join(dirPath, "file_id.diz")) < 0 {
-		if _, err := recoverZipDIZFromDirectory(bridge, dirPath); err == nil {
+		if _, err := zipscript.RecoverZipDIZFromDirectory(zipBridge(bridge), dirPath); err == nil {
 			result.DIZRecovered = true
 		} else if len(zipArchives) > 0 && cfg.Debug {
 			result.Errors = append(result.Errors, fmt.Sprintf("file_id.diz recover skipped: %v", err))
 		}
 	}
 	dirEntries := bridge.ListDir(dirPath)
-	if expected := zipExpectedPartsFromDIZ(bridge, dirPath); expected > 0 {
+	if expected := zipscript.ZipExpectedPartsFromDIZ(zipBridge(bridge), dirPath, true); expected > 0 {
 		_, _, present := zipDirRaceStats(bridge, dirPath, dirEntries, expected)
-		cacheZipReleaseProgress(bridge, dirPath, present, expected)
+		zipscript.CacheZipReleaseProgress(zipBridge(bridge), dirPath, present, expected)
 	}
 	return result
 }

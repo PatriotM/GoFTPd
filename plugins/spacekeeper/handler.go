@@ -13,21 +13,21 @@ import (
 )
 
 type rule struct {
-	Name             string
-	Slave            string
-	Action           string
-	Paths            []string
-	WatchMountPath   string
-	Destination      string
-	DestinationDated bool
+	Name                  string
+	Slave                 string
+	Action                string
+	Paths                 []string
+	WatchMountPath        string
+	Destination           string
+	DestinationDated      bool
 	DestinationDateFormat string
-	TargetSlaves     []string
-	TriggerFreeBytes int64
-	TargetFreeBytes  int64
-	MinAge           time.Duration
-	SkipIncomplete   bool
-	SkipActiveRaces  bool
-	MaxActions       int
+	TargetSlaves          []string
+	TriggerFreeBytes      int64
+	TargetFreeBytes       int64
+	MinAge                time.Duration
+	SkipIncomplete        bool
+	SkipActiveRaces       bool
+	MaxActions            int
 }
 
 type candidate struct {
@@ -617,22 +617,24 @@ func parseRules(raw interface{}) []rule {
 			continue
 		}
 		paths := normalizePaths(stringSliceConfig(cfg["paths"]))
+		triggerFreeBytes := bytesFromRuleAliases(cfg, "trigger_free", "incoming_disk_threshold_min")
+		targetFreeBytes := bytesFromRuleAliases(cfg, "target_free", "incoming_disk_threshold_target")
 		r := rule{
-			Name:             stringValue(cfg, "name", fmt.Sprintf("rule-%d", idx+1)),
-			Slave:            strings.TrimSpace(stringValue(cfg, "slave", "")),
-			Action:           strings.ToLower(strings.TrimSpace(stringValue(cfg, "action", "delete_oldest"))),
-			Paths:            paths,
-			WatchMountPath:   cleanAbs(stringValue(cfg, "watch_mount_path", "")),
-			Destination:      cleanAbs(stringValue(cfg, "destination", "")),
-			DestinationDated: boolValue(cfg, "destination_dated", false),
+			Name:                  stringValue(cfg, "name", fmt.Sprintf("rule-%d", idx+1)),
+			Slave:                 strings.TrimSpace(stringValue(cfg, "slave", "")),
+			Action:                strings.ToLower(strings.TrimSpace(stringValue(cfg, "action", "delete_oldest"))),
+			Paths:                 paths,
+			WatchMountPath:        cleanAbs(stringValue(cfg, "watch_mount_path", "")),
+			Destination:           cleanAbs(stringValue(cfg, "destination", "")),
+			DestinationDated:      boolValue(cfg, "destination_dated", false),
 			DestinationDateFormat: normalizeArchiveDateFormat(stringValue(cfg, "destination_date_format", stringValue(cfg, "date_format", "MMDD"))),
-			TargetSlaves:     stringSliceConfig(cfg["target_slaves"]),
-			TriggerFreeBytes: bytesFromRule(cfg, "trigger_free"),
-			TargetFreeBytes:  bytesFromRule(cfg, "target_free"),
-			MinAge:           time.Duration(intValue(cfg, "min_age_seconds", 600)) * time.Second,
-			SkipIncomplete:   boolValue(cfg, "skip_incomplete", true),
-			SkipActiveRaces:  boolValue(cfg, "skip_active_races", true),
-			MaxActions:       intValue(cfg, "max_actions_per_cycle", 10),
+			TargetSlaves:          stringSliceConfig(cfg["target_slaves"]),
+			TriggerFreeBytes:      triggerFreeBytes,
+			TargetFreeBytes:       targetFreeBytes,
+			MinAge:                time.Duration(intValue(cfg, "min_age_seconds", 600)) * time.Second,
+			SkipIncomplete:        boolValue(cfg, "skip_incomplete", true),
+			SkipActiveRaces:       boolValue(cfg, "skip_active_races", true),
+			MaxActions:            intValue(cfg, "max_actions_per_cycle", 10),
 		}
 		if r.Name == "" || r.Slave == "" || len(r.Paths) == 0 {
 			continue
@@ -760,6 +762,16 @@ func bytesFromRule(cfg map[string]interface{}, key string) int64 {
 	}
 	if n := int64Value(cfg, key+"_gb", 0); n > 0 {
 		return n * 1024 * 1024 * 1024
+	}
+	return 0
+}
+
+func bytesFromRuleAliases(cfg map[string]interface{}, primary string, aliases ...string) int64 {
+	keys := append([]string{primary}, aliases...)
+	for _, key := range keys {
+		if n := bytesFromRule(cfg, key); n > 0 {
+			return n
+		}
 	}
 	return 0
 }

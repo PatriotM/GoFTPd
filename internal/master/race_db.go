@@ -733,17 +733,17 @@ func (r *RaceDB) HydrateVFS(vfs *VirtualFileSystem) (int, error) {
 	}
 
 	rows, err := r.db.Query(`
-        SELECT r.path, p.filename, p.uploader, p.grp, p.duration_ms, p.checksum
+        SELECT r.path, p.filename, p.uploader, p.grp, p.size_bytes, p.duration_ms, p.checksum
         FROM releases r
         JOIN release_files p
           ON p.release_id = r.id
-        JOIN release_files e
+        LEFT JOIN release_files e
           ON e.release_id = p.release_id
          AND e.is_expected = 1
          AND e.filename = p.filename
         WHERE p.is_present = 1
           AND p.duration_ms > 0
-          AND p.checksum = e.expected_crc32
+          AND (e.id IS NULL OR p.checksum = e.expected_crc32)
     `)
 	if err != nil {
 		return 0, err
@@ -753,13 +753,14 @@ func (r *RaceDB) HydrateVFS(vfs *VirtualFileSystem) (int, error) {
 	hydrated := 0
 	for rows.Next() {
 		var dirPath, fileName, owner, group string
+		var sizeBytes int64
 		var durationMs int64
 		var checksum int64
-		if err := rows.Scan(&dirPath, &fileName, &owner, &group, &durationMs, &checksum); err != nil {
+		if err := rows.Scan(&dirPath, &fileName, &owner, &group, &sizeBytes, &durationMs, &checksum); err != nil {
 			return hydrated, err
 		}
 		filePath := filepath.ToSlash(path.Join(dirPath, fileName))
-		if vfs.HydrateRaceFile(filePath, owner, group, durationMs, uint32(checksum)) {
+		if vfs.HydrateRaceFile(filePath, owner, group, sizeBytes, durationMs, uint32(checksum)) {
 			hydrated++
 		}
 	}

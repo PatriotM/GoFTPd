@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"goftpd/internal/core"
 	"goftpd/internal/protocol"
 	"goftpd/internal/zipscript"
 )
@@ -56,6 +57,73 @@ func TestSelectSlaveForUploadFallsBackWhenOwnedAncestorSlaveUnavailable(t *testi
 	got := sm.SelectSlaveForUpload("/REQUESTS/REQ-Test.Release-GRP/file.r00")
 	if got == nil || got.Name() != "OTHER" {
 		t.Fatalf("expected fallback upload slave OTHER, got %+v", got)
+	}
+}
+
+func TestSelectSlaveForUploadSkipsSlaveWithoutMatchingRoot(t *testing.T) {
+	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
+
+	archiveOnly := NewRemoteSlave("ARCHIVE", nil, nil, 60*time.Second, nil)
+	archiveOnly.available.Store(true)
+	archiveOnly.diskStatus = protocol.DiskStatus{
+		SpaceAvailable: 2000,
+		Roots: []protocol.RootDiskStatus{
+			{MountPath: "/ARCHiVE", SpaceAvailable: 2000},
+		},
+	}
+
+	live := NewRemoteSlave("LIVE", nil, nil, 60*time.Second, nil)
+	live.available.Store(true)
+	live.diskStatus = protocol.DiskStatus{
+		SpaceAvailable: 1000,
+		Roots: []protocol.RootDiskStatus{
+			{MountPath: "/", SpaceAvailable: 1000},
+		},
+	}
+
+	sm.slavesMu.Lock()
+	sm.slaves[archiveOnly.Name()] = archiveOnly
+	sm.slaves[live.Name()] = live
+	sm.slavesMu.Unlock()
+
+	got := sm.SelectSlaveForUpload("/TV-1080P/Release-GRP/.tvmaze")
+	if got == nil || got.Name() != "LIVE" {
+		t.Fatalf("expected upload to skip archive-only slave and use LIVE, got %+v", got)
+	}
+}
+
+func TestSelectSlaveForUploadIgnoresOwnedAncestorWithoutMatchingRoot(t *testing.T) {
+	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
+
+	archiveOnly := NewRemoteSlave("ARCHIVE", nil, nil, 60*time.Second, nil)
+	archiveOnly.available.Store(true)
+	archiveOnly.diskStatus = protocol.DiskStatus{
+		SpaceAvailable: 2000,
+		Roots: []protocol.RootDiskStatus{
+			{MountPath: "/ARCHiVE", SpaceAvailable: 2000},
+		},
+	}
+
+	live := NewRemoteSlave("LIVE", nil, nil, 60*time.Second, nil)
+	live.available.Store(true)
+	live.diskStatus = protocol.DiskStatus{
+		SpaceAvailable: 1000,
+		Roots: []protocol.RootDiskStatus{
+			{MountPath: "/", SpaceAvailable: 1000},
+		},
+	}
+
+	sm.slavesMu.Lock()
+	sm.slaves[archiveOnly.Name()] = archiveOnly
+	sm.slaves[live.Name()] = live
+	sm.slavesMu.Unlock()
+
+	sm.vfs.AddFile("/TV-1080P", VFSFile{IsDir: true, Seen: true, SlaveName: "ARCHIVE"})
+	sm.vfs.AddFile("/TV-1080P/Release-GRP", VFSFile{IsDir: true, Seen: true, SlaveName: "ARCHIVE"})
+
+	got := sm.SelectSlaveForUpload("/TV-1080P/Release-GRP/.tvmaze")
+	if got == nil || got.Name() != "LIVE" {
+		t.Fatalf("expected owned ancestor on wrong mount to be ignored, got %+v", got)
 	}
 }
 
@@ -127,6 +195,57 @@ func TestShouldRefreshRemergeChecksumDisabledByDefault(t *testing.T) {
 	}
 }
 
+func TestProcessRemergePrunesGhostChildrenPerScannedDirectory(t *testing.T) {
+	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
+	rs := NewRemoteSlave("LOCAL", nil, nil, 60*time.Second, nil)
+
+	sm.vfs.AddFile("/X265", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.AddFile("/X265/keep", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.AddFile("/X265/ghost", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.AddFile("/X265/ghost/file.r00", VFSFile{Size: 100, Seen: true, SlaveName: "LOCAL"})
+
+	sm.vfs.MarkAllUnseen("LOCAL")
+	sm.ProcessRemerge(rs, &protocol.AsyncResponseRemerge{
+		Path: "/X265",
+		Files: []protocol.LightRemoteInode{
+			{Name: "keep", IsDir: true, LastModified: time.Now().Unix()},
+		},
+	})
+
+	if got := sm.vfs.GetFile("/X265/ghost"); got != nil {
+		t.Fatalf("expected stale direct child dir to be pruned during remerge, got %+v", got)
+	}
+	if got := sm.vfs.GetFile("/X265/ghost/file.r00"); got != nil {
+		t.Fatalf("expected stale child subtree to be pruned during remerge, got %+v", got)
+	}
+	if got := sm.vfs.GetFile("/X265/keep"); got == nil {
+		t.Fatalf("expected re-seen child dir to remain")
+	}
+}
+
+func TestConfigureBackgroundRemergeNormalizesConfig(t *testing.T) {
+	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
+
+	sm.ConfigureBackgroundRemerge(time.Hour, time.Minute, time.Second, "ARCHiVE", false, true)
+	cfg := sm.backgroundRemergeSnapshot()
+
+	if cfg.interval != time.Hour {
+		t.Fatalf("interval = %s, want 1h", cfg.interval)
+	}
+	if cfg.initialDelay != time.Minute {
+		t.Fatalf("initialDelay = %s, want 1m", cfg.initialDelay)
+	}
+	if cfg.stagger != time.Second {
+		t.Fatalf("stagger = %s, want 1s", cfg.stagger)
+	}
+	if cfg.basePath != "/ARCHiVE" {
+		t.Fatalf("basePath = %q, want /ARCHiVE", cfg.basePath)
+	}
+	if !cfg.skipBusy {
+		t.Fatalf("expected skipBusy to be enabled")
+	}
+}
+
 func TestReleaseRaceWindowStartsAtMkdir(t *testing.T) {
 	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
 	sm.StartReleaseRaceWindowAt("/X265/release", 1000)
@@ -180,10 +299,10 @@ func TestMarkFileMissingRefreshesStatusMarkers(t *testing.T) {
 }
 
 func TestMissingMarkerSyncPathsCreatesAndDeletesExpectedMarkers(t *testing.T) {
-	createPaths, deletePaths := missingMarkerSyncPaths("/X265/release", map[string]uint32{
-		"file.r00": 1,
-		"file.r01": 2,
-		"file.r02": 3,
+	createPaths, deletePaths := missingMarkerSyncPaths("/X265/release", core.ReleaseStatus{
+		Kind:          "sfv",
+		ExpectedFiles: []string{"file.r00", "file.r01", "file.r02"},
+		MissingFiles:  []string{"file.r02"},
 	}, []*VFSFile{
 		{Path: "/X265/release/file.r00", Size: 100},
 		{Path: "/X265/release/file.r00-MISSING"},

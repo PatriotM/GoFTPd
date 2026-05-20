@@ -21,6 +21,10 @@
 # Rules are written in virtual FTP paths, not disk paths or devices.
 # Active transfers, incomplete races, and dated bucket dirs can be skipped
 # safely by the built-in candidate checks.
+# Threshold keys can use either the original names:
+#   trigger_free_gb / target_free_gb
+# or the clearer aliases:
+#   incoming_disk_threshold_min_gb / incoming_disk_threshold_target_gb
 # Optional watch_mount_path lets one slave monitor free space for a specific
 # virtual root only, such as "/" for the live site, "/ARCHiVE" for local
 # archive mounts, or "/OFFSITE" for offsite mounts exposed through
@@ -60,6 +64,9 @@ rules:
     # has been reached or there is nothing left that matches.
     trigger_free_gb: 50
     target_free_gb: 80
+    # Same thresholds using the clearer alias names:
+    # incoming_disk_threshold_min_gb: 50
+    # incoming_disk_threshold_target_gb: 80
 
     # Do not touch releases newer than this.
     min_age_seconds: 600
@@ -94,8 +101,8 @@ rules:
     target_slaves: ["SLAVE2", "SLAVE3"]
     paths:
       - "/0DAY/*/*"
-    trigger_free_gb: 40
-    target_free_gb: 60
+    incoming_disk_threshold_min_gb: 40
+    incoming_disk_threshold_target_gb: 60
     min_age_seconds: 86400
     skip_incomplete: true
     skip_active_races: true
