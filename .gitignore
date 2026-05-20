@@ -26,6 +26,8 @@ etc/groups/*
 
 # Passwd file (contains hashes)
 #etc/passwd
+etc/passwd-
+etc/group-
 
 # Site data (actual files on disk)
 site/

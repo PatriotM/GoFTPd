@@ -63,7 +63,10 @@ type Slave struct {
 	timeout                       time.Duration
 	remergePaused                 atomic.Bool
 	remergeActive                 atomic.Bool
+	remergeAbort                  atomic.Bool
 	remergeDelay                  time.Duration
+	remergeEntryYieldEvery        int
+	remergeEntryYieldDelay        time.Duration
 	remergePauseOnActiveTransfers int
 }
 
@@ -103,6 +106,8 @@ type SlaveConfig struct {
 	TransferBufferSize            int           `yaml:"transfer_buffer_size"`
 	FreeSpaceMB                   int           `yaml:"free_space_mb"`
 	RemergeDelayMS                int           `yaml:"remerge_delay_ms"`
+	RemergeEntryYieldEvery        int           `yaml:"remerge_entry_yield_every"`
+	RemergeEntryYieldMS           int           `yaml:"remerge_entry_yield_ms"`
 	RemergePauseOnActiveTransfers int           `yaml:"remerge_pause_on_active_transfers"`
 	Debug                         bool
 }
@@ -144,6 +149,8 @@ func NewSlave(cfg SlaveConfig) *Slave {
 		transferBufferSize:            bufferSize,
 		freeSpaceMB:                   cfg.FreeSpaceMB,
 		remergeDelay:                  time.Duration(cfg.RemergeDelayMS) * time.Millisecond,
+		remergeEntryYieldEvery:        cfg.RemergeEntryYieldEvery,
+		remergeEntryYieldDelay:        time.Duration(cfg.RemergeEntryYieldMS) * time.Millisecond,
 		remergePauseOnActiveTransfers: cfg.RemergePauseOnActiveTransfers,
 		debug:                         cfg.Debug,
 	}
@@ -504,6 +511,11 @@ func (s *Slave) handleCommand(ac *protocol.AsyncCommand) interface{} {
 
 	case "remerge":
 		return s.handleRemerge(ac)
+
+	case "remergeStop":
+		s.remergeAbort.Store(true)
+		s.remergePaused.Store(false)
+		return &protocol.AsyncResponse{Index: ac.Index}
 
 	case "sfvFile":
 		return s.handleSFVFile(ac)
@@ -1079,7 +1091,11 @@ func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
 	if !s.remergeActive.CompareAndSwap(false, true) {
 		return &protocol.AsyncResponseError{Index: ac.Index, Message: "remerge already running on slave"}
 	}
-	defer s.remergeActive.Store(false)
+	s.remergeAbort.Store(false)
+	defer func() {
+		s.remergeAbort.Store(false)
+		s.remergeActive.Store(false)
+	}()
 
 	basePath := "/"
 	if len(ac.Args) > 0 {
@@ -1128,6 +1144,10 @@ func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
 
 		counts := remergeScanCounts{}
 		if err := s.scanRemergeDirectory(target, scanRoot, excludePaths, partialRemerge, skipAgeCutoff, &counts); err != nil {
+			if s.remergeAbort.Load() {
+				log.Printf("[Slave] Remerge root %s stopped: abort requested", target.root.Path)
+				return &protocol.AsyncResponseError{Index: ac.Index, Message: "remerge stopped"}
+			}
 			log.Printf("[Slave] Remerge root %s stopped: %v", target.root.Path, err)
 		}
 		totalFiles += counts.totalFiles
@@ -1149,6 +1169,9 @@ type remergeScanCounts struct {
 
 func (s *Slave) scanRemergeDirectory(target scanTarget, dir string, excludePaths []string, partialRemerge bool, skipAgeCutoff int64, counts *remergeScanCounts) error {
 	if !s.waitForRemergeSlot() {
+		if s.remergeAbort.Load() {
+			return fmt.Errorf("remerge stopped")
+		}
 		return fmt.Errorf("slave went offline")
 	}
 
@@ -1167,7 +1190,13 @@ func (s *Slave) scanRemergeDirectory(target scanTarget, dir string, excludePaths
 
 	files := make([]protocol.LightRemoteInode, 0, len(entries))
 	childDirs := make([]string, 0)
-	for _, entry := range entries {
+	for i, entry := range entries {
+		if !s.waitForRemergeSlot() {
+			if s.remergeAbort.Load() {
+				return fmt.Errorf("remerge stopped")
+			}
+			return fmt.Errorf("slave went offline")
+		}
 		fullPath := filepath.Join(dir, entry.Name())
 		info, err := entry.Info()
 		if err != nil {
@@ -1203,6 +1232,9 @@ func (s *Slave) scanRemergeDirectory(target scanTarget, dir string, excludePaths
 		} else {
 			counts.totalFiles++
 		}
+		if s.remergeEntryYieldEvery > 0 && s.remergeEntryYieldDelay > 0 && (i+1)%s.remergeEntryYieldEvery == 0 {
+			time.Sleep(s.remergeEntryYieldDelay)
+		}
 	}
 
 	resp := &protocol.AsyncResponseRemerge{
@@ -1228,6 +1260,9 @@ func (s *Slave) scanRemergeDirectory(target scanTarget, dir string, excludePaths
 
 func (s *Slave) waitForRemergeSlot() bool {
 	for s.online.Load() {
+		if s.remergeAbort.Load() {
+			return false
+		}
 		if s.remergePaused.Load() {
 			time.Sleep(100 * time.Millisecond)
 			continue

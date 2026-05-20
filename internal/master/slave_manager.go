@@ -1599,6 +1599,40 @@ func (sm *SlaveManager) StartRemergeAllPath(basePath string, rootsOnly bool) (in
 	return started, errs
 }
 
+func (sm *SlaveManager) StopRemerge(name string) error {
+	rs := sm.GetSlave(name)
+	if rs == nil {
+		return fmt.Errorf("unknown slave %s", name)
+	}
+	if !rs.IsOnline() {
+		return fmt.Errorf("slave %s is offline", rs.Name())
+	}
+	if !rs.IsRemerging() {
+		return fmt.Errorf("slave %s is not remerging", rs.Name())
+	}
+	if err := IssueRemergeStop(rs); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (sm *SlaveManager) StopRemergeAll() (int, []string) {
+	var errs []string
+	stopped := 0
+	slaves := sm.GetAllSlaves()
+	if len(slaves) == 0 {
+		return 0, []string{"no slaves connected"}
+	}
+	for _, rs := range slaves {
+		if err := sm.StopRemerge(rs.Name()); err != nil {
+			errs = append(errs, err.Error())
+			continue
+		}
+		stopped++
+	}
+	return stopped, errs
+}
+
 func (sm *SlaveManager) ensureBootstrapDirsOnSlave(rs *RemoteSlave) {
 	if rs == nil || !rs.IsOnline() || sm.IsSlaveReadOnly(rs.Name()) {
 		return

@@ -154,6 +154,8 @@ Main files:
 | `etc/config-slave-example.yml` | Minimal slave-only daemon example |
 | `etc/permissions.yml` | ACL rules |
 | `etc/passwd` | Password hashes |
+| `etc/passwd-` | Automatic previous-version backup of `etc/passwd` |
+| `etc/group-` | Automatic previous-version backup of `etc/group` |
 | `etc/users/` | User records |
 | `etc/groups/` | Group records |
 | `etc/groups/default.group` | Template for newly created groups |
@@ -263,13 +265,19 @@ instead of letting a full scan pin one disk at 100% iowait:
 ```yml
 slave:
   remerge_delay_ms: 10
+  remerge_entry_yield_every: 100
+  remerge_entry_yield_ms: 10
   remerge_pause_on_active_transfers: 1
 ```
 
 `remerge_delay_ms` sleeps after each streamed directory. Keep it at `0` on fast
-local disks; try `5-25` on slower disks. `remerge_pause_on_active_transfers`
-pauses remerge while the slave is serving uploads/downloads, so live traffic
-gets priority over background scans.
+local disks; try `5-25` on slower disks. `remerge_entry_yield_*` also yields
+inside huge directories while entries are being stat'd, which matters for large
+archive roots. `remerge_pause_on_active_transfers` pauses remerge while the
+slave is serving uploads/downloads, so live traffic gets priority over
+background scans. If a remerge is already hurting the box, `SITE REMERGESTOP
+<slave|*>` asks active slave remerge jobs to abort without restarting the
+daemon.
 
 On a slave host, the role-specific settings you normally care about are:
 
@@ -333,6 +341,8 @@ master:
 
 slave:
   remerge_delay_ms: 10
+  remerge_entry_yield_every: 100
+  remerge_entry_yield_ms: 10
   remerge_pause_on_active_transfers: 1
 ```
 

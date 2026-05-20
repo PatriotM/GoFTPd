@@ -76,6 +76,28 @@ func TestAddUserToPasswdPreservesExistingFields(t *testing.T) {
 	}
 }
 
+func TestAddUserToPasswdCreatesDashBackup(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	passwdPath := filepath.Join(dir, "passwd")
+	original := "Finity:oldhash:123:456:glftpd:/glroot:/bin/bash\n"
+	if err := os.WriteFile(passwdPath, []byte(original), 0600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if err := AddUserToPasswd("Finity", "newhash", passwdPath); err != nil {
+		t.Fatalf("AddUserToPasswd() error = %v", err)
+	}
+
+	backup, err := os.ReadFile(passwdPath + "-")
+	if err != nil {
+		t.Fatalf("ReadFile(passwd-) error = %v", err)
+	}
+	if string(backup) != original {
+		t.Fatalf("passwd- = %q, want original %q", string(backup), original)
+	}
+}
+
 func TestAddUserToPasswdUsesStableDefaultsForNewUsers(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
@@ -93,6 +115,38 @@ func TestAddUserToPasswdUsesStableDefaultsForNewUsers(t *testing.T) {
 	want := "Finity:newhash:100:300:0:/site:/bin/false"
 	if got != want {
 		t.Fatalf("passwd line = %q, want %q", got, want)
+	}
+}
+
+func TestAddGroupToFileCreatesDashBackup(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	if err := os.MkdirAll("etc", 0755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	original := "NoGroup:NoGroup:100:\n"
+	if err := os.WriteFile(filepath.Join("etc", "group"), []byte(original), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if err := AddGroupToFile("iND", "iND", 300); err != nil {
+		t.Fatalf("AddGroupToFile() error = %v", err)
+	}
+
+	backup, err := os.ReadFile(filepath.Join("etc", "group-"))
+	if err != nil {
+		t.Fatalf("ReadFile(group-) error = %v", err)
+	}
+	if string(backup) != original {
+		t.Fatalf("group- = %q, want original %q", string(backup), original)
 	}
 }
 

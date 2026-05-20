@@ -92,3 +92,13 @@ func TestScanTargetsForBaseIncludeArchiveMountAtRoot(t *testing.T) {
 		t.Fatalf("expected site root first at / remerge, got %+v", targets)
 	}
 }
+
+func TestWaitForRemergeSlotStopsOnAbort(t *testing.T) {
+	s := &Slave{}
+	s.online.Store(true)
+	s.remergeAbort.Store(true)
+
+	if s.waitForRemergeSlot() {
+		t.Fatalf("expected remerge slot wait to stop when abort is requested")
+	}
+}

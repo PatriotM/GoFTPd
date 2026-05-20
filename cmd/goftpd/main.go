@@ -558,10 +558,12 @@ func startSlave(cfg *core.Config) {
 	ignorePartialRemerge := boolFromCfg(slaveCfg, "ignore_partial_remerge", false)
 	transferBufferSize := intFromCfg(slaveCfg, "transfer_buffer_size", 0)
 	remergeDelayMS := intFromCfg(slaveCfg, "remerge_delay_ms", 0)
+	remergeEntryYieldEvery := intFromCfg(slaveCfg, "remerge_entry_yield_every", 0)
+	remergeEntryYieldMS := intFromCfg(slaveCfg, "remerge_entry_yield_ms", 0)
 	remergePauseOnActiveTransfers := intFromCfg(slaveCfg, "remerge_pause_on_active_transfers", 0)
 
-	log.Printf("[STARTUP] Slave mode [name=%s] [master=%s:%d] [roots=%v] [mounted_roots=%v] [bind_ip=%s] [pasv=%d-%d] [remerge_delay_ms=%d] [remerge_pause_on_active_transfers=%d]",
-		name, masterHost, masterPort, roots, mountedRoots, bindIP, pasvMin, pasvMax, remergeDelayMS, remergePauseOnActiveTransfers)
+	log.Printf("[STARTUP] Slave mode [name=%s] [master=%s:%d] [roots=%v] [mounted_roots=%v] [bind_ip=%s] [pasv=%d-%d] [remerge_delay_ms=%d] [remerge_entry_yield_every=%d] [remerge_entry_yield_ms=%d] [remerge_pause_on_active_transfers=%d]",
+		name, masterHost, masterPort, roots, mountedRoots, bindIP, pasvMin, pasvMax, remergeDelayMS, remergeEntryYieldEvery, remergeEntryYieldMS, remergePauseOnActiveTransfers)
 
 	s := slave.NewSlave(slave.SlaveConfig{
 		Name:                          name,
@@ -580,6 +582,8 @@ func startSlave(cfg *core.Config) {
 		TransferBufferSize:            transferBufferSize,
 		FreeSpaceMB:                   cfg.FreeSpaceMB,
 		RemergeDelayMS:                remergeDelayMS,
+		RemergeEntryYieldEvery:        remergeEntryYieldEvery,
+		RemergeEntryYieldMS:           remergeEntryYieldMS,
 		RemergePauseOnActiveTransfers: remergePauseOnActiveTransfers,
 		Debug:                         cfg.Debug,
 	})

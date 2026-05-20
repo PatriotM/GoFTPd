@@ -260,6 +260,14 @@ func IssueRemergeResume(rs *RemoteSlave) error {
 	return rs.SendCommand(&protocol.AsyncCommand{Index: index, Name: "remergeResume"})
 }
 
+func IssueRemergeStop(rs *RemoteSlave) error {
+	index, err := rs.FetchIndex()
+	if err != nil {
+		return err
+	}
+	return rs.SendCommand(&protocol.AsyncCommand{Index: index, Name: "remergeStop"})
+}
+
 // IssueCheckSSL checks if slave supports SSL.
 func IssueCheckSSL(rs *RemoteSlave) (string, error) {
 	index, err := rs.FetchIndex()

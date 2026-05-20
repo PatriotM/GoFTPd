@@ -139,6 +139,8 @@ func (s *Session) DispatchSiteCommand(args []string) bool {
 		return s.HandleSiteRehash(remainingArgs)
 	case "REMERGE":
 		return s.HandleSiteRemerge(remainingArgs)
+	case "REMERGESTOP":
+		return s.HandleSiteRemergeStop(remainingArgs)
 	case "SLAVEBANS":
 		return s.HandleSiteSlaveBans(remainingArgs)
 	case "SLAVEBAN":
@@ -231,6 +233,7 @@ func requiredSiteCommandFlags(command string) string {
 		"RESCANSTATUS",
 		"REHASH",
 		"REMERGE",
+		"REMERGESTOP",
 		"SLAVEBANS",
 		"SLAVEBAN",
 		"SLAVEUNBAN",

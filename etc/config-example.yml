@@ -124,6 +124,11 @@ slave:
   remerge_delay_ms: 0           # Optional sleep after each scanned directory.
                                 # Set 5-25 on slow/NFS/archive disks if remerge
                                 # causes high iowait.
+  remerge_entry_yield_every: 0  # Optional inner scan yield. If >0, sleep during
+                                # large directory scans after this many entries.
+                                # Example: 100.
+  remerge_entry_yield_ms: 0     # Sleep length for remerge_entry_yield_every.
+                                # Example: 5-25 on slow disks.
   remerge_pause_on_active_transfers: 0
                                 # Optional safety valve for slow disks. If >0,
                                 # pause remerge while this many uploads/downloads

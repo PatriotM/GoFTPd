@@ -117,6 +117,14 @@ func (b *Bridge) StartRemergeAllPath(basePath string, rootsOnly bool) (int, []st
 	return b.sm.StartRemergeAllPath(basePath, rootsOnly)
 }
 
+func (b *Bridge) StopRemerge(slaveName string) error {
+	return b.sm.StopRemerge(slaveName)
+}
+
+func (b *Bridge) StopRemergeAll() (int, []string) {
+	return b.sm.StopRemergeAll()
+}
+
 func (b *Bridge) GetLiveTransferStats() []core.LiveTransferStat {
 	return b.getLiveTransferStats(true)
 }

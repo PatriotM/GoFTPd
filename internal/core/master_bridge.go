@@ -158,6 +158,12 @@ type MasterBridge interface {
 	// online slave.
 	StartRemergeAllPath(basePath string, rootsOnly bool) (started int, errors []string)
 
+	// StopRemerge asks a slave to abort its active background VFS refresh.
+	StopRemerge(slaveName string) error
+
+	// StopRemergeAll asks every online remerging slave to stop its refresh.
+	StopRemergeAll() (stopped int, errors []string)
+
 	// SyncStatusMarkersForPath refreshes zipscript/VFS status markers for a
 	// path and its parent context after rescan, remerge, or file mutations.
 	SyncStatusMarkersForPath(filePath string, isDir bool)

@@ -76,6 +76,7 @@ var baseSiteHelpEntries = []siteHelpEntry{
 	{Command: "KICK", Usage: "<user>", Summary: "Disconnect a user", Area: "Release/admin"},
 	{Command: "REHASH", Usage: "", Summary: "Reload permissions and config-backed state", Area: "Release/admin"},
 	{Command: "REMERGE", Usage: "<slave|*> [SITE|<path>]", Summary: "Refresh slave VFS index", Area: "Release/admin"},
+	{Command: "REMERGESTOP", Usage: "<slave|*>", Summary: "Ask active slave remerge jobs to stop", Area: "Release/admin"},
 	{Command: "SLAVEBANS", Usage: "", Summary: "Show slave control denylist and active temp bans", Area: "Release/admin"},
 	{Command: "SLAVEBAN", Usage: "<ip|cidr>", Summary: "Add an IP or CIDR to the persistent slave control denylist", Area: "Release/admin"},
 	{Command: "SLAVEUNBAN", Usage: "<ip|cidr>", Summary: "Remove an IP or CIDR from the persistent slave control denylist and clear matching temp bans", Area: "Release/admin"},

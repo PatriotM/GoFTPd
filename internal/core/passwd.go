@@ -2,11 +2,13 @@ package core
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -143,7 +145,25 @@ func LoadGroupFile(path string) map[string]int {
 
 // AddGroupToFile appends a group to /etc/group file
 func AddGroupToFile(groupName string, desc string, gid int) error {
-	file, err := os.OpenFile("etc/group", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	const groupPath = "etc/group"
+	passwdFileMu.Lock()
+	defer passwdFileMu.Unlock()
+
+	mode := os.FileMode(0644)
+	if st, err := os.Stat(groupPath); err == nil {
+		mode = st.Mode().Perm()
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	existing, err := os.ReadFile(groupPath)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := backupAuthFileDash(groupPath, existing, mode); err != nil {
+		return err
+	}
+
+	file, err := os.OpenFile(groupPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
 	}
@@ -207,6 +227,12 @@ func AddUserToPasswd(username, hash, path string) error {
 	passwdFileMu.Lock()
 	defer passwdFileMu.Unlock()
 
+	mode := os.FileMode(0600)
+	if st, err := os.Stat(path); err == nil {
+		mode = st.Mode().Perm()
+	} else if !os.IsNotExist(err) {
+		return err
+	}
 	existing, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return err
@@ -230,7 +256,8 @@ func AddUserToPasswd(username, hash, path string) error {
 		lines = append(lines, newLine)
 	}
 
-	return os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0600)
+	next := []byte(strings.Join(lines, "\n") + "\n")
+	return writeAuthFileWithDashBackup(path, existing, next, mode)
 }
 
 func formatPasswdLine(username, hash, existingLine string) string {
@@ -267,6 +294,12 @@ func RemoveUserFromPasswd(username, path string) error {
 	passwdFileMu.Lock()
 	defer passwdFileMu.Unlock()
 
+	mode := os.FileMode(0600)
+	if st, err := os.Stat(path); err == nil {
+		mode = st.Mode().Perm()
+	} else if !os.IsNotExist(err) {
+		return err
+	}
 	existing, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -280,7 +313,7 @@ func RemoveUserFromPasswd(username, path string) error {
 		}
 	}
 
-	return os.WriteFile(path, []byte(strings.Join(kept, "\n")), 0600)
+	return writeAuthFileWithDashBackup(path, existing, []byte(strings.Join(kept, "\n")), mode)
 }
 
 // RenameUserInPasswd renames a passwd entry while preserving the existing hash and fields.
@@ -288,6 +321,12 @@ func RenameUserInPasswd(oldUsername, newUsername, path string) error {
 	passwdFileMu.Lock()
 	defer passwdFileMu.Unlock()
 
+	mode := os.FileMode(0600)
+	if st, err := os.Stat(path); err == nil {
+		mode = st.Mode().Perm()
+	} else if !os.IsNotExist(err) {
+		return err
+	}
 	existing, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -310,5 +349,47 @@ func RenameUserInPasswd(oldUsername, newUsername, path string) error {
 	if !changed {
 		return fmt.Errorf("user %s not found in passwd", oldUsername)
 	}
-	return os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0600)
+	return writeAuthFileWithDashBackup(path, existing, []byte(strings.Join(lines, "\n")), mode)
+}
+
+func writeAuthFileWithDashBackup(path string, existing, next []byte, mode os.FileMode) error {
+	if err := backupAuthFileDash(path, existing, mode); err != nil {
+		return err
+	}
+	return os.WriteFile(path, next, 0600)
+}
+
+func backupAuthFileDash(path string, existing []byte, mode os.FileMode) error {
+	if len(bytes.TrimSpace(existing)) == 0 {
+		return nil
+	}
+	backupPath := path + "-"
+	dir := filepath.Dir(backupPath)
+	file, err := os.CreateTemp(dir, "."+filepath.Base(backupPath)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := file.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if _, err := file.Write(existing); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Chmod(mode); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, backupPath); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
 }
