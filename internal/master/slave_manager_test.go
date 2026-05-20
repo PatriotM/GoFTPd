@@ -1,6 +1,8 @@
 package master
 
 import (
+	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -557,6 +559,34 @@ func TestSlaveAuthGuardBansAfterConfiguredFailures(t *testing.T) {
 	}
 }
 
+func TestSlaveAuthGuardIgnoresBenignHandshakeDisconnects(t *testing.T) {
+	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
+	sm.ConfigureAuthGuard(2, time.Minute, 10*time.Minute)
+
+	sm.recordHandshakeReadFailure("1.2.3.4", "1.2.3.4:1234", io.EOF)
+	sm.recordHandshakeReadFailure("1.2.3.4", "1.2.3.4:1235", errors.New("write tcp 1.2.3.4:1099->1.2.3.4:1235: write: broken pipe"))
+
+	if banned, _ := sm.isAuthBanned("1.2.3.4"); banned {
+		t.Fatalf("benign handshake disconnects should not ban a slave source")
+	}
+	if state := sm.authState["1.2.3.4"]; state != nil && state.Strikes != 0 {
+		t.Fatalf("benign handshake disconnects should not record strikes, got %+v", state)
+	}
+}
+
+func TestSlaveAuthGuardStillBansMalformedHandshake(t *testing.T) {
+	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
+	sm.ConfigureAuthGuard(2, time.Minute, 10*time.Minute)
+
+	err := errors.New("gob: local interface type *interface {} can only be decoded from remote interface type")
+	sm.recordHandshakeReadFailure("1.2.3.4", "1.2.3.4:1234", err)
+	sm.recordHandshakeReadFailure("1.2.3.4", "1.2.3.4:1235", err)
+
+	if banned, _ := sm.isAuthBanned("1.2.3.4"); !banned {
+		t.Fatalf("malformed handshakes should still ban after reaching the failure limit")
+	}
+}
+
 func TestSlaveAuthGuardClearsOnSuccessfulSlaveLogin(t *testing.T) {
 	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
 	sm.ConfigureAuthGuard(2, time.Minute, 10*time.Minute)
@@ -566,6 +596,23 @@ func TestSlaveAuthGuardClearsOnSuccessfulSlaveLogin(t *testing.T) {
 
 	if banned, _ := sm.isAuthBanned("1.2.3.4"); banned {
 		t.Fatalf("IP should not remain banned after state is cleared")
+	}
+}
+
+func TestClearAuthTempBanRemovesActiveBan(t *testing.T) {
+	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
+	sm.ConfigureAuthGuard(1, time.Minute, 10*time.Minute)
+	sm.recordAuthFailure("1.2.3.4", "1.2.3.4:1234", "invalid slave name")
+
+	removed, err := sm.ClearAuthTempBan("1.2.3.4")
+	if err != nil {
+		t.Fatalf("ClearAuthTempBan returned error: %v", err)
+	}
+	if !removed {
+		t.Fatalf("expected active temp ban to be cleared")
+	}
+	if banned, _ := sm.isAuthBanned("1.2.3.4"); banned {
+		t.Fatalf("IP should not remain banned after temp ban clear")
 	}
 }
 

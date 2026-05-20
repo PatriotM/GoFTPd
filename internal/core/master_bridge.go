@@ -166,6 +166,7 @@ type MasterBridge interface {
 	ListSlaveAuthDenyEntries() []string
 	AddSlaveAuthDenyEntry(entry string) (string, error)
 	RemoveSlaveAuthDenyEntry(entry string) (bool, error)
+	ClearSlaveAuthTempBan(entry string) (bool, error)
 	ListSlaveAuthTempBans() []SlaveAuthBanInfo
 
 	// GetLiveTransferStats asks connected slaves for current live transfer counters.

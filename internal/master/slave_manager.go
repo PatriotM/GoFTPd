@@ -2,7 +2,9 @@ package master
 
 import (
 	"crypto/tls"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -522,8 +524,7 @@ func (sm *SlaveManager) handleSlaveConnection(conn net.Conn) {
 	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 	obj, err := stream.ReadObject()
 	if err != nil {
-		log.Printf("[SlaveManager] Failed to read slave name: %v", err)
-		sm.recordAuthFailure(ip, remoteAddr, fmt.Sprintf("failed to read slave name: %v", err))
+		sm.recordHandshakeReadFailure(ip, remoteAddr, err)
 		conn.Close()
 		return
 	}
@@ -588,6 +589,35 @@ func (sm *SlaveManager) publishSecurityEvent(ip, remoteAddr, action, reason stri
 		return
 	}
 	sm.securityHook(ip, remoteAddr, action, reason, strikes, sm.authFailLimit, bannedUntil)
+}
+
+func (sm *SlaveManager) recordHandshakeReadFailure(ip, remoteAddr string, err error) {
+	if isBenignSlaveHandshakeDisconnect(err) {
+		return
+	}
+	reason := fmt.Sprintf("failed to read slave name: %v", err)
+	log.Printf("[SlaveManager] Failed to read slave name from %s: %v", remoteAddr, err)
+	sm.recordAuthFailure(ip, remoteAddr, reason)
+}
+
+func isBenignSlaveHandshakeDisconnect(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) || errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "connection reset by peer") ||
+		strings.Contains(msg, "use of closed network connection") ||
+		strings.Contains(msg, "connection closed") ||
+		strings.Contains(msg, "connection aborted") ||
+		strings.Contains(msg, "forcibly closed")
 }
 
 func (sm *SlaveManager) recordAuthFailure(ip, remoteAddr, reason string) {
@@ -762,6 +792,27 @@ func (sm *SlaveManager) RemoveAuthDenyEntry(raw string) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+func (sm *SlaveManager) ClearAuthTempBan(raw string) (bool, error) {
+	entry, err := parseAuthNetworkEntry(raw)
+	if err != nil {
+		return false, err
+	}
+	sm.authMu.Lock()
+	defer sm.authMu.Unlock()
+	removed := false
+	for ip := range sm.authState {
+		parsed := net.ParseIP(ip)
+		if parsed == nil {
+			continue
+		}
+		if entry.Net != nil && entry.Net.Contains(parsed) {
+			delete(sm.authState, ip)
+			removed = true
+		}
+	}
+	return removed, nil
 }
 
 func (sm *SlaveManager) ListAuthTempBans() []AuthBanSnapshot {

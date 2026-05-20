@@ -243,6 +243,13 @@ func (b *Bridge) RemoveSlaveAuthDenyEntry(entry string) (bool, error) {
 	return b.sm.RemoveAuthDenyEntry(entry)
 }
 
+func (b *Bridge) ClearSlaveAuthTempBan(entry string) (bool, error) {
+	if b == nil || b.sm == nil {
+		return false, fmt.Errorf("master not initialized")
+	}
+	return b.sm.ClearAuthTempBan(entry)
+}
+
 func (b *Bridge) ListSlaveAuthTempBans() []core.SlaveAuthBanInfo {
 	if b == nil || b.sm == nil {
 		return nil

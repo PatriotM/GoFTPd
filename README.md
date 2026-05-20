@@ -295,6 +295,7 @@ Siteops can manage the persistent denylist from FTP with:
 - `SITE SLAVEBANS`
 - `SITE SLAVEBAN <ip|cidr>`
 - `SITE SLAVEUNBAN <ip|cidr>`
+- `SITE SLAVECLEARBAN <ip|cidr>` clears only active temp bans
 
 ## Restart And Remerge
 

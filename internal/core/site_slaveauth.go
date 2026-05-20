@@ -83,15 +83,54 @@ func (s *Session) HandleSiteSlaveUnban(args []string) bool {
 		fmt.Fprintf(s.Conn, "550 Master not initialized.\r\n")
 		return false
 	}
-	removed, err := bridge.RemoveSlaveAuthDenyEntry(strings.TrimSpace(args[0]))
+	entry := strings.TrimSpace(args[0])
+	removed, err := bridge.RemoveSlaveAuthDenyEntry(entry)
 	if err != nil {
 		fmt.Fprintf(s.Conn, "550 SLAVEUNBAN failed: %v\r\n", err)
 		return false
 	}
-	if !removed {
-		fmt.Fprintf(s.Conn, "550 Entry not found in slave control denylist.\r\n")
+	cleared, err := bridge.ClearSlaveAuthTempBan(entry)
+	if err != nil {
+		fmt.Fprintf(s.Conn, "550 SLAVEUNBAN failed: %v\r\n", err)
 		return false
 	}
-	fmt.Fprintf(s.Conn, "200 Removed entry from slave control denylist.\r\n")
+	if !removed && !cleared {
+		fmt.Fprintf(s.Conn, "550 Entry not found in slave control denylist or active temp bans.\r\n")
+		return false
+	}
+	if removed && cleared {
+		fmt.Fprintf(s.Conn, "200 Removed entry from slave control denylist and cleared active temp ban.\r\n")
+	} else if removed {
+		fmt.Fprintf(s.Conn, "200 Removed entry from slave control denylist.\r\n")
+	} else {
+		fmt.Fprintf(s.Conn, "200 Cleared active slave temp ban.\r\n")
+	}
+	return false
+}
+
+func (s *Session) HandleSiteSlaveClearBan(args []string) bool {
+	if len(args) != 1 {
+		fmt.Fprintf(s.Conn, "501 Usage: SITE SLAVECLEARBAN <ip|cidr>\r\n")
+		return false
+	}
+	if s.Config.Mode != "master" || s.MasterManager == nil {
+		fmt.Fprintf(s.Conn, "550 SITE SLAVECLEARBAN is only available in master mode.\r\n")
+		return false
+	}
+	bridge, ok := s.MasterManager.(MasterBridge)
+	if !ok {
+		fmt.Fprintf(s.Conn, "550 Master not initialized.\r\n")
+		return false
+	}
+	cleared, err := bridge.ClearSlaveAuthTempBan(strings.TrimSpace(args[0]))
+	if err != nil {
+		fmt.Fprintf(s.Conn, "550 SLAVECLEARBAN failed: %v\r\n", err)
+		return false
+	}
+	if !cleared {
+		fmt.Fprintf(s.Conn, "550 Entry not found in active slave temp bans.\r\n")
+		return false
+	}
+	fmt.Fprintf(s.Conn, "200 Cleared active slave temp ban.\r\n")
 	return false
 }

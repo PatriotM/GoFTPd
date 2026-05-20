@@ -172,6 +172,7 @@ rules:
         - SLAVEBANS
         - SLAVEBAN
         - SLAVEUNBAN
+        - SLAVECLEARBAN
         - ADDAFFIL
         - DELAFFIL
         - REQWIPE
