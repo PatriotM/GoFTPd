@@ -70,6 +70,7 @@ func main() {
 		startSlave(cfg)
 		return
 	}
+	core.StartAuthStateBackup(cfg)
 
 	// 2. Load ACL Engine (Permissions)
 	aclEngine, err := acl.LoadEngine("etc/permissions.yml")

@@ -154,10 +154,12 @@ Main files:
 | `etc/config-slave-example.yml` | Minimal slave-only daemon example |
 | `etc/permissions.yml` | ACL rules |
 | `etc/passwd` | Password hashes |
-| `etc/passwd-` | Automatic previous-version backup of `etc/passwd` |
-| `etc/group-` | Automatic previous-version backup of `etc/group` |
+| `etc/passwd-` | Automatic daemon backup of `etc/passwd` |
+| `etc/group-` | Automatic daemon backup of `etc/group` |
 | `etc/users/` | User records |
+| `etc/users-/` | Automatic daemon backup mirror of `etc/users/` |
 | `etc/groups/` | Group records |
+| `etc/groups-/` | Automatic daemon backup mirror of `etc/groups/` |
 | `etc/groups/default.group` | Template for newly created groups |
 | `etc/affils.yml` | Shared affil PRE config |
 | `etc/msgs/` | Text shown by SITE RULES and login/logout messages |

@@ -85,7 +85,11 @@ func (s *Slave) writeObject(obj interface{}) error {
 func (s *Slave) writeObjectNoActivity(obj interface{}) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	return s.stream.WriteObject(obj)
+	err := s.stream.WriteObject(obj)
+	if err == nil {
+		s.lastWriteTime.Store(time.Now().UnixMilli())
+	}
+	return err
 }
 
 // SlaveConfig holds slave configuration loaded from YAML

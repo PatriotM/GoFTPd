@@ -158,7 +158,7 @@ func (s *Session) HandleSiteNuke(args []string) bool {
 	totalMB := BytesToMB(SumBytes(uploaderBytes))
 	fmt.Fprintf(s.Conn, "200 Nuked: x%d multiplier, %d MB, %d users affected, %d credits removed. Reason: %s\r\n",
 		multiplier, totalMB, len(uploaderBytes), totalNuked, reason)
-	return true
+	return false
 }
 
 func (s *Session) HandleSiteUnnuke(args []string) bool {
@@ -266,7 +266,7 @@ func (s *Session) HandleSiteUnnuke(args []string) bool {
 	totalMB := BytesToMB(SumBytes(uploaderBytes))
 	fmt.Fprintf(s.Conn, "200 Unnuked: %d MB, %d users affected, %d credits restored.\r\n",
 		totalMB, len(uploaderBytes), totalRestored)
-	return true
+	return false
 }
 
 func (s *Session) HandleSiteNukes(args []string) bool {
@@ -395,7 +395,7 @@ func (s *Session) handleSiteNukeVFS(bridge MasterBridge, target string, multipli
 	})
 	fmt.Fprintf(s.Conn, "200 Nuked %s: x%d multiplier, %d MB, %d users affected, %d credits removed. Reason: %s\r\n",
 		dirPath, multiplier, BytesToMB(SumBytes(VFSUploaderBytes(bridge.ListDir(result.NewPath)))), result.UsersAffected, result.TotalCreditsRemoved, reason)
-	return true
+	return false
 }
 
 func (s *Session) handleSiteUnnukeVFS(bridge MasterBridge, target string) bool {
@@ -438,7 +438,7 @@ func (s *Session) handleSiteUnnukeVFS(bridge MasterBridge, target string) bool {
 	})
 	fmt.Fprintf(s.Conn, "200 Unnuked %s: %d MB, %d users affected, %d credits restored.\r\n",
 		dirPath, BytesToMB(SumBytes(uploaderBytes)), len(uploaderBytes), totalRestored)
-	return true
+	return false
 }
 
 func (s *Session) masterBridge() (MasterBridge, bool) {

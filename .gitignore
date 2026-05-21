@@ -28,6 +28,11 @@ etc/groups/*
 #etc/passwd
 etc/passwd-
 etc/group-
+etc/permissions.yml-
+etc/affils.yml-
+etc/slave_denylist.txt-
+etc/users-/
+etc/groups-/
 
 # Site data (actual files on disk)
 site/
