@@ -35,12 +35,22 @@ type releaseRaceWindow struct {
 }
 
 type backgroundRemergeConfig struct {
-	interval     time.Duration
 	initialDelay time.Duration
 	stagger      time.Duration
-	basePath     string
-	rootsOnly    bool
-	skipBusy     bool
+	jobs         []backgroundRemergeJob
+}
+
+type backgroundRemergeJob struct {
+	slaveName              string
+	name                   string
+	interval               time.Duration
+	basePath               string
+	rootMode               string
+	mountPaths             []string
+	excludePaths           []string
+	delayMS                int
+	pauseOnActiveTransfers int
+	skipBusy               bool
 }
 
 type SlaveManager struct {
@@ -125,10 +135,30 @@ type AuthBanSnapshot struct {
 
 // SlaveRoutePolicy is the runtime form of SlavePolicy from config.
 type SlaveRoutePolicy struct {
-	Sections []string // uppercased for matching
-	Paths    []string // glob patterns
-	Weight   int      // >= 1
-	ReadOnly bool     // scan/download only; never selected for uploads
+	Sections    []string                // uppercased for matching
+	Paths       []string                // glob patterns
+	Weight      int                     // >= 1
+	ReadOnly    bool                    // scan/download only; never selected for uploads
+	RemergeJobs []SlaveRemergeJobPolicy // background remerge jobs for this slave
+}
+
+type SlaveRemergeJobPolicy struct {
+	Name                   string
+	Enabled                bool
+	Interval               time.Duration
+	Path                   string
+	Roots                  string
+	MountPaths             []string
+	ExcludePaths           []string
+	DelayMS                int
+	PauseOnActiveTransfers int
+	SkipBusy               bool
+}
+
+type remergeCommandOptions struct {
+	delayMS                int
+	pauseOnActiveTransfers int
+	excludePaths           []string
 }
 
 func NewSlaveManager(host string, port int, tlsEnabled bool, tlsCert, tlsKey string, heartbeatTimeout time.Duration) *SlaveManager {
@@ -241,12 +271,26 @@ func (sm *SlaveManager) policySections(slaveName string) []string {
 	return out
 }
 
+func (sm *SlaveManager) hasBackgroundRemergeJobs(slaveName string) bool {
+	policy, ok := sm.getPolicy(slaveName)
+	if !ok {
+		return false
+	}
+	for _, job := range policy.RemergeJobs {
+		if job.Enabled && job.Interval > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // SetSlavePolicies configures per-slave routing rules (section affinity + weights).
 // Call once at startup after loading config. Re-calling replaces all policies.
 func (sm *SlaveManager) SetSlavePolicies(policies map[string]SlaveRoutePolicy) {
 	sm.policiesMu.Lock()
 	defer sm.policiesMu.Unlock()
 	sm.policies = make(map[string]SlaveRoutePolicy, len(policies))
+	backgroundJobs := make([]backgroundRemergeJob, 0)
 	for name, p := range policies {
 		if p.Weight < 1 {
 			p.Weight = 1
@@ -256,8 +300,112 @@ func (sm *SlaveManager) SetSlavePolicies(policies map[string]SlaveRoutePolicy) {
 			upSections[i] = strings.ToUpper(strings.TrimSpace(s))
 		}
 		p.Sections = upSections
+		p.RemergeJobs = normalizeSlaveRemergeJobs(name, p.RemergeJobs)
+		for _, job := range p.RemergeJobs {
+			if !job.Enabled || job.Interval <= 0 {
+				continue
+			}
+			backgroundJobs = append(backgroundJobs, backgroundRemergeJob{
+				slaveName:              name,
+				name:                   job.Name,
+				interval:               job.Interval,
+				basePath:               job.Path,
+				rootMode:               normalizeRemergeRootMode(job.Roots),
+				mountPaths:             append([]string(nil), job.MountPaths...),
+				excludePaths:           normalizeVFSPathList(job.ExcludePaths),
+				delayMS:                maxInt(job.DelayMS, 0),
+				pauseOnActiveTransfers: maxInt(job.PauseOnActiveTransfers, 0),
+				skipBusy:               job.SkipBusy,
+			})
+		}
 		sm.policies[name] = p
 	}
+	sm.setBackgroundRemergeJobs(backgroundJobs)
+}
+
+func normalizeSlaveRemergeJobs(slaveName string, jobs []SlaveRemergeJobPolicy) []SlaveRemergeJobPolicy {
+	out := make([]SlaveRemergeJobPolicy, 0, len(jobs))
+	for i, job := range jobs {
+		job.Name = strings.TrimSpace(job.Name)
+		if job.Name == "" {
+			job.Name = fmt.Sprintf("job%d", i+1)
+		}
+		job.Roots = normalizeRemergeRootMode(job.Roots)
+		if job.Interval < 0 {
+			job.Interval = 0
+		}
+		if job.DelayMS < 0 {
+			job.DelayMS = 0
+		}
+		if job.PauseOnActiveTransfers < 0 {
+			job.PauseOnActiveTransfers = 0
+		}
+		job.Path = normalizeRemergeJobPath(job.Path)
+		job.MountPaths = normalizeVFSPathList(job.MountPaths)
+		job.ExcludePaths = normalizeVFSPathList(job.ExcludePaths)
+		if job.Enabled && job.Interval <= 0 {
+			log.Printf("[SlaveManager] Background remerge job %s/%s is enabled but interval_seconds is 0; job disabled", slaveName, job.Name)
+			job.Enabled = false
+		}
+		out = append(out, job)
+	}
+	return out
+}
+
+func normalizeRemergeRootMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "normal", "site", "root", "roots":
+		return "normal"
+	case "mounted", "mount", "mounts", "mounted_roots":
+		return "mounted"
+	case "all", "both", "":
+		return "all"
+	default:
+		return "all"
+	}
+}
+
+func normalizeRemergeJobPath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return "/"
+	}
+	return path.Clean("/" + p)
+}
+
+func normalizeVFSPathList(paths []string) []string {
+	out := make([]string, 0, len(paths))
+	seen := make(map[string]struct{}, len(paths))
+	for _, p := range paths {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if p == "*" {
+			if _, ok := seen[p]; !ok {
+				seen[p] = struct{}{}
+				out = append(out, p)
+			}
+			continue
+		}
+		p = path.Clean("/" + p)
+		if p == "." || p == "" {
+			p = "/"
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	return out
+}
+
+func maxInt(v, min int) int {
+	if v < min {
+		return min
+	}
+	return v
 }
 
 func (sm *SlaveManager) SetProtectedDirs(paths []string) {
@@ -303,29 +451,12 @@ func (sm *SlaveManager) SetRemergeFlowControl(pauseThreshold, resumeThreshold in
 	sm.remergeResumeAt.Store(int64(resumeThreshold))
 }
 
-func (sm *SlaveManager) ConfigureBackgroundRemerge(interval, initialDelay, stagger time.Duration, basePath string, rootsOnly bool, skipBusy bool) {
-	if interval < 0 {
-		interval = 0
-	}
-	if initialDelay < 0 {
-		initialDelay = 0
-	}
-	if stagger < 0 {
-		stagger = 0
-	}
-	basePath = path.Clean("/" + strings.TrimSpace(basePath))
-	if basePath == "." || basePath == "" {
-		basePath = "/"
-	}
-
+func (sm *SlaveManager) setBackgroundRemergeJobs(jobs []backgroundRemergeJob) {
 	sm.backgroundRemergeMu.Lock()
 	sm.backgroundRemerge = backgroundRemergeConfig{
-		interval:     interval,
-		initialDelay: initialDelay,
-		stagger:      stagger,
-		basePath:     basePath,
-		rootsOnly:    rootsOnly,
-		skipBusy:     skipBusy,
+		initialDelay: 5 * time.Minute,
+		stagger:      60 * time.Second,
+		jobs:         append([]backgroundRemergeJob(nil), jobs...),
 	}
 	sm.backgroundRemergeMu.Unlock()
 	sm.notifyBackgroundRemergeLoop()
@@ -335,9 +466,7 @@ func (sm *SlaveManager) backgroundRemergeSnapshot() backgroundRemergeConfig {
 	sm.backgroundRemergeMu.RLock()
 	defer sm.backgroundRemergeMu.RUnlock()
 	cfg := sm.backgroundRemerge
-	if cfg.basePath == "" {
-		cfg.basePath = "/"
-	}
+	cfg.jobs = append([]backgroundRemergeJob(nil), cfg.jobs...)
 	return cfg
 }
 
@@ -557,6 +686,9 @@ func (sm *SlaveManager) handleSlaveConnection(conn net.Conn) {
 
 	log.Printf("[SlaveManager] Slave '%s' connected from %s", slaveName, conn.RemoteAddr())
 	sm.clearAuthState(ip)
+	if !sm.hasBackgroundRemergeJobs(slaveName) {
+		log.Printf("[SlaveManager] Slave %s has no slaves[].remerge.jobs configured; background VFS sync is disabled for this slave", slaveName)
+	}
 
 	// Read initial disk status from slave
 	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
@@ -1161,12 +1293,13 @@ func (sm *SlaveManager) RenameReleaseState(from, to string, isDir bool) {
 // immediately and remerge runs in the background. Files appear in LIST
 // as they are indexed.
 func (sm *SlaveManager) initializeSlaveAfterConnect(rs *RemoteSlave, forceInstantOnline bool) {
-	sm.initializeSlaveRemerge(rs, "/", false, false, forceInstantOnline)
+	sm.initializeSlaveRemerge(rs, "/", "all", false, forceInstantOnline, remergeCommandOptions{})
 }
 
-func (sm *SlaveManager) initializeSlaveRemerge(rs *RemoteSlave, basePath string, rootsOnly bool, scoped bool, forceInstantOnline bool) {
+func (sm *SlaveManager) initializeSlaveRemerge(rs *RemoteSlave, basePath string, rootMode string, scoped bool, forceInstantOnline bool, opts remergeCommandOptions) {
 	mode := sm.GetRemergeMode()
 	instantOnline := forceInstantOnline || mode == "instant"
+	rootMode = normalizeRemergeRootMode(rootMode)
 	basePath = path.Clean("/" + strings.TrimSpace(basePath))
 	if basePath == "." || basePath == "" {
 		basePath = "/"
@@ -1182,7 +1315,8 @@ func (sm *SlaveManager) initializeSlaveRemerge(rs *RemoteSlave, basePath string,
 		}
 	}
 
-	log.Printf("[SlaveManager] Starting remerge for slave %s (mode=%s base=%s rootsOnly=%v scoped=%v)", rs.name, mode, basePath, rootsOnly, scoped)
+	log.Printf("[SlaveManager] Starting remerge for slave %s (mode=%s base=%s roots=%s scoped=%v delay_ms=%d pause_on_active_transfers=%d)",
+		rs.name, mode, basePath, rootMode, scoped, opts.delayMS, opts.pauseOnActiveTransfers)
 
 	rs.remerging.Store(true)
 	if instantOnline {
@@ -1199,11 +1333,15 @@ func (sm *SlaveManager) initializeSlaveRemerge(rs *RemoteSlave, basePath string,
 	// Only full slave remerges should mark everything unseen and purge at the end.
 	if !scoped {
 		sm.vfs.MarkAllUnseen(rs.name)
-	} else if !rootsOnly {
+	} else if rootMode != "normal" {
 		sm.vfs.MarkSubtreeUnseen(rs.name, basePath)
 	}
 
-	index, err := IssueRemerge(rs, basePath, false, 0, time.Now().UnixMilli(), instantOnline, rootsOnly, sm.getExcludePaths())
+	excludePaths := append(sm.getExcludePaths(), opts.excludePaths...)
+	index, err := IssueRemerge(rs, basePath, false, 0, time.Now().UnixMilli(), instantOnline, rootMode, RemergeCommandSettings{
+		DelayMS:                opts.delayMS,
+		PauseOnActiveTransfers: opts.pauseOnActiveTransfers,
+	}, excludePaths)
 	if err != nil {
 		log.Printf("[SlaveManager] Failed to issue remerge to %s: %v", rs.name, err)
 		// Don't take offline - slave is still connected, just no file index yet.
@@ -1232,7 +1370,7 @@ func (sm *SlaveManager) initializeSlaveRemerge(rs *RemoteSlave, basePath string,
 				// Purge files that were physically deleted from the slave.
 				sm.vfs.PurgeUnseen(rs.name)
 				log.Printf("[SlaveManager] Ghost files purged for %s", rs.name)
-			} else if !rootsOnly {
+			} else if rootMode != "normal" {
 				sm.vfs.PurgeUnseenSubtree(rs.name, basePath)
 				log.Printf("[SlaveManager] Scoped ghost files purged for %s at %s", rs.name, basePath)
 			}
@@ -1252,11 +1390,24 @@ func (sm *SlaveManager) initializeSlaveRemerge(rs *RemoteSlave, basePath string,
 
 // ProcessRemerge handles incoming remerge data from a slave.
 func (sm *SlaveManager) ProcessRemerge(rs *RemoteSlave, resp *protocol.AsyncResponseRemerge) {
-	log.Printf("[SlaveManager] Remerge from %s: dir=%s files=%d", rs.name, resp.Path, len(resp.Files))
+	if sm == nil || rs == nil || resp == nil {
+		return
+	}
+	resp.Path = path.Clean("/" + strings.TrimSpace(resp.Path))
+	if resp.Path != "/" && resp.Path != "." && !sm.vfs.IsExcludedPath(resp.Path) {
+		sm.vfs.AddFile(resp.Path, VFSFile{
+			Path:         resp.Path,
+			IsDir:        true,
+			LastModified: resp.LastModified,
+			SlaveName:    rs.name,
+			Seen:         true,
+		})
+	}
 
 	sfvPaths := make([]string, 0, 1)
 	touchedReleases := make(map[string]struct{}, 8)
 	touchedParents := make(map[string]struct{}, 2)
+	presentChildren := make(map[string]struct{}, len(resp.Files))
 	statusCfg := sm.statusMarkerConfig().Zipscript
 	sm.noteTouchedStatusMarkerRelease(statusCfg, resp.Path, true, touchedReleases)
 	for _, inode := range resp.Files {
@@ -1269,6 +1420,7 @@ func (sm *SlaveManager) ProcessRemerge(rs *RemoteSlave, resp *protocol.AsyncResp
 		if sm.vfs.IsExcludedPath(fullPath) {
 			continue
 		}
+		presentChildren[fullPath] = struct{}{}
 		if zipscript.IsStatusMarkerName(sm.statusMarkerConfig().Zipscript, inode.Name) {
 			continue
 		}
@@ -1313,7 +1465,9 @@ func (sm *SlaveManager) ProcessRemerge(rs *RemoteSlave, resp *protocol.AsyncResp
 	// Each remerge response is a complete snapshot of one physical directory.
 	// Prune stale direct children now so slow/background remerges update the VFS
 	// as they walk instead of leaving ghosts until the full tree finishes.
-	sm.vfs.PurgeUnseenChildren(rs.name, resp.Path)
+	if resp.PruneChildren {
+		sm.vfs.PurgeMissingChildren(rs.name, resp.Path, presentChildren, resp.SkippedSubtrees)
+	}
 
 	touchedParents[path.Clean(resp.Path)] = struct{}{}
 	for dirPath := range touchedParents {
@@ -1531,41 +1685,41 @@ func (sm *SlaveManager) GetSlave(name string) *RemoteSlave {
 	return nil
 }
 
-// StartRemerge starts a full background VFS refresh for one connected slave.
-// Existing VFS entries for that slave are marked unseen before the scan and
-// purged when the slave reports completion.
-func (sm *SlaveManager) StartRemerge(name string) error {
+func (sm *SlaveManager) StartRemergeJobs(name string) (int, []string) {
 	rs := sm.GetSlave(name)
 	if rs == nil {
-		return fmt.Errorf("unknown slave %s", name)
+		return 0, []string{fmt.Sprintf("unknown slave %s", name)}
 	}
 	if !rs.IsOnline() {
-		return fmt.Errorf("slave %s is offline", rs.Name())
+		return 0, []string{fmt.Sprintf("slave %s is offline", rs.Name())}
 	}
-	if !rs.remerging.CompareAndSwap(false, true) {
-		return fmt.Errorf("slave %s is already remerging", rs.Name())
+	if rs.IsRemerging() {
+		return 0, []string{fmt.Sprintf("slave %s is already remerging", rs.Name())}
 	}
-	go sm.initializeSlaveAfterConnect(rs, sm.GetManualRemergeMode() == "instant")
-	return nil
+	jobs := sm.backgroundRemergeJobsForSlave(rs.Name())
+	if len(jobs) == 0 {
+		return 0, []string{fmt.Sprintf("slave %s has no slaves[].remerge.jobs configured", rs.Name())}
+	}
+	allSkipBusy := true
+	for _, job := range jobs {
+		if !job.skipBusy {
+			allSkipBusy = false
+			break
+		}
+	}
+	if allSkipBusy && rs.ActiveTransfers() > 0 {
+		return 0, []string{fmt.Sprintf("slave %s has %d active transfer(s)", rs.Name(), rs.ActiveTransfers())}
+	}
+	stagger := sm.backgroundRemergeSnapshot().stagger
+	go func() {
+		for _, job := range jobs {
+			sm.runBackgroundRemergeJob(job, stagger)
+		}
+	}()
+	return len(jobs), nil
 }
 
-func (sm *SlaveManager) StartRemergePath(name, basePath string, rootsOnly bool) error {
-	rs := sm.GetSlave(name)
-	if rs == nil {
-		return fmt.Errorf("unknown slave %s", name)
-	}
-	if !rs.IsOnline() {
-		return fmt.Errorf("slave %s is offline", rs.Name())
-	}
-	if !rs.remerging.CompareAndSwap(false, true) {
-		return fmt.Errorf("slave %s is already remerging", rs.Name())
-	}
-	go sm.initializeSlaveRemerge(rs, basePath, rootsOnly, true, sm.GetManualRemergeMode() == "instant")
-	return nil
-}
-
-// StartRemergeAll starts a full background VFS refresh for every online slave.
-func (sm *SlaveManager) StartRemergeAll() (int, []string) {
+func (sm *SlaveManager) StartRemergeAllJobs() (int, []string) {
 	var errs []string
 	started := 0
 	slaves := sm.GetAllSlaves()
@@ -1573,30 +1727,25 @@ func (sm *SlaveManager) StartRemergeAll() (int, []string) {
 		return 0, []string{"no slaves connected"}
 	}
 	for _, rs := range slaves {
-		if err := sm.StartRemerge(rs.Name()); err != nil {
-			errs = append(errs, err.Error())
+		n, jobErrs := sm.StartRemergeJobs(rs.Name())
+		if len(jobErrs) > 0 {
+			errs = append(errs, jobErrs...)
 			continue
 		}
-		started++
+		started += n
 	}
 	return started, errs
 }
 
-func (sm *SlaveManager) StartRemergeAllPath(basePath string, rootsOnly bool) (int, []string) {
-	var errs []string
-	started := 0
-	slaves := sm.GetAllSlaves()
-	if len(slaves) == 0 {
-		return 0, []string{"no slaves connected"}
-	}
-	for _, rs := range slaves {
-		if err := sm.StartRemergePath(rs.Name(), basePath, rootsOnly); err != nil {
-			errs = append(errs, err.Error())
-			continue
+func (sm *SlaveManager) backgroundRemergeJobsForSlave(slaveName string) []backgroundRemergeJob {
+	cfg := sm.backgroundRemergeSnapshot()
+	out := make([]backgroundRemergeJob, 0, len(cfg.jobs))
+	for _, job := range cfg.jobs {
+		if strings.EqualFold(job.slaveName, slaveName) {
+			out = append(out, job)
 		}
-		started++
 	}
-	return started, errs
+	return out
 }
 
 func (sm *SlaveManager) StopRemerge(name string) error {
@@ -2043,34 +2192,17 @@ func (sm *SlaveManager) diskStatusLoop() {
 }
 
 func (sm *SlaveManager) backgroundRemergeLoop() {
-	var nextRun time.Time
+	nextRuns := make(map[string]time.Time)
 	for sm.running.Load() {
 		cfg := sm.backgroundRemergeSnapshot()
-		if cfg.interval <= 0 {
-			nextRun = time.Time{}
+		if len(cfg.jobs) == 0 {
+			nextRuns = make(map[string]time.Time)
 			sm.waitBackgroundRemergeLoop(30 * time.Second)
 			continue
 		}
 
-		if nextRun.IsZero() {
-			delay := cfg.initialDelay
-			if delay <= 0 {
-				delay = cfg.interval
-			}
-			nextRun = time.Now().Add(delay)
-			log.Printf("[SlaveManager] Background remerge enabled: interval=%s first_run_in=%s base=%s rootsOnly=%v stagger=%s skipBusy=%v",
-				cfg.interval, delay, cfg.basePath, cfg.rootsOnly, cfg.stagger, cfg.skipBusy)
-		}
-
-		if wait := time.Until(nextRun); wait > 0 {
-			if !sm.waitBackgroundRemergeLoop(wait) {
-				nextRun = time.Time{}
-			}
-			continue
-		}
-
-		sm.runBackgroundRemergeRound(cfg)
-		nextRun = time.Now().Add(cfg.interval)
+		wait := sm.runDueBackgroundRemergeJobs(cfg, nextRuns)
+		sm.waitBackgroundRemergeLoop(wait)
 	}
 }
 
@@ -2088,54 +2220,143 @@ func (sm *SlaveManager) waitBackgroundRemergeLoop(delay time.Duration) bool {
 	}
 }
 
-func (sm *SlaveManager) runBackgroundRemergeRound(cfg backgroundRemergeConfig) {
-	slaves := sm.GetAllSlaves()
-	if len(slaves) == 0 {
-		log.Printf("[SlaveManager] Background remerge skipped: no slaves connected")
+func (sm *SlaveManager) runDueBackgroundRemergeJobs(cfg backgroundRemergeConfig, nextRuns map[string]time.Time) time.Duration {
+	now := time.Now()
+	validKeys := make(map[string]struct{}, len(cfg.jobs))
+	minWait := 30 * time.Second
+	for _, job := range cfg.jobs {
+		if job.interval <= 0 {
+			continue
+		}
+		key := job.key()
+		validKeys[key] = struct{}{}
+		nextRun, ok := nextRuns[key]
+		if !ok {
+			delay := cfg.initialDelay
+			if delay <= 0 {
+				delay = job.interval
+			}
+			nextRun = now.Add(delay)
+			nextRuns[key] = nextRun
+			log.Printf("[SlaveManager] Background remerge job enabled: slave=%s job=%s interval=%s first_run_in=%s roots=%s path=%s",
+				job.slaveName, job.name, job.interval, delay, job.rootMode, job.basePath)
+		}
+		if nextRun.After(now) {
+			if wait := time.Until(nextRun); wait > 0 && wait < minWait {
+				minWait = wait
+			}
+			continue
+		}
+		nextRuns[key] = now.Add(job.interval)
+		sm.runBackgroundRemergeJob(job, cfg.stagger)
+		if cfg.stagger > 0 {
+			minWait = cfg.stagger
+		}
+	}
+	for key := range nextRuns {
+		if _, ok := validKeys[key]; !ok {
+			delete(nextRuns, key)
+		}
+	}
+	return minWait
+}
+
+func (sm *SlaveManager) runBackgroundRemergeJob(job backgroundRemergeJob, stagger time.Duration) {
+	rs := sm.GetSlave(job.slaveName)
+	if rs == nil || !rs.IsOnline() {
+		log.Printf("[SlaveManager] Background remerge skipped: slave=%s job=%s is offline", job.slaveName, job.name)
 		return
 	}
-
-	started := 0
-	skipped := 0
-	log.Printf("[SlaveManager] Background remerge round starting: slaves=%d base=%s rootsOnly=%v skipBusy=%v", len(slaves), cfg.basePath, cfg.rootsOnly, cfg.skipBusy)
-	for i, rs := range slaves {
+	targets := sm.expandBackgroundRemergeTargets(rs, job)
+	if len(targets) == 0 {
+		log.Printf("[SlaveManager] Background remerge skipped: slave=%s job=%s has no matching paths", job.slaveName, job.name)
+		return
+	}
+	for i, target := range targets {
 		if !sm.running.Load() {
 			return
 		}
-		if rs == nil || !rs.IsOnline() {
-			skipped++
-			continue
-		}
 		if rs.IsRemerging() {
-			skipped++
-			log.Printf("[SlaveManager] Background remerge skipped for %s: remerge already running", rs.Name())
+			log.Printf("[SlaveManager] Background remerge skipped: slave=%s job=%s path=%s already remerging", job.slaveName, job.name, target.basePath)
 			continue
 		}
-		if cfg.skipBusy && rs.ActiveTransfers() > 0 {
-			skipped++
-			log.Printf("[SlaveManager] Background remerge skipped for %s: %d active transfer(s)", rs.Name(), rs.ActiveTransfers())
+		if job.skipBusy && rs.ActiveTransfers() > 0 {
+			log.Printf("[SlaveManager] Background remerge skipped: slave=%s job=%s path=%s has %d active transfer(s)",
+				job.slaveName, job.name, target.basePath, rs.ActiveTransfers())
 			continue
 		}
-
-		var err error
-		if cfg.rootsOnly || cfg.basePath != "/" {
-			err = sm.StartRemergePath(rs.Name(), cfg.basePath, cfg.rootsOnly)
-		} else {
-			err = sm.StartRemerge(rs.Name())
+		if !rs.remerging.CompareAndSwap(false, true) {
+			log.Printf("[SlaveManager] Background remerge skipped: slave=%s job=%s path=%s already remerging", job.slaveName, job.name, target.basePath)
+			continue
 		}
-		if err != nil {
-			skipped++
-			log.Printf("[SlaveManager] Background remerge skipped for %s: %v", rs.Name(), err)
-		} else {
-			started++
-			log.Printf("[SlaveManager] Background remerge started for %s", rs.Name())
-		}
-
-		if cfg.stagger > 0 && i < len(slaves)-1 {
-			if !sm.waitBackgroundRemergeLoop(cfg.stagger) {
+		log.Printf("[SlaveManager] Background remerge started: slave=%s job=%s path=%s roots=%s", job.slaveName, job.name, target.basePath, target.rootMode)
+		sm.initializeSlaveRemerge(rs, target.basePath, target.rootMode, true, true, remergeCommandOptions{
+			delayMS:                job.delayMS,
+			pauseOnActiveTransfers: job.pauseOnActiveTransfers,
+			excludePaths:           job.excludePaths,
+		})
+		if stagger > 0 && i < len(targets)-1 {
+			if !sm.waitBackgroundRemergeLoop(stagger) {
 				return
 			}
 		}
 	}
-	log.Printf("[SlaveManager] Background remerge round queued: started=%d skipped=%d", started, skipped)
+}
+
+type backgroundRemergeTarget struct {
+	basePath string
+	rootMode string
+}
+
+func (sm *SlaveManager) expandBackgroundRemergeTargets(rs *RemoteSlave, job backgroundRemergeJob) []backgroundRemergeTarget {
+	rootMode := normalizeRemergeRootMode(job.rootMode)
+	if rootMode != "mounted" {
+		return []backgroundRemergeTarget{{basePath: job.basePath, rootMode: rootMode}}
+	}
+	paths := job.mountPaths
+	if len(paths) == 0 || containsWildcard(paths) {
+		paths = mountedRootPathsFromDiskStatus(rs.GetDiskStatus())
+	}
+	if len(paths) == 0 && job.basePath != "/" {
+		paths = []string{job.basePath}
+	}
+	out := make([]backgroundRemergeTarget, 0, len(paths))
+	for _, p := range normalizeVFSPathList(paths) {
+		if p == "*" {
+			continue
+		}
+		out = append(out, backgroundRemergeTarget{basePath: p, rootMode: "mounted"})
+	}
+	return out
+}
+
+func containsWildcard(paths []string) bool {
+	for _, p := range paths {
+		if strings.TrimSpace(p) == "*" {
+			return true
+		}
+	}
+	return false
+}
+
+func mountedRootPathsFromDiskStatus(status protocol.DiskStatus) []string {
+	paths := make([]string, 0, len(status.Roots))
+	seen := make(map[string]struct{}, len(status.Roots))
+	for _, root := range status.Roots {
+		p := path.Clean("/" + strings.TrimSpace(root.MountPath))
+		if p == "." || p == "" || p == "/" {
+			continue
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+func (job backgroundRemergeJob) key() string {
+	return strings.Join([]string{job.slaveName, job.name, job.rootMode, job.basePath, strings.Join(job.mountPaths, ",")}, "|")
 }

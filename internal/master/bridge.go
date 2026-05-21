@@ -101,20 +101,12 @@ func (b *Bridge) transferSpeedLimits(username, primaryGroup, transferPath, direc
 	return b.transferSpeedPolicy(username, primaryGroup, transferPath, direction)
 }
 
-func (b *Bridge) StartRemerge(slaveName string) error {
-	return b.sm.StartRemerge(slaveName)
+func (b *Bridge) StartRemergeJobs(slaveName string) (int, []string) {
+	return b.sm.StartRemergeJobs(slaveName)
 }
 
-func (b *Bridge) StartRemergeAll() (int, []string) {
-	return b.sm.StartRemergeAll()
-}
-
-func (b *Bridge) StartRemergePath(slaveName, basePath string, rootsOnly bool) error {
-	return b.sm.StartRemergePath(slaveName, basePath, rootsOnly)
-}
-
-func (b *Bridge) StartRemergeAllPath(basePath string, rootsOnly bool) (int, []string) {
-	return b.sm.StartRemergeAllPath(basePath, rootsOnly)
+func (b *Bridge) StartRemergeAllJobs() (int, []string) {
+	return b.sm.StartRemergeAllJobs()
 }
 
 func (b *Bridge) StopRemerge(slaveName string) error {

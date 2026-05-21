@@ -273,7 +273,7 @@ func TestVFSRenameSFVAwayClearsParentSFVMetadata(t *testing.T) {
 	}
 }
 
-func TestVFSPurgeUnseenChildrenRemovesGhostFilesForScannedDir(t *testing.T) {
+func TestVFSPurgeMissingChildrenRemovesGhostFilesForScannedDir(t *testing.T) {
 	vfs := NewVirtualFileSystem()
 	vfs.AddFile("/X265", VFSFile{IsDir: true, Seen: true})
 	vfs.AddFile("/X265/release", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
@@ -282,12 +282,13 @@ func TestVFSPurgeUnseenChildrenRemovesGhostFilesForScannedDir(t *testing.T) {
 	vfs.AddFile("/X265/release/Sample", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
 	vfs.AddFile("/X265/release/Sample/sample.mkv", VFSFile{Size: 200, Seen: true, SlaveName: "LOCAL"})
 
-	vfs.MarkAllUnseen("LOCAL")
-
 	// Simulate a remerge batch for /X265/release where only wou.r00 and Sample still exist.
 	vfs.AddFile("/X265/release/wou.r00", VFSFile{Size: 100, Seen: true, SlaveName: "LOCAL"})
 	vfs.AddFile("/X265/release/Sample", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
-	vfs.PurgeUnseenChildren("LOCAL", "/X265/release")
+	vfs.PurgeMissingChildren("LOCAL", "/X265/release", map[string]struct{}{
+		"/X265/release/wou.r00": {},
+		"/X265/release/Sample":  {},
+	}, nil)
 
 	if got := vfs.GetFile("/X265/release/wou.r01"); got != nil {
 		t.Fatalf("expected stale direct child file to be purged, got %+v", got)
@@ -301,6 +302,24 @@ func TestVFSPurgeUnseenChildrenRemovesGhostFilesForScannedDir(t *testing.T) {
 	children := vfs.ListDirectory("/X265/release")
 	if len(children) != 2 {
 		t.Fatalf("expected 2 direct children after purge, got %d", len(children))
+	}
+}
+
+func TestVFSPurgeMissingChildrenKeepsProtectedSubtree(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/ARCHiVE", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	vfs.AddFile("/ARCHiVE/release", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	vfs.AddFile("/X265", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+
+	vfs.PurgeMissingChildren("LOCAL", "/", map[string]struct{}{
+		"/X265": {},
+	}, []string{"/ARCHiVE"})
+
+	if got := vfs.GetFile("/ARCHiVE"); got == nil {
+		t.Fatalf("expected protected archive mount to remain")
+	}
+	if got := vfs.GetFile("/ARCHiVE/release"); got == nil {
+		t.Fatalf("expected protected archive subtree to remain")
 	}
 }
 

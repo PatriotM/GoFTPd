@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -174,18 +175,7 @@ func main() {
 				Data:      data,
 			})
 		})
-		policies := make(map[string]master.SlaveRoutePolicy, len(cfg.Slaves))
-		for _, sp := range cfg.Slaves {
-			if sp.Name == "" {
-				continue
-			}
-			policies[sp.Name] = master.SlaveRoutePolicy{
-				Sections: sp.Sections,
-				Paths:    sp.Paths,
-				Weight:   sp.Weight,
-				ReadOnly: sp.ReadOnly,
-			}
-		}
+		policies := slavePoliciesFromConfig(cfg.Slaves)
 		sm.SetSlavePolicies(policies)
 		sm.SetBootstrapDirs(configuredBootstrapDirs(cfg))
 		sm.SetProtectedDirs(protectedVFSDirs(cfg))
@@ -195,11 +185,7 @@ func main() {
 		sm.SetRemergeMode(stringFromCfg(cfg.Master, "remerge_mode", "off"))
 		sm.SetManualRemergeMode(stringFromCfg(cfg.Master, "manual_remerge_mode", "instant"))
 		sm.SetEnableRemergeChecksums(boolFromCfg(cfg.Master, "remerge_checksums", false))
-		sm.SetRemergeFlowControl(
-			intFromCfg(cfg.Master, "remerge_pause_threshold", 250),
-			intFromCfg(cfg.Master, "remerge_resume_threshold", 50),
-		)
-		configureBackgroundRemerge(sm, cfg.Master)
+		warnDeprecatedMasterRemergeKeys(cfg.Master)
 		if err := sm.Start(); err != nil {
 			log.Fatalf("SlaveManager failed: %v", err)
 		}
@@ -221,18 +207,7 @@ func main() {
 	// routing policies after config is reloaded.
 	if sm != nil {
 		cfg.RehashHook = func(c *core.Config) {
-			policies := make(map[string]master.SlaveRoutePolicy, len(c.Slaves))
-			for _, sp := range c.Slaves {
-				if sp.Name == "" {
-					continue
-				}
-				policies[sp.Name] = master.SlaveRoutePolicy{
-					Sections: sp.Sections,
-					Paths:    sp.Paths,
-					Weight:   sp.Weight,
-					ReadOnly: sp.ReadOnly,
-				}
-			}
+			policies := slavePoliciesFromConfig(c.Slaves)
 			sm.SetSlavePolicies(policies)
 			sm.SetBootstrapDirs(configuredBootstrapDirs(c))
 			sm.SetProtectedDirs(protectedVFSDirs(c))
@@ -242,11 +217,7 @@ func main() {
 			sm.SetRemergeMode(stringFromCfg(c.Master, "remerge_mode", "off"))
 			sm.SetManualRemergeMode(stringFromCfg(c.Master, "manual_remerge_mode", "instant"))
 			sm.SetEnableRemergeChecksums(boolFromCfg(c.Master, "remerge_checksums", false))
-			sm.SetRemergeFlowControl(
-				intFromCfg(c.Master, "remerge_pause_threshold", 250),
-				intFromCfg(c.Master, "remerge_resume_threshold", 50),
-			)
-			configureBackgroundRemerge(sm, c.Master)
+			warnDeprecatedMasterRemergeKeys(c.Master)
 			if err := sm.ConfigureAuthAllowlist(stringSliceFromCfg(c.Master, "slave_allowlist")); err != nil {
 				log.Printf("[REHASH] invalid master.slave_allowlist: %v", err)
 			}
@@ -558,35 +529,33 @@ func startSlave(cfg *core.Config) {
 	timeout := intFromCfg(slaveCfg, "timeout", 60)
 	ignorePartialRemerge := boolFromCfg(slaveCfg, "ignore_partial_remerge", false)
 	transferBufferSize := intFromCfg(slaveCfg, "transfer_buffer_size", 0)
-	remergeDelayMS := intFromCfg(slaveCfg, "remerge_delay_ms", 0)
-	remergeEntryYieldEvery := intFromCfg(slaveCfg, "remerge_entry_yield_every", 0)
-	remergeEntryYieldMS := intFromCfg(slaveCfg, "remerge_entry_yield_ms", 0)
-	remergePauseOnActiveTransfers := intFromCfg(slaveCfg, "remerge_pause_on_active_transfers", 0)
+	warnDeprecatedConfigKeys("slave", slaveCfg, map[string]string{
+		"remerge_delay_ms":                  "move it to master slaves[].remerge.jobs[].delay_ms",
+		"remerge_pause_on_active_transfers": "move it to master slaves[].remerge.jobs[].pause_on_active_transfers",
+		"remerge_entry_yield_every":         "remove it; delay_ms now also yields inside very large directories",
+		"remerge_entry_yield_ms":            "remove it; delay_ms now also yields inside very large directories",
+	})
 
-	log.Printf("[STARTUP] Slave mode [name=%s] [master=%s:%d] [roots=%v] [mounted_roots=%v] [bind_ip=%s] [pasv=%d-%d] [remerge_delay_ms=%d] [remerge_entry_yield_every=%d] [remerge_entry_yield_ms=%d] [remerge_pause_on_active_transfers=%d]",
-		name, masterHost, masterPort, roots, mountedRoots, bindIP, pasvMin, pasvMax, remergeDelayMS, remergeEntryYieldEvery, remergeEntryYieldMS, remergePauseOnActiveTransfers)
+	log.Printf("[STARTUP] Slave mode [name=%s] [master=%s:%d] [roots=%v] [mounted_roots=%v] [bind_ip=%s] [pasv=%d-%d]",
+		name, masterHost, masterPort, roots, mountedRoots, bindIP, pasvMin, pasvMax)
 
 	s := slave.NewSlave(slave.SlaveConfig{
-		Name:                          name,
-		MasterHost:                    masterHost,
-		MasterPort:                    masterPort,
-		Roots:                         roots,
-		MountedRoots:                  mountedRoots,
-		PasvPortMin:                   pasvMin,
-		PasvPortMax:                   pasvMax,
-		TLSEnabled:                    cfg.TLSEnabled,
-		TLSCert:                       cfg.TLSCert,
-		TLSKey:                        cfg.TLSKey,
-		BindIP:                        bindIP,
-		Timeout:                       timeout,
-		IgnorePartialRemerge:          ignorePartialRemerge,
-		TransferBufferSize:            transferBufferSize,
-		FreeSpaceMB:                   cfg.FreeSpaceMB,
-		RemergeDelayMS:                remergeDelayMS,
-		RemergeEntryYieldEvery:        remergeEntryYieldEvery,
-		RemergeEntryYieldMS:           remergeEntryYieldMS,
-		RemergePauseOnActiveTransfers: remergePauseOnActiveTransfers,
-		Debug:                         cfg.Debug,
+		Name:                 name,
+		MasterHost:           masterHost,
+		MasterPort:           masterPort,
+		Roots:                roots,
+		MountedRoots:         mountedRoots,
+		PasvPortMin:          pasvMin,
+		PasvPortMax:          pasvMax,
+		TLSEnabled:           cfg.TLSEnabled,
+		TLSCert:              cfg.TLSCert,
+		TLSKey:               cfg.TLSKey,
+		BindIP:               bindIP,
+		Timeout:              timeout,
+		IgnorePartialRemerge: ignorePartialRemerge,
+		TransferBufferSize:   transferBufferSize,
+		FreeSpaceMB:          cfg.FreeSpaceMB,
+		Debug:                cfg.Debug,
 	})
 
 	// Boot blocks until disconnected
@@ -631,25 +600,66 @@ func boolFromCfg(m map[string]interface{}, key string, def bool) bool {
 	return b
 }
 
-func configureBackgroundRemerge(sm *master.SlaveManager, masterCfg map[string]interface{}) {
-	if sm == nil {
+func warnDeprecatedMasterRemergeKeys(masterCfg map[string]interface{}) {
+	warnDeprecatedConfigKeys("master", masterCfg, map[string]string{
+		"remerge_pause_threshold":                "remove it; remerge queue flow-control is automatic",
+		"remerge_resume_threshold":               "remove it; remerge queue flow-control is automatic",
+		"background_remerge_interval_seconds":    "move background remerge to slaves[].remerge.jobs[].interval_seconds",
+		"background_remerge_path":                "move background remerge to slaves[].remerge.jobs[].path",
+		"background_remerge_paths":               "move background remerge to slaves[].remerge.jobs[]",
+		"background_remerge_skip_busy_slaves":    "move it to slaves[].remerge.jobs[].skip_busy_slave",
+		"background_remerge_start_delay_seconds": "remove it; background remerge uses a fixed 5m startup delay",
+		"background_remerge_stagger_seconds":     "remove it; background remerge runs one slave/job at a time with a fixed 60s gap",
+		"background_remerge_roots_only":          "remove it; use slaves[].remerge.jobs[].roots",
+	})
+}
+
+func slavePoliciesFromConfig(slaves []core.SlavePolicyConfig) map[string]master.SlaveRoutePolicy {
+	policies := make(map[string]master.SlaveRoutePolicy, len(slaves))
+	for _, sp := range slaves {
+		if strings.TrimSpace(sp.Name) == "" {
+			continue
+		}
+		policy := master.SlaveRoutePolicy{
+			Sections: sp.Sections,
+			Paths:    sp.Paths,
+			Weight:   sp.Weight,
+			ReadOnly: sp.ReadOnly,
+		}
+		for _, job := range sp.Remerge.Jobs {
+			policy.RemergeJobs = append(policy.RemergeJobs, master.SlaveRemergeJobPolicy{
+				Name:                   job.Name,
+				Enabled:                job.Enabled,
+				Interval:               time.Duration(job.IntervalSeconds) * time.Second,
+				Path:                   job.Path,
+				Roots:                  job.Roots,
+				MountPaths:             job.MountPaths,
+				ExcludePaths:           job.ExcludePaths,
+				DelayMS:                job.DelayMS,
+				PauseOnActiveTransfers: job.PauseOnActiveTransfers,
+				SkipBusy:               job.SkipBusySlave,
+			})
+		}
+		policies[sp.Name] = policy
+	}
+	return policies
+}
+
+func warnDeprecatedConfigKeys(section string, cfg map[string]interface{}, keys map[string]string) {
+	if len(cfg) == 0 || len(keys) == 0 {
 		return
 	}
-	intervalSeconds := intFromCfg(masterCfg, "background_remerge_interval_seconds", 0)
-	startDelaySeconds := intFromCfg(masterCfg, "background_remerge_start_delay_seconds", 300)
-	staggerSeconds := intFromCfg(masterCfg, "background_remerge_stagger_seconds", 60)
-	basePath := stringFromCfg(masterCfg, "background_remerge_path", "/")
-	rootsOnly := boolFromCfg(masterCfg, "background_remerge_roots_only", false)
-	skipBusy := boolFromCfg(masterCfg, "background_remerge_skip_busy_slaves", true)
-
-	sm.ConfigureBackgroundRemerge(
-		time.Duration(intervalSeconds)*time.Second,
-		time.Duration(startDelaySeconds)*time.Second,
-		time.Duration(staggerSeconds)*time.Second,
-		basePath,
-		rootsOnly,
-		skipBusy,
-	)
+	names := make([]string, 0, len(keys))
+	for key := range keys {
+		names = append(names, key)
+	}
+	sort.Strings(names)
+	for _, key := range names {
+		if _, ok := cfg[key]; !ok {
+			continue
+		}
+		log.Printf("[CONFIG] %s.%s is deprecated and ignored; %s.", section, key, keys[key])
+	}
 }
 
 func parseSlaveRoots(slaveCfg map[string]interface{}) ([]string, []slave.MountedRoot) {

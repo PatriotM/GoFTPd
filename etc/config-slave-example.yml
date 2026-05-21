@@ -69,18 +69,4 @@ slave:
   timeout: 60
   ignore_partial_remerge: false
 
-  # Keep this at 0 for fast local disks. For slow/NFS/archive disks, set 5-25
-  # so SITE REMERGE yields between directories instead of pinning one disk.
-  remerge_delay_ms: 0
-
-  # Optional inner scan yield for huge directories. Example for low-impact
-  # archive scans: remerge_entry_yield_every: 100 and remerge_entry_yield_ms: 10.
-  remerge_entry_yield_every: 0
-  remerge_entry_yield_ms: 0
-
-  # Optional safety valve for busy/slower disks. If >0, remerge pauses while
-  # this many uploads/downloads are active on the slave. Example: 1 pauses
-  # remerge while any transfer is running.
-  remerge_pause_on_active_transfers: 0
-
   transfer_buffer_size: 262144

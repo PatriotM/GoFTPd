@@ -206,9 +206,9 @@ func TestProcessRemergePrunesGhostChildrenPerScannedDirectory(t *testing.T) {
 	sm.vfs.AddFile("/X265/ghost", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
 	sm.vfs.AddFile("/X265/ghost/file.r00", VFSFile{Size: 100, Seen: true, SlaveName: "LOCAL"})
 
-	sm.vfs.MarkAllUnseen("LOCAL")
 	sm.ProcessRemerge(rs, &protocol.AsyncResponseRemerge{
-		Path: "/X265",
+		Path:          "/X265",
+		PruneChildren: true,
 		Files: []protocol.LightRemoteInode{
 			{Name: "keep", IsDir: true, LastModified: time.Now().Unix()},
 		},
@@ -225,26 +225,97 @@ func TestProcessRemergePrunesGhostChildrenPerScannedDirectory(t *testing.T) {
 	}
 }
 
-func TestConfigureBackgroundRemergeNormalizesConfig(t *testing.T) {
+func TestProcessRemergeKeepsSkippedMountedSubtree(t *testing.T) {
+	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
+	rs := NewRemoteSlave("LOCAL", nil, nil, 60*time.Second, nil)
+
+	sm.vfs.AddFile("/ARCHiVE", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.AddFile("/ARCHiVE/release", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.AddFile("/X265", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+
+	sm.ProcessRemerge(rs, &protocol.AsyncResponseRemerge{
+		Path: "/",
+		Files: []protocol.LightRemoteInode{
+			{Name: "X265", IsDir: true, LastModified: time.Now().Unix()},
+		},
+		SkippedSubtrees: []string{"/ARCHiVE"},
+	})
+
+	if got := sm.vfs.GetFile("/ARCHiVE"); got == nil {
+		t.Fatalf("expected skipped archive mount to remain")
+	}
+	if got := sm.vfs.GetFile("/ARCHiVE/release"); got == nil {
+		t.Fatalf("expected skipped archive subtree to remain")
+	}
+}
+
+func TestSetSlavePoliciesConfiguresBackgroundRemergeJobs(t *testing.T) {
 	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
 
-	sm.ConfigureBackgroundRemerge(time.Hour, time.Minute, time.Second, "ARCHiVE", false, true)
+	sm.SetSlavePolicies(map[string]SlaveRoutePolicy{
+		"LOCAL": {
+			RemergeJobs: []SlaveRemergeJobPolicy{
+				{
+					Name:                   "site",
+					Enabled:                true,
+					Interval:               time.Hour,
+					Roots:                  "normal",
+					Path:                   "SITE",
+					ExcludePaths:           []string{"ARCHiVE"},
+					DelayMS:                10,
+					PauseOnActiveTransfers: 1,
+					SkipBusy:               true,
+				},
+				{
+					Name:       "archive",
+					Enabled:    true,
+					Interval:   2 * time.Hour,
+					Roots:      "mounted",
+					MountPaths: []string{"ARCHiVE", "ARCHiVE"},
+				},
+			},
+		},
+	})
 	cfg := sm.backgroundRemergeSnapshot()
 
-	if cfg.interval != time.Hour {
-		t.Fatalf("interval = %s, want 1h", cfg.interval)
+	if cfg.initialDelay != 5*time.Minute {
+		t.Fatalf("initialDelay = %s, want 5m", cfg.initialDelay)
 	}
-	if cfg.initialDelay != time.Minute {
-		t.Fatalf("initialDelay = %s, want 1m", cfg.initialDelay)
+	if cfg.stagger != 60*time.Second {
+		t.Fatalf("stagger = %s, want 60s", cfg.stagger)
 	}
-	if cfg.stagger != time.Second {
-		t.Fatalf("stagger = %s, want 1s", cfg.stagger)
+	if len(cfg.jobs) != 2 {
+		t.Fatalf("jobs = %+v, want 2 jobs", cfg.jobs)
 	}
-	if cfg.basePath != "/ARCHiVE" {
-		t.Fatalf("basePath = %q, want /ARCHiVE", cfg.basePath)
+	if cfg.jobs[0].slaveName != "LOCAL" || cfg.jobs[0].basePath != "/SITE" || cfg.jobs[0].rootMode != "normal" {
+		t.Fatalf("first job = %+v, want LOCAL normal /SITE", cfg.jobs[0])
 	}
-	if !cfg.skipBusy {
-		t.Fatalf("expected skipBusy to be enabled")
+	if len(cfg.jobs[0].excludePaths) != 1 || cfg.jobs[0].excludePaths[0] != "/ARCHiVE" {
+		t.Fatalf("first job excludePaths = %+v, want /ARCHiVE", cfg.jobs[0].excludePaths)
+	}
+	if cfg.jobs[0].delayMS != 10 || cfg.jobs[0].pauseOnActiveTransfers != 1 || !cfg.jobs[0].skipBusy {
+		t.Fatalf("first job throttle fields = %+v", cfg.jobs[0])
+	}
+	if cfg.jobs[1].rootMode != "mounted" || len(cfg.jobs[1].mountPaths) != 1 || cfg.jobs[1].mountPaths[0] != "/ARCHiVE" {
+		t.Fatalf("second job = %+v, want mounted /ARCHiVE", cfg.jobs[1])
+	}
+}
+
+func TestProcessRemergeAddsReportedDirectory(t *testing.T) {
+	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
+	rs := NewRemoteSlave("LOCAL", nil, nil, 60*time.Second, nil)
+
+	sm.ProcessRemerge(rs, &protocol.AsyncResponseRemerge{
+		Path:         "/ARCHiVE",
+		LastModified: 123,
+	})
+
+	got := sm.vfs.GetFile("/ARCHiVE")
+	if got == nil || !got.IsDir {
+		t.Fatalf("expected reported directory to be added, got %+v", got)
+	}
+	if got.LastModified != 123 {
+		t.Fatalf("LastModified = %d, want 123", got.LastModified)
 	}
 }
 

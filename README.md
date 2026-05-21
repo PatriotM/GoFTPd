@@ -258,28 +258,54 @@ large mergerfs pool layered over NFS.
 
 On a full remerge, GoFTPd scans normal `roots` first and only scans
 `mounted_roots` after that. That keeps the live site tree responsive while the
-larger archive trees catch up in the background, which makes `mounted_roots`
+larger mounted trees catch up in the background, which makes `mounted_roots`
 especially suitable for archive-style storage.
 
-For slower local disks, NFS mounts, or archive disks, throttle slave remerge
-instead of letting a full scan pin one disk at 100% iowait:
+When mounted roots exist, remerge treats those virtual mount paths as owned by
+the mounted roots. A root scan will not also descend into `/ARCHiVE` through the
+catch-all site root. Manual `SITE REMERGE <slave|*>` runs the configured
+`slaves[].remerge.jobs[]` for the selected slave(s), so mounted paths are scanned
+only when the matching config job says so. That avoids duplicate walks.
+
+Remerge throttling is configured on the master per slave, not inside the slave
+config. Keep the slave config focused on physical roots and connection details;
+put scan behavior in `slaves[].remerge.jobs[]` so the master controls what gets
+indexed and how aggressively it is walked.
 
 ```yml
-slave:
-  remerge_delay_ms: 10
-  remerge_entry_yield_every: 100
-  remerge_entry_yield_ms: 10
-  remerge_pause_on_active_transfers: 1
+slaves:
+  - name: "LOCAL"
+    remerge:
+      jobs:
+        - name: "site_root"
+          enabled: true
+          interval_seconds: 21600
+          roots: "normal"
+          path: "/"
+          exclude_paths:
+            - "/ARCHiVE"
+          delay_ms: 10
+          pause_on_active_transfers: 1
+          skip_busy_slave: true
+
+        - name: "mounted_roots"
+          enabled: true
+          interval_seconds: 43200
+          roots: "mounted"
+          mount_paths: ["*"]
+          delay_ms: 25
+          pause_on_active_transfers: 1
+          skip_busy_slave: true
 ```
 
-`remerge_delay_ms` sleeps after each streamed directory. Keep it at `0` on fast
-local disks; try `5-25` on slower disks. `remerge_entry_yield_*` also yields
-inside huge directories while entries are being stat'd, which matters for large
-archive roots. `remerge_pause_on_active_transfers` pauses remerge while the
+`roots: "normal"` scans only the slave's normal `roots`. `roots: "mounted"`
+scans only `mounted_roots`. `mount_paths: ["*"]` means all mounted root
+mount paths reported by that slave. `delay_ms` sleeps after each streamed
+directory and automatically yields inside very large directories too; try
+`5-25` on slower disks. `pause_on_active_transfers` pauses remerge while the
 slave is serving uploads/downloads, so live traffic gets priority over
 background scans. If a remerge is already hurting the box, `SITE REMERGESTOP
-<slave|*>` asks active slave remerge jobs to abort without restarting the
-daemon.
+<slave|*>` asks active slave remerge jobs to abort without restarting the daemon.
 
 On a slave host, the role-specific settings you normally care about are:
 
@@ -329,28 +355,82 @@ current VFS entry does not already have a stored checksum. Unchanged files with
 preserved checksum state should not be re-CRC'd just because the master was
 restarted.
 
-For sites where files can disappear outside GoFTPd, for example external archive
-or cleanup scripts, enable the master's slow background VFS patrol:
+For sites where files can disappear outside GoFTPd, for example external move
+or cleanup scripts, configure slow background VFS jobs under the master
+`slaves:` policy for each slave that should be kept in sync. If a slave has no
+`remerge.jobs`, it still connects and serves normally, but the master logs that
+background VFS sync is disabled for that slave.
+
+Each job is explicit about which physical root class it scans:
+
+| Goal | Job settings | What it scans |
+| --- | --- | --- |
+| Normal site cleanup | `roots: "normal"`, `path: "/"` | Normal slave `roots` only |
+| Mounted path cleanup | `roots: "mounted"`, `mount_paths: ["*"]` | All configured `mounted_roots` mount paths for that slave |
+| One specific mounted path | `roots: "mounted"`, `mount_paths: ["/ARCHiVE"]` | Only that mounted VFS path |
+| Full manual-style scan | `roots: "all"`, `path: "/"` | Normal roots and mounted roots |
+
+```yml
+slaves:
+  - name: "LOCAL"
+    remerge:
+      jobs:
+        - name: "live_site"
+          enabled: true
+          interval_seconds: 21600
+          roots: "normal"
+          path: "/"
+          exclude_paths:
+            - "/ARCHiVE"
+          delay_ms: 10
+          pause_on_active_transfers: 1
+          skip_busy_slave: true
+
+        - name: "mounted_storage"
+          enabled: true
+          interval_seconds: 43200
+          roots: "mounted"
+          mount_paths: ["*"]
+          delay_ms: 25
+          pause_on_active_transfers: 1
+          skip_busy_slave: true
+```
+
+The master only schedules the jobs and runs one slave/job path at a time. Jobs
+start 5 minutes after boot, then wait 60 seconds between paths from the same
+mounted-root job. As each scanned directory reports back, stale direct VFS
+children are pruned right away, so old directories do not need to wait for the
+whole tree to finish.
+
+For the common setup where normal releases live in `roots` and slower disks are
+configured as `mounted_roots` at `/ARCHiVE`, use two jobs like above: one
+`roots: "normal"` job with `/ARCHiVE` in `exclude_paths`, and one
+`roots: "mounted"` job with `mount_paths: ["*"]`. That keeps the live site
+responsive and still lets mounted storage get indexed by its own separate patrol.
+
+If your config was created before this cleanup, remove these old remerge keys:
 
 ```yml
 master:
-  background_remerge_interval_seconds: 21600 # every 6 hours, 0 disables
-  background_remerge_start_delay_seconds: 300
-  background_remerge_stagger_seconds: 60
+  remerge_pause_threshold: 250
+  remerge_resume_threshold: 50
+  background_remerge_interval_seconds: 21600
   background_remerge_path: "/"
-  background_remerge_roots_only: false # keep false when the goal is stale cleanup
+  background_remerge_paths: ["/", "/ARCHiVE"]
   background_remerge_skip_busy_slaves: true
+  background_remerge_start_delay_seconds: 900
+  background_remerge_stagger_seconds: 300
+  background_remerge_roots_only: false
 
 slave:
   remerge_delay_ms: 10
+  remerge_pause_on_active_transfers: 1
   remerge_entry_yield_every: 100
   remerge_entry_yield_ms: 10
-  remerge_pause_on_active_transfers: 1
 ```
 
-The master only schedules the patrol; the slave-side knobs make it gentle. As
-each scanned directory reports back, stale direct VFS children are pruned right
-away, so old directories do not need to wait for the whole tree to finish.
+They are ignored by current GoFTPd. Keep background sync and remerge throttling
+only in `slaves[].remerge.jobs[]`.
 
 ## ACL Rules
 
@@ -597,7 +677,7 @@ Implemented daemon SITE commands include:
 |------|----------|
 | Info | `HELP`, `RULES`, `WHO`, `SWHO`, `BW`, `USERS`, `USER`, `SEEN`, `LASTLOGIN`, `GROUPS`, `GROUP`, `GINFO`, `GRPNFO`, `TRAFFIC` |
 | Users/groups | `ADDUSER`, `GADDUSER`, `DELUSER`, `READD`, `RENUSER`, `CHANGE`, `CHPASS`, `CHRATIO`, `CHNUMLOGINS`, `CHMAXSIM`, `CHWKLYALLOTMENT`, `CHUPLOADSLOTS`, `CHDOWNLOADSLOTS`, `GROUPSLOTS`, `GROUPSIMULT`, `ADDIP`, `DELIP`, `SELFIP`, `BAN`, `UNBAN`, `FLAGS`, `CHGRP`, `CHPGRP`, `TAGLINE`, `GADMIN`, `GRPADD`, `GRPDEL`, `GRP` |
-| Release/admin | `NUKE`, `UNNUKE`, `NUKES`, `UNDUPE`, `WIPE`, `KICK`, `REHASH`, `REMERGE`, `CHMOD` |
+| Release/admin | `NUKE`, `UNNUKE`, `NUKES`, `UNDUPE`, `WIPE`, `KICK`, `REHASH`, `REMERGE`, `REMERGESTOP`, `CHMOD` |
 | Search/rescan | `SEARCH`, `RACE`, `RESCAN`, `XDUPE` |
 | Stats/traffic | `ALLUP`, `ALLDN`, `WKUP`, `WKDN`, `DAYUP`, `DAYDN`, `MONTHUP`, `MONTHDN` |
 | IRC/sitebot | `INVITE`, `BLOWFISH`, `IRC` |
@@ -753,9 +833,9 @@ including affils, PRE settings, slave policies, lookup toggles, TLS enforcement
 flags, IP restrictions, limits, show_diz map, nuke style, and debug.
 
 `SITE RESCAN <path|path/*>` checks release files against SFV data. `SITE
-REMERGE <slave|*>` asks connected slave(s) to rescan their filesystem roots and
-refresh the master's VFS index. Its online/offline behavior is controlled by
-`master.manual_remerge_mode`.
+REMERGE <slave|*>` runs the configured `slaves[].remerge.jobs[]` for connected
+slave(s) and refreshes the master's VFS index. Its online/offline behavior is
+controlled by `master.manual_remerge_mode`.
 
 The sitebot also supports SIGHUP reload for channels, encryption keys, theme,
 sections, plugin config, and announce routing without dropping the IRC

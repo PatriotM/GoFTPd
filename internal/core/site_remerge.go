@@ -2,13 +2,13 @@ package core
 
 import (
 	"fmt"
-	"path"
 	"strings"
 )
 
 func (s *Session) HandleSiteRemerge(args []string) bool {
-	if len(args) < 1 || len(args) > 2 {
-		fmt.Fprintf(s.Conn, "501 Usage: SITE REMERGE <slave|*> [SITE|<path>]\r\n")
+	target, err := parseSiteRemergeArgs(args)
+	if err != nil {
+		fmt.Fprintf(s.Conn, "501 Usage: SITE REMERGE <slave|*> (%v)\r\n", err)
 		return false
 	}
 	if s.Config.Mode != "master" || s.MasterManager == nil {
@@ -21,60 +21,42 @@ func (s *Session) HandleSiteRemerge(args []string) bool {
 		return false
 	}
 
-	target := strings.TrimSpace(args[0])
-	basePath := "/"
-	rootsOnly := false
-	scoped := false
-	if len(args) == 2 {
-		scoped = true
-		scopeArg := strings.TrimSpace(args[1])
-		if strings.EqualFold(scopeArg, "SITE") {
-			basePath = "/"
-			rootsOnly = true
-		} else {
-			basePath = path.Clean("/" + scopeArg)
-		}
-	}
 	if target == "*" {
-		var started int
-		var errs []string
-		if scoped {
-			started, errs = bridge.StartRemergeAllPath(basePath, rootsOnly)
-		} else {
-			started, errs = bridge.StartRemergeAll()
-		}
+		started, errs := bridge.StartRemergeAllJobs()
 		if started == 0 && len(errs) > 0 {
 			fmt.Fprintf(s.Conn, "550 REMERGE failed: %s\r\n", strings.Join(errs, "; "))
 			return false
 		}
 		if len(errs) > 0 {
-			fmt.Fprintf(s.Conn, "200 REMERGE started for %d slave(s); skipped: %s\r\n", started, strings.Join(errs, "; "))
+			fmt.Fprintf(s.Conn, "200 REMERGE started %d configured scan(s); skipped: %s\r\n", started, strings.Join(errs, "; "))
 			return false
 		}
-		fmt.Fprintf(s.Conn, "200 REMERGE started for %d slave(s).\r\n", started)
+		fmt.Fprintf(s.Conn, "200 REMERGE started %d configured scan(s).\r\n", started)
 		return false
 	}
 
-	var err error
-	if scoped {
-		err = bridge.StartRemergePath(target, basePath, rootsOnly)
-	} else {
-		err = bridge.StartRemerge(target)
-	}
-	if err != nil {
-		fmt.Fprintf(s.Conn, "550 REMERGE failed: %v\r\n", err)
+	started, errs := bridge.StartRemergeJobs(target)
+	if started == 0 && len(errs) > 0 {
+		fmt.Fprintf(s.Conn, "550 REMERGE failed: %s\r\n", strings.Join(errs, "; "))
 		return false
 	}
-	if scoped {
-		if rootsOnly {
-			fmt.Fprintf(s.Conn, "200 REMERGE started for %s (site roots only).\r\n", target)
-			return false
-		}
-		fmt.Fprintf(s.Conn, "200 REMERGE started for %s at %s.\r\n", target, basePath)
+	if len(errs) > 0 {
+		fmt.Fprintf(s.Conn, "200 REMERGE started for %s (%d configured scan(s)); skipped: %s\r\n", target, started, strings.Join(errs, "; "))
 		return false
 	}
-	fmt.Fprintf(s.Conn, "200 REMERGE started for %s.\r\n", target)
+	fmt.Fprintf(s.Conn, "200 REMERGE started for %s (%d configured scan(s)).\r\n", target, started)
 	return false
+}
+
+func parseSiteRemergeArgs(args []string) (target string, err error) {
+	if len(args) != 1 {
+		return "", fmt.Errorf("invalid argument count")
+	}
+	target = strings.TrimSpace(args[0])
+	if target == "" {
+		return "", fmt.Errorf("missing target")
+	}
+	return target, nil
 }
 
 func (s *Session) HandleSiteRemergeStop(args []string) bool {

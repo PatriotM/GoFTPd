@@ -66,22 +66,6 @@ master:
                                 # files missing a stored checksum in the VFS.
                                 # Leave this off for imported/legacy trees unless you
                                 # explicitly want that extra verification pass.
-  remerge_pause_threshold: 250  # Pause slave-side remerge streaming when the master's
-                                # pending per-slave remerge queue grows past this size.
-  remerge_resume_threshold: 50  # Resume slave-side remerge streaming when the master's
-                                # pending per-slave remerge queue falls back to this size.
-  background_remerge_interval_seconds: 0 # Optional slow VFS patrol. 0 disables it.
-                                # When enabled, the master periodically starts a
-                                # background SITE REMERGE so deleted physical
-                                # files/dirs are pruned from userdata/vfs.dat.
-  background_remerge_start_delay_seconds: 300 # Wait after boot before first patrol.
-  background_remerge_stagger_seconds: 60 # Delay between starting each slave patrol.
-  background_remerge_path: "/"     # Scope to remerge, e.g. "/" or "/ARCHiVE".
-  background_remerge_roots_only: false # Keep false for stale cleanup. true skips mounted_roots.
-  background_remerge_skip_busy_slaves: true # Skip starting patrol on a slave
-                                # that already has active transfers.
-
-
 # =============================================================================
 #  Slave block — used when mode: slave
 #  This is the only role-specific block a slave needs. On a master-only box,
@@ -121,19 +105,6 @@ slave:
                                 # Keep this aligned with master.heartbeat_timeout.
   ignore_partial_remerge: false # If true, the slave ignores partial remerge requests
                                 # and always performs a full scan.
-  remerge_delay_ms: 0           # Optional sleep after each scanned directory.
-                                # Set 5-25 on slow/NFS/archive disks if remerge
-                                # causes high iowait.
-  remerge_entry_yield_every: 0  # Optional inner scan yield. If >0, sleep during
-                                # large directory scans after this many entries.
-                                # Example: 100.
-  remerge_entry_yield_ms: 0     # Sleep length for remerge_entry_yield_every.
-                                # Example: 5-25 on slow disks.
-  remerge_pause_on_active_transfers: 0
-                                # Optional safety valve for slow disks. If >0,
-                                # pause remerge while this many uploads/downloads
-                                # are active on the slave. Example: 1 pauses
-                                # remerge while any transfer is running.
   transfer_buffer_size: 262144  # Optional slave data-transfer buffer size in bytes.
                                 # Default is 262144 (256 KiB). Minimum is 32768.
 
@@ -166,6 +137,26 @@ slave:
 #     sections: ["TV-1080P", "TV-720P"]
 #     paths: ["/TV-*/*"]
 #     weight: 2
+#     remerge:
+#       jobs:
+#         - name: "site_root"
+#           enabled: true
+#           interval_seconds: 21600
+#           roots: "normal"          # normal slave.roots only
+#           path: "/"
+#           exclude_paths:
+#             - "/ARCHiVE"           # Example: do not walk this VFS path in the site job
+#           delay_ms: 10
+#           pause_on_active_transfers: 1
+#           skip_busy_slave: true
+#         - name: "mounted_roots"
+#           enabled: true
+#           interval_seconds: 43200
+#           roots: "mounted"         # slave.mounted_roots only
+#           mount_paths: ["*"]       # all mounted_roots mount_path values for this slave
+#           delay_ms: 25
+#           pause_on_active_transfers: 1
+#           skip_busy_slave: true
 #   - name: "SLAVE2"
 #     sections: ["MP3", "FLAC"]
 #     weight: 1

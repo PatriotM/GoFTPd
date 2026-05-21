@@ -84,12 +84,64 @@ func TestScanTargetsForBaseIncludeArchiveMountAtRoot(t *testing.T) {
 		},
 	}
 
-	targets := s.scanTargetsForBase("/", false)
+	targets := s.scanTargetsForBase("/", "all")
 	if len(targets) != 2 {
 		t.Fatalf("expected 2 scan targets, got %d", len(targets))
 	}
 	if targets[0].virtualBase != "/" || targets[1].virtualBase != "/ARCHiVE" {
 		t.Fatalf("expected site root first at / remerge, got %+v", targets)
+	}
+	if len(targets[0].skipVirtualSubtrees) != 1 || targets[0].skipVirtualSubtrees[0] != "/ARCHiVE" {
+		t.Fatalf("expected catch-all root to skip archive subtree, got %+v", targets[0].skipVirtualSubtrees)
+	}
+}
+
+func TestScanTargetsForSiteOnlyRootSkipsMountedRoots(t *testing.T) {
+	s := &Slave{
+		roots: []MountedRoot{
+			{Path: "/site", MountPath: "/"},
+			{Path: "/archive1", MountPath: "/ARCHiVE"},
+		},
+	}
+
+	targets := s.scanTargetsForBase("/", "normal")
+	if len(targets) != 1 {
+		t.Fatalf("expected only normal root for site-only remerge, got %+v", targets)
+	}
+	if targets[0].virtualBase != "/" {
+		t.Fatalf("expected site root, got %+v", targets[0])
+	}
+	if len(targets[0].skipVirtualSubtrees) != 1 || targets[0].skipVirtualSubtrees[0] != "/ARCHiVE" {
+		t.Fatalf("expected site root to protect archive subtree, got %+v", targets[0].skipVirtualSubtrees)
+	}
+}
+
+func TestScanTargetsForArchiveScopeSkipsCatchAllRoot(t *testing.T) {
+	s := &Slave{
+		roots: []MountedRoot{
+			{Path: "/site", MountPath: "/"},
+			{Path: "/archive1", MountPath: "/ARCHiVE"},
+			{Path: "/archive2", MountPath: "/ARCHiVE"},
+		},
+	}
+
+	targets := s.scanTargetsForBase("/ARCHiVE", "mounted")
+	if len(targets) != 2 {
+		t.Fatalf("expected only dedicated archive roots, got %+v", targets)
+	}
+	for _, target := range targets {
+		if target.root.MountPath != "/ARCHiVE" {
+			t.Fatalf("did not expect catch-all root in archive scoped remerge, got %+v", targets)
+		}
+	}
+}
+
+func TestSkippedRemergeSubtree(t *testing.T) {
+	if !isSkippedRemergeSubtree("/ARCHiVE/TV/release", []string{"/ARCHiVE"}) {
+		t.Fatalf("expected archive child to be skipped")
+	}
+	if isSkippedRemergeSubtree("/ARCHiVE2/TV/release", []string{"/ARCHiVE"}) {
+		t.Fatalf("did not expect similarly named sibling to be skipped")
 	}
 }
 
@@ -98,7 +150,7 @@ func TestWaitForRemergeSlotStopsOnAbort(t *testing.T) {
 	s.online.Store(true)
 	s.remergeAbort.Store(true)
 
-	if s.waitForRemergeSlot() {
+	if s.waitForRemergeSlot(remergeScanOptions{}) {
 		t.Fatalf("expected remerge slot wait to stop when abort is requested")
 	}
 }

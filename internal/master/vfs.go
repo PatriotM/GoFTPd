@@ -364,9 +364,9 @@ func (vfs *VirtualFileSystem) PurgeUnseenSubtree(slaveName, rootPath string) {
 	}
 }
 
-// PurgeUnseenChildren removes stale direct children for a remerged directory
-// immediately, instead of waiting for the slave's full remerge to complete.
-func (vfs *VirtualFileSystem) PurgeUnseenChildren(slaveName, dirPath string) {
+// PurgeMissingChildren removes stale direct children for a remerged directory
+// immediately, using the directory snapshot reported by the slave.
+func (vfs *VirtualFileSystem) PurgeMissingChildren(slaveName, dirPath string, present map[string]struct{}, protectedSubtrees []string) {
 	vfs.mu.Lock()
 	defer vfs.mu.Unlock()
 
@@ -382,7 +382,13 @@ func (vfs *VirtualFileSystem) PurgeUnseenChildren(slaveName, dirPath string) {
 		if file == nil {
 			continue
 		}
-		if file.SlaveName != slaveName || file.Seen {
+		if file.SlaveName != slaveName {
+			continue
+		}
+		if _, ok := present[childPath]; ok {
+			continue
+		}
+		if isProtectedRemergeChild(childPath, protectedSubtrees) {
 			continue
 		}
 		changed = vfs.deletePathLocked(childPath) || changed
@@ -390,6 +396,20 @@ func (vfs *VirtualFileSystem) PurgeUnseenChildren(slaveName, dirPath string) {
 	if changed {
 		vfs.markPersistDirtyLocked()
 	}
+}
+
+func isProtectedRemergeChild(childPath string, protectedSubtrees []string) bool {
+	childPath = cleanVFSPath(childPath)
+	for _, protected := range protectedSubtrees {
+		protected = cleanVFSPath(protected)
+		if protected == "" || protected == "." {
+			continue
+		}
+		if childPath == protected || strings.HasPrefix(childPath, protected+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func (vfs *VirtualFileSystem) SetProtectedDirs(paths []string) {

@@ -175,11 +175,29 @@ type InviteRule struct {
 // SlavePolicyConfig defines per-slave routing rules (section affinity + load-balancer weight).
 // Parsed from the master config's `slaves:` list.
 type SlavePolicyConfig struct {
-	Name     string   `yaml:"name"`     // must match slave's registered name
-	Sections []string `yaml:"sections"` // e.g. ["TV-1080P", "MP3"] (case-insensitive)
-	Paths    []string `yaml:"paths"`    // e.g. ["/TV-1080P/*"]
-	Weight   int      `yaml:"weight"`   // default 1, higher = more uploads routed here
-	ReadOnly bool     `yaml:"readonly"` // true = scan/download only; never route uploads here
+	Name     string             `yaml:"name"`     // must match slave's registered name
+	Sections []string           `yaml:"sections"` // e.g. ["TV-1080P", "MP3"] (case-insensitive)
+	Paths    []string           `yaml:"paths"`    // e.g. ["/TV-1080P/*"]
+	Weight   int                `yaml:"weight"`   // default 1, higher = more uploads routed here
+	ReadOnly bool               `yaml:"readonly"` // true = scan/download only; never route uploads here
+	Remerge  SlaveRemergeConfig `yaml:"remerge"`  // master-side background remerge policy for this slave
+}
+
+type SlaveRemergeConfig struct {
+	Jobs []SlaveRemergeJobConfig `yaml:"jobs"`
+}
+
+type SlaveRemergeJobConfig struct {
+	Name                   string   `yaml:"name"`
+	Enabled                bool     `yaml:"enabled"`
+	IntervalSeconds        int      `yaml:"interval_seconds"`
+	Path                   string   `yaml:"path"`
+	Roots                  string   `yaml:"roots"` // normal, mounted, or all
+	MountPaths             []string `yaml:"mount_paths"`
+	ExcludePaths           []string `yaml:"exclude_paths"`
+	DelayMS                int      `yaml:"delay_ms"`
+	PauseOnActiveTransfers int      `yaml:"pause_on_active_transfers"`
+	SkipBusySlave          bool     `yaml:"skip_busy_slave"`
 }
 
 func LoadConfig(filePath string) (*Config, error) {

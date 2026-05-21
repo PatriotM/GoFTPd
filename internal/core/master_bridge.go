@@ -144,19 +144,12 @@ type MasterBridge interface {
 	// SearchDirs searches the master's VFS for directories matching query.
 	SearchDirs(query string, limit int) []VFSSearchResult
 
-	// StartRemerge starts a full background VFS refresh for one slave.
-	StartRemerge(slaveName string) error
+	// StartRemergeJobs starts all configured master-side remerge jobs for one slave.
+	StartRemergeJobs(slaveName string) (started int, errors []string)
 
-	// StartRemergeAll starts a full background VFS refresh for every online slave.
-	StartRemergeAll() (started int, errors []string)
-
-	// StartRemergePath starts a scoped background VFS refresh for one slave.
-	// When rootsOnly is true and basePath is "/", only normal roots are scanned.
-	StartRemergePath(slaveName, basePath string, rootsOnly bool) error
-
-	// StartRemergeAllPath starts a scoped background VFS refresh for every
+	// StartRemergeAllJobs starts configured master-side remerge jobs for every
 	// online slave.
-	StartRemergeAllPath(basePath string, rootsOnly bool) (started int, errors []string)
+	StartRemergeAllJobs() (started int, errors []string)
 
 	// StopRemerge asks a slave to abort its active background VFS refresh.
 	StopRemerge(slaveName string) error

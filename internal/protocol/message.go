@@ -122,9 +122,11 @@ type RootDiskStatus struct {
 }
 
 type AsyncResponseRemerge struct {
-	Path         string
-	Files        []LightRemoteInode
-	LastModified int64
+	Path            string
+	Files           []LightRemoteInode
+	LastModified    int64
+	SkippedSubtrees []string
+	PruneChildren   bool
 }
 
 func (ar *AsyncResponseRemerge) GetIndex() string { return "Remerge" }
