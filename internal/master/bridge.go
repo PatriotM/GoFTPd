@@ -52,7 +52,21 @@ var zipPayloadNameRE = regexp.MustCompile(`(?i)\.(zip|z\d\d)$`)
 const (
 	readFileCacheTTL          = 2 * time.Second
 	liveTransferStatsCacheTTL = 1 * time.Second
+	bridgeTransferBufferSize  = 256 * 1024
 )
+
+var bridgeTransferBufferPool = sync.Pool{
+	New: func() interface{} {
+		buf := make([]byte, bridgeTransferBufferSize)
+		return &buf
+	},
+}
+
+func copyBridgeData(dst io.Writer, src io.Reader) (int64, error) {
+	bufPtr := bridgeTransferBufferPool.Get().(*[]byte)
+	defer bridgeTransferBufferPool.Put(bufPtr)
+	return io.CopyBuffer(dst, src, *bufPtr)
+}
 
 func isZipMainArchivePath(filePath string) bool {
 	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(path.Base(filePath))), ".zip")
@@ -530,13 +544,11 @@ func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group s
 		return 0, 0, fmt.Errorf("receive ack: %w", err)
 	}
 
-	// Bridge: client -> slave with CRC32 calculation
+	// Bridge: client -> slave. The slave calculates and returns the authoritative CRC.
 	bridgeStart := time.Now()
-	h := crc32.NewIEEE()
-	tee := io.TeeReader(clientData, h)
-	written, err := io.Copy(slaveConn, tee)
+	written, err := copyBridgeData(slaveConn, clientData)
 	xferTime := time.Since(bridgeStart).Milliseconds()
-	checksum := h.Sum32()
+	var checksum uint32
 	slaveConn.Close()
 
 	status, statusErr := slave.WaitTransferStatus(transferResp.Info.TransferIndex, 2*time.Hour)
@@ -624,6 +636,9 @@ func (b *Bridge) DownloadFile(filePath string, clientData net.Conn, username, pr
 		return 0, fmt.Errorf("file not found on any available slave: %s", filePath)
 	}
 
+	slave.IncActiveTransfers()
+	defer slave.DecActiveTransfers()
+
 	// Tell slave to listen
 	listenIdx, err := IssueListen(slave, false, false)
 	if err != nil {
@@ -666,7 +681,7 @@ func (b *Bridge) DownloadFile(filePath string, clientData net.Conn, username, pr
 	}
 
 	// Bridge: slave -> client
-	written, err := io.Copy(clientData, slaveConn)
+	written, err := copyBridgeData(clientData, slaveConn)
 	slaveConn.Close()
 	status, statusErr := slave.WaitTransferStatus(transferResp.Info.TransferIndex, 2*time.Hour)
 
@@ -2247,6 +2262,9 @@ func (b *Bridge) SlaveSendPassthrough(filePath string, transferIdx int32, slaveN
 	if slave == nil {
 		return 0, 0, fmt.Errorf("slave %s not found", slaveName)
 	}
+
+	slave.IncActiveTransfers()
+	defer slave.DecActiveTransfers()
 
 	minSpeed, maxSpeed, graceSeconds := b.transferSpeedLimits(username, primaryGroup, filePath, "download")
 	sendIdx, err := IssueSend(slave, filePath, transferType, position, "master", transferIdx, minSpeed, maxSpeed, graceSeconds)

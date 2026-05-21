@@ -1853,7 +1853,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			checksumHash = crc32.NewIEEE()
 			writer = io.MultiWriter(file, checksumHash)
 		}
-		written, err := io.Copy(writer, dataConn)
+		written, err := copyTransferData(writer, dataConn)
 		xferMs := time.Since(start).Milliseconds()
 		file.Close()
 		dataConn.Close()
@@ -2199,7 +2199,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		dataConn = trackTransferConn(s, dataConn, "download")
 
 		start := time.Now()
-		_, err = io.Copy(dataConn, file)
+		_, err = copyTransferData(dataConn, file)
 		xferMs := time.Since(start).Milliseconds()
 		dataConn.Close()
 		if err != nil {

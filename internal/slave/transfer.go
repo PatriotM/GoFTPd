@@ -206,7 +206,10 @@ func (t *Transfer) ReceiveFile(path string, position int64, expectedPeer string)
 
 		n, err := t.conn.Read(buf)
 		if n > 0 {
-			out.Write(buf[:n])
+			if _, werr := out.Write(buf[:n]); werr != nil {
+				cleanupFailedReceive(file, fullPath, position)
+				return t.errorStatus(fmt.Sprintf("write error: %v", werr))
+			}
 			t.mu.Lock()
 			t.transferred += int64(n)
 			t.mu.Unlock()
@@ -332,9 +335,12 @@ func (t *Transfer) SendFile(path string, position int64, expectedPeer string) pr
 
 		n, err := file.Read(buf)
 		if n > 0 {
-			_, werr := writer.Write(buf[:n])
+			written, werr := writer.Write(buf[:n])
 			if werr != nil {
 				return t.errorStatus(fmt.Sprintf("write error: %v", werr))
+			}
+			if written != n {
+				return t.errorStatus("write error: short write")
 			}
 			t.mu.Lock()
 			t.transferred += int64(n)
