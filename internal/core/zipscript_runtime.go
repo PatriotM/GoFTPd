@@ -676,6 +676,9 @@ func dirRaceProgress(bridge MasterBridge, cfg *Config, dirPath string) (totalByt
 	if bridge == nil || cfg == nil {
 		return 0, 0, 0
 	}
+	if !zipscript.RaceStatusEligibleDir(dirPath) || !zipscript.UsesRaceEntry(cfg.Zipscript, dirPath) {
+		return 0, 0, 0
+	}
 	_, _, totalBytes, present, total = raceStatsForDir(bridge, cfg, dirPath)
 	return totalBytes, present, total
 }

@@ -32,6 +32,16 @@ func (s *Session) beginTransferOnSlave(direction, targetPath, slaveName string, 
 	s.stateMu.Unlock()
 }
 
+func (s *Session) attachTransferToSlave(slaveName string, slaveIdx int32) {
+	if s == nil || slaveName == "" || slaveIdx == 0 {
+		return
+	}
+	s.stateMu.Lock()
+	s.TransferSlaveName = slaveName
+	s.TransferSlaveIdx = slaveIdx
+	s.stateMu.Unlock()
+}
+
 func (s *Session) addTransferBytes(n int64) {
 	if s == nil || n <= 0 {
 		return

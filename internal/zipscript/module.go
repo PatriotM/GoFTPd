@@ -952,7 +952,7 @@ func CheckZipIntegrityForDir(cfg Config, dirPath string) bool {
 }
 
 func ShowZipDIZOnCWDForDir(cfg Config, dirPath string) bool {
-	if !UsesZip(cfg, dirPath) || cfg.Zip.CWDDIZInfo == nil {
+	if !UsesZipEntry(cfg, dirPath) || cfg.Zip.CWDDIZInfo == nil {
 		return false
 	}
 	return *cfg.Zip.CWDDIZInfo
@@ -962,10 +962,10 @@ func RaceStatsOnCWDForDir(cfg Config, dirPath string) bool {
 	if !cfg.Enabled {
 		return false
 	}
-	if UsesZip(cfg, dirPath) {
+	if UsesZipEntry(cfg, dirPath) {
 		return cfg.Race.CWDZipRaceStats != nil && *cfg.Race.CWDZipRaceStats
 	}
-	if UsesSFV(cfg, dirPath) {
+	if UsesSFVEntry(cfg, dirPath) {
 		return cfg.Race.CWDRaceStats != nil && *cfg.Race.CWDRaceStats
 	}
 	return false
@@ -991,7 +991,7 @@ func ShowStatusBarForDir(cfg Config, dirPath string) bool {
 	if !*cfg.List.StatusBarEnabled {
 		return false
 	}
-	return UsesRace(cfg, dirPath) || audioStatusBarEligibleDir(cfg, dirPath)
+	return UsesRaceEntry(cfg, dirPath) || audioStatusBarEligibleDir(cfg, dirPath)
 }
 
 func StatusBarDirectoryForDir(cfg Config, dirPath string) bool {
@@ -1010,6 +1010,9 @@ func ShowMissingFilesForDir(cfg Config, dirPath string) bool {
 
 func audioStatusBarEligibleDir(cfg Config, dirPath string) bool {
 	if !cfg.Audio.Enabled {
+		return false
+	}
+	if !UsesReleaseCheckEntry(cfg, dirPath) {
 		return false
 	}
 	section, _ := SectionInfoFromPath(dirPath)

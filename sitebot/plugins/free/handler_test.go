@@ -1,8 +1,11 @@
 package free
 
 import (
+	"strings"
 	"testing"
 	"time"
+
+	"goftpd/sitebot/internal/event"
 )
 
 func TestAggregateNamedGroupSumsMatchingMountPaths(t *testing.T) {
@@ -83,5 +86,55 @@ func TestNewKeepsDiskStatusAcrossPluginReload(t *testing.T) {
 	}
 	if got.Free != 10 || got.Total != 100 || len(got.Roots) != 1 {
 		t.Fatalf("unexpected remembered status: %+v", got)
+	}
+}
+
+func TestShowCanHideRawSlaveLines(t *testing.T) {
+	p := New()
+	if err := p.Initialize(map[string]interface{}{
+		"free": map[string]interface{}{
+			"show_slave_lines": false,
+			"show_total":       false,
+			"named_groups": []interface{}{
+				map[string]interface{}{
+					"name":        "RACE",
+					"mount_paths": []interface{}{"/"},
+				},
+				map[string]interface{}{
+					"name":        "ARCHiVE",
+					"mount_paths": []interface{}{"/ARCHiVE"},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+	p.slaves["LOCAL"] = diskStatus{
+		Name:      "LOCAL",
+		Free:      60,
+		Total:     300,
+		Online:    true,
+		Available: true,
+		Updated:   time.Now(),
+		Roots: []diskRootStatus{
+			{Path: "/glftpd/site", MountPath: "/", Free: 10, Total: 100},
+			{Path: "/glftpd/DISK1", MountPath: "/ARCHiVE", Free: 50, Total: 200},
+		},
+	}
+
+	out := p.show(&event.Event{
+		Type: event.EventCommand,
+		User: "tester",
+		Data: map[string]string{"channel": "#chan"},
+	})
+	if len(out) != 2 {
+		t.Fatalf("expected 2 grouped lines, got %d: %+v", len(out), out)
+	}
+	joined := out[0].Text + "\n" + out[1].Text
+	if strings.Contains(joined, "LOCAL") {
+		t.Fatalf("expected raw LOCAL slave line to be hidden, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "RACE") || !strings.Contains(joined, "ARCHiVE") {
+		t.Fatalf("expected grouped output, got:\n%s", joined)
 	}
 }

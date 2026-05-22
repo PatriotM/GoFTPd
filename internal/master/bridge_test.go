@@ -75,3 +75,22 @@ func TestCacheSFVKeepsLiveRaceWindow(t *testing.T) {
 		t.Fatalf("race window after SFV cache = %dms, want 2000ms", got)
 	}
 }
+
+func TestReadFileMissingVFSEntryDoesNotProbeSlaves(t *testing.T) {
+	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60)
+	rs := &RemoteSlave{name: "LOCAL"}
+	rs.online.Store(true)
+	rs.available.Store(true)
+	sm.slaves["LOCAL"] = rs
+
+	bridge := &Bridge{sm: sm, readFileCache: make(map[string]cachedReadFileResult)}
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("ReadFile should not try to send a readFile command for missing VFS entries: %v", r)
+		}
+	}()
+
+	if _, err := bridge.ReadFile("/ARCHiVE/TV-1080P/.tvmaze"); err == nil {
+		t.Fatalf("expected missing VFS file to return an error")
+	}
+}

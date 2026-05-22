@@ -694,6 +694,12 @@ func TestShowStatusBarAndMissingFilePoliciesRespectOverrides(t *testing.T) {
 	if !ShowMissingFilesForDir(cfg, "/X265/Release-GRP") {
 		t.Fatalf("expected missing files to be enabled")
 	}
+	if ShowStatusBarForDir(cfg, "/X265") {
+		t.Fatalf("expected section root status bar to stay disabled")
+	}
+	if RaceStatsOnCWDForDir(cfg, "/X265") {
+		t.Fatalf("expected section root CWD race stats to stay disabled")
+	}
 }
 
 func TestShowZipDIZAndAudioInfoPoliciesRespectOverrides(t *testing.T) {
@@ -717,6 +723,14 @@ func TestShowZipDIZAndAudioInfoPoliciesRespectOverrides(t *testing.T) {
 	if ShowZipDIZOnCWDForDir(cfg, "/0DAY/0506/Zip.Release-GRP") {
 		t.Fatalf("expected zip cwd diz info to be disabled")
 	}
+	cfg.Zip.CWDDIZInfo = boolPtr(true)
+	if ShowZipDIZOnCWDForDir(cfg, "/0DAY/0506") {
+		t.Fatalf("expected dated zip container CWD diz info to stay disabled")
+	}
+	if !ShowZipDIZOnCWDForDir(cfg, "/0DAY/0506/Zip.Release-GRP") {
+		t.Fatalf("expected zip release CWD diz info to be enabled")
+	}
+	cfg.Zip.CWDDIZInfo = boolPtr(false)
 	if ShowAudioInfoOnCWDForDir(cfg, "/MP3/0506/Artist-Album-GRP", map[string]string{"filename": "01-track.mp3"}) {
 		t.Fatalf("expected mp3 cwd info to be disabled")
 	}

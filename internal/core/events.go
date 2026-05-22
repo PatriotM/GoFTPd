@@ -56,6 +56,7 @@ const (
 	EventPreBWInterval    EventType = "PREBWINTERVAL" // interval snapshots after pre
 	EventNewPreTime       EventType = "NEWPRETIME"
 	EventOldPreTime       EventType = "OLDPRETIME"
+	EventCustom           EventType = "CUSTOM"
 )
 
 // Event is the daemon-side event payload written to the event FIFO as JSON lines.
