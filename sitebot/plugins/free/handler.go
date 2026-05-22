@@ -15,12 +15,15 @@ import (
 )
 
 type Plugin struct {
-	mu          sync.RWMutex
-	slaves      map[string]diskStatus
-	groups      []namedGroup
-	replyTarget string
-	staleAfter  time.Duration
-	theme       *tmpl.Theme
+	mu              sync.RWMutex
+	slaves          map[string]diskStatus
+	groups          []namedGroup
+	replyTarget     string
+	staleAfter      time.Duration
+	showSlaveLines  bool
+	showNamedGroups bool
+	showTotal       bool
+	theme           *tmpl.Theme
 }
 
 type diskRootStatus struct {
@@ -56,9 +59,12 @@ var rememberedStatusStore = struct {
 
 func New() *Plugin {
 	return &Plugin{
-		slaves:      rememberedDiskStatuses(),
-		replyTarget: "channel",
-		staleAfter:  10 * time.Minute,
+		slaves:          rememberedDiskStatuses(),
+		replyTarget:     "channel",
+		staleAfter:      10 * time.Minute,
+		showSlaveLines:  true,
+		showNamedGroups: true,
+		showTotal:       true,
 	}
 }
 
@@ -78,6 +84,15 @@ func (p *Plugin) Initialize(config map[string]interface{}) error {
 	}
 	if n := intConfig(configValue(cfg, config, "stale_after_seconds", "free_stale_after_seconds"), 0); n > 0 {
 		p.staleAfter = time.Duration(n) * time.Second
+	}
+	if b, ok := boolConfig(configValue(cfg, config, "show_slave_lines", "free_show_slave_lines")); ok {
+		p.showSlaveLines = b
+	}
+	if b, ok := boolConfig(configValue(cfg, config, "show_named_groups", "free_show_named_groups")); ok {
+		p.showNamedGroups = b
+	}
+	if b, ok := boolConfig(configValue(cfg, config, "show_total", "free_show_total")); ok {
+		p.showTotal = b
 	}
 	p.groups = parseNamedGroups(configValue(cfg, config, "named_groups", "free_named_groups"))
 	return nil
@@ -163,34 +178,35 @@ func (p *Plugin) show(evt *event.Event) []plugin.Output {
 		if p.staleAfter > 0 && now.Sub(st.Updated) > p.staleAfter {
 			state += ", stale"
 		}
-		vars := diskVars(st, state, now)
-		lines = append(lines, p.render("DF_SLAVE", vars, fmt.Sprintf("DF: %-12s %8s free / %8s total (%5.1f%% free) [%s]",
-			st.Name, humanBytes(st.Free), humanBytes(st.Total), percentFree(st.Free, st.Total), state)))
-	}
-	for _, group := range p.groups {
-		freeBytes, totalBytes, ok := aggregateNamedGroup(statuses, group)
-		if !ok {
-			continue
+		if p.showSlaveLines {
+			vars := diskVars(st, state, now)
+			lines = append(lines, p.render("DF_SLAVE", vars, fmt.Sprintf("DF: %-12s %8s free / %8s total (%5.1f%% free) [%s]",
+				st.Name, humanBytes(st.Free), humanBytes(st.Total), percentFree(st.Free, st.Total), state)))
 		}
-		if filter != "" && !matchesNamedGroup(group, filter) {
-			continue
+	}
+	if p.showNamedGroups {
+		for _, group := range p.groups {
+			freeBytes, totalBytes, ok := aggregateNamedGroup(statuses, group)
+			if !ok {
+				continue
+			}
+			if filter != "" && !matchesNamedGroup(group, filter) {
+				continue
+			}
+			lines = append(lines, p.render("DF_GROUP", map[string]string{
+				"name":        group.Name,
+				"free":        humanBytes(freeBytes),
+				"total":       humanBytes(totalBytes),
+				"free_pct":    fmt.Sprintf("%.1f", percentFree(freeBytes, totalBytes)),
+				"used_pct":    fmt.Sprintf("%.1f", 100-percentFree(freeBytes, totalBytes)),
+				"free_bytes":  strconv.FormatInt(freeBytes, 10),
+				"total_bytes": strconv.FormatInt(totalBytes, 10),
+				"mount_paths": strings.Join(group.MountPaths, ","),
+				"paths":       strings.Join(group.Paths, ","),
+			}, fmt.Sprintf("DF: %-12s %8s free / %8s total (%5.1f%% free)", group.Name, humanBytes(freeBytes), humanBytes(totalBytes), percentFree(freeBytes, totalBytes))))
 		}
-		lines = append(lines, p.render("DF_GROUP", map[string]string{
-			"name":        group.Name,
-			"free":        humanBytes(freeBytes),
-			"total":       humanBytes(totalBytes),
-			"free_pct":    fmt.Sprintf("%.1f", percentFree(freeBytes, totalBytes)),
-			"used_pct":    fmt.Sprintf("%.1f", 100-percentFree(freeBytes, totalBytes)),
-			"free_bytes":  strconv.FormatInt(freeBytes, 10),
-			"total_bytes": strconv.FormatInt(totalBytes, 10),
-			"mount_paths": strings.Join(group.MountPaths, ","),
-			"paths":       strings.Join(group.Paths, ","),
-		}, fmt.Sprintf("DF: %-12s %8s free / %8s total (%5.1f%% free)", group.Name, humanBytes(freeBytes), humanBytes(totalBytes), percentFree(freeBytes, totalBytes))))
 	}
-	if len(lines) == 0 {
-		return p.reply(evt, p.render("DF_NOMATCH", map[string]string{"filter": filter}, fmt.Sprintf("DF: No slave matched %q.", filter)))
-	}
-	if filter == "" && len(lines) > 1 {
+	if p.showTotal && filter == "" && totalCap > 0 && (len(lines) > 1 || (!p.showSlaveLines && !p.showNamedGroups)) {
 		vars := map[string]string{
 			"slave":       "TOTAL",
 			"name":        "TOTAL",
@@ -204,6 +220,9 @@ func (p *Plugin) show(evt *event.Event) []plugin.Output {
 		}
 		lines = append(lines, p.render("DF_TOTAL", vars, fmt.Sprintf("DF: %-12s %8s free / %8s total (%5.1f%% free)",
 			"TOTAL", humanBytes(totalFree), humanBytes(totalCap), percentFree(totalFree, totalCap))))
+	}
+	if len(lines) == 0 {
+		return p.reply(evt, p.render("DF_NOMATCH", map[string]string{"filter": filter}, fmt.Sprintf("DF: No slave matched %q.", filter)))
 	}
 	return p.replies(evt, lines...)
 }
@@ -526,4 +545,19 @@ func intConfig(raw interface{}, fallback int) int {
 		}
 	}
 	return fallback
+}
+
+func boolConfig(raw interface{}) (bool, bool) {
+	switch v := raw.(type) {
+	case bool:
+		return v, true
+	case string:
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "1", "true", "yes", "on":
+			return true, true
+		case "0", "false", "no", "off":
+			return false, true
+		}
+	}
+	return false, false
 }

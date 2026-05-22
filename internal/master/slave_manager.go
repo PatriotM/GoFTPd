@@ -53,6 +53,19 @@ type backgroundRemergeJob struct {
 	skipBusy               bool
 }
 
+type RemergeStatus struct {
+	Action          string
+	Status          string
+	Slave           string
+	Job             string
+	Path            string
+	Roots           string
+	Message         string
+	Duration        time.Duration
+	ActiveTransfers int
+	StartedScans    int
+}
+
 type SlaveManager struct {
 	listenHost       string
 	listenPort       int
@@ -99,6 +112,7 @@ type SlaveManager struct {
 	running         atomic.Bool
 	diskStatusHook  func(name string, status protocol.DiskStatus, online, available bool, sections []string)
 	securityHook    func(ip, remoteAddr, action, reason string, strikes, limit int, bannedUntil time.Time)
+	remergeHook     func(RemergeStatus)
 	authMu          sync.Mutex
 	authState       map[string]*slaveAuthState
 	remergeCRCJobs  sync.Map
@@ -159,6 +173,7 @@ type remergeCommandOptions struct {
 	delayMS                int
 	pauseOnActiveTransfers int
 	excludePaths           []string
+	jobName                string
 }
 
 func NewSlaveManager(host string, port int, tlsEnabled bool, tlsCert, tlsKey string, heartbeatTimeout time.Duration) *SlaveManager {
@@ -191,6 +206,28 @@ func NewSlaveManager(host string, port int, tlsEnabled bool, tlsCert, tlsKey str
 
 func (sm *SlaveManager) SetDiskStatusHook(fn func(name string, status protocol.DiskStatus, online, available bool, sections []string)) {
 	sm.diskStatusHook = fn
+}
+
+func (sm *SlaveManager) SetRemergeStatusHook(fn func(RemergeStatus)) {
+	sm.remergeHook = fn
+}
+
+func (sm *SlaveManager) publishRemergeStatus(status RemergeStatus) {
+	if sm == nil || sm.remergeHook == nil {
+		return
+	}
+	sm.remergeHook(status)
+}
+
+func formatRemergeDuration(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	d = d.Truncate(time.Second)
+	if d < time.Second {
+		return "0s"
+	}
+	return d.String()
 }
 
 func (sm *SlaveManager) SetSecurityHook(fn func(ip, remoteAddr, action, reason string, strikes, limit int, bannedUntil time.Time)) {
@@ -1315,8 +1352,26 @@ func (sm *SlaveManager) initializeSlaveRemerge(rs *RemoteSlave, basePath string,
 		}
 	}
 
+	startedAt := time.Now()
+	jobName := strings.TrimSpace(opts.jobName)
+	if jobName == "" {
+		if scoped {
+			jobName = "manual"
+		} else {
+			jobName = "startup"
+		}
+	}
 	log.Printf("[SlaveManager] Starting remerge for slave %s (mode=%s base=%s roots=%s scoped=%v delay_ms=%d pause_on_active_transfers=%d)",
 		rs.name, mode, basePath, rootMode, scoped, opts.delayMS, opts.pauseOnActiveTransfers)
+	sm.publishRemergeStatus(RemergeStatus{
+		Action:  "started",
+		Status:  "running",
+		Slave:   rs.name,
+		Job:     jobName,
+		Path:    basePath,
+		Roots:   rootMode,
+		Message: fmt.Sprintf("remerge started for %s job=%s path=%s roots=%s", rs.name, jobName, basePath, rootMode),
+	})
 
 	rs.remerging.Store(true)
 	if instantOnline {
@@ -1344,6 +1399,16 @@ func (sm *SlaveManager) initializeSlaveRemerge(rs *RemoteSlave, basePath string,
 	}, excludePaths)
 	if err != nil {
 		log.Printf("[SlaveManager] Failed to issue remerge to %s: %v", rs.name, err)
+		sm.publishRemergeStatus(RemergeStatus{
+			Action:   "failed",
+			Status:   "failed",
+			Slave:    rs.name,
+			Job:      jobName,
+			Path:     basePath,
+			Roots:    rootMode,
+			Message:  fmt.Sprintf("remerge failed to start for %s job=%s path=%s: %v", rs.name, jobName, basePath, err),
+			Duration: time.Since(startedAt),
+		})
 		// Don't take offline - slave is still connected, just no file index yet.
 		rs.remerging.Store(false)
 		if !instantOnline {
@@ -1359,9 +1424,29 @@ func (sm *SlaveManager) initializeSlaveRemerge(rs *RemoteSlave, basePath string,
 	_, err = rs.FetchResponse(index, 60*time.Minute)
 	if err != nil {
 		log.Printf("[SlaveManager] Remerge did not complete for %s: %v (slave stays online)", rs.name, err)
+		sm.publishRemergeStatus(RemergeStatus{
+			Action:   "failed",
+			Status:   "failed",
+			Slave:    rs.name,
+			Job:      jobName,
+			Path:     basePath,
+			Roots:    rootMode,
+			Message:  fmt.Sprintf("remerge did not complete for %s job=%s path=%s: %v", rs.name, jobName, basePath, err),
+			Duration: time.Since(startedAt),
+		})
 	} else {
 		if err := rs.WaitForRemergeDrain(60 * time.Minute); err != nil {
 			log.Printf("[SlaveManager] Remerge queue did not drain for %s: %v", rs.name, err)
+			sm.publishRemergeStatus(RemergeStatus{
+				Action:   "failed",
+				Status:   "failed",
+				Slave:    rs.name,
+				Job:      jobName,
+				Path:     basePath,
+				Roots:    rootMode,
+				Message:  fmt.Sprintf("remerge queue did not drain for %s job=%s path=%s: %v", rs.name, jobName, basePath, err),
+				Duration: time.Since(startedAt),
+			})
 		} else {
 			remergeComplete = true
 			log.Printf("[SlaveManager] Remerge complete for slave %s", rs.name)
@@ -1379,6 +1464,16 @@ func (sm *SlaveManager) initializeSlaveRemerge(rs *RemoteSlave, basePath string,
 			if err := sm.vfs.SaveToDisk(vfsFilePath); err != nil {
 				log.Printf("[SlaveManager] Error saving VFS after remerge: %v", err)
 			}
+			sm.publishRemergeStatus(RemergeStatus{
+				Action:   "finished",
+				Status:   "done",
+				Slave:    rs.name,
+				Job:      jobName,
+				Path:     basePath,
+				Roots:    rootMode,
+				Message:  fmt.Sprintf("remerge complete for %s job=%s path=%s roots=%s in %s", rs.name, jobName, basePath, rootMode, formatRemergeDuration(time.Since(startedAt))),
+				Duration: time.Since(startedAt),
+			})
 		}
 	}
 	rs.remerging.Store(false)
@@ -1688,16 +1783,40 @@ func (sm *SlaveManager) GetSlave(name string) *RemoteSlave {
 func (sm *SlaveManager) StartRemergeJobs(name string) (int, []string) {
 	rs := sm.GetSlave(name)
 	if rs == nil {
+		sm.publishRemergeStatus(RemergeStatus{
+			Action:  "skipped",
+			Status:  "skipped",
+			Slave:   name,
+			Message: fmt.Sprintf("remerge skipped: unknown slave %s", name),
+		})
 		return 0, []string{fmt.Sprintf("unknown slave %s", name)}
 	}
 	if !rs.IsOnline() {
+		sm.publishRemergeStatus(RemergeStatus{
+			Action:  "skipped",
+			Status:  "skipped",
+			Slave:   rs.Name(),
+			Message: fmt.Sprintf("remerge skipped for %s: slave is offline", rs.Name()),
+		})
 		return 0, []string{fmt.Sprintf("slave %s is offline", rs.Name())}
 	}
 	if rs.IsRemerging() {
+		sm.publishRemergeStatus(RemergeStatus{
+			Action:  "skipped",
+			Status:  "skipped",
+			Slave:   rs.Name(),
+			Message: fmt.Sprintf("remerge skipped for %s: already remerging", rs.Name()),
+		})
 		return 0, []string{fmt.Sprintf("slave %s is already remerging", rs.Name())}
 	}
 	jobs := sm.backgroundRemergeJobsForSlave(rs.Name())
 	if len(jobs) == 0 {
+		sm.publishRemergeStatus(RemergeStatus{
+			Action:  "skipped",
+			Status:  "skipped",
+			Slave:   rs.Name(),
+			Message: fmt.Sprintf("remerge skipped for %s: no slaves[].remerge.jobs configured", rs.Name()),
+		})
 		return 0, []string{fmt.Sprintf("slave %s has no slaves[].remerge.jobs configured", rs.Name())}
 	}
 	allSkipBusy := true
@@ -1708,7 +1827,15 @@ func (sm *SlaveManager) StartRemergeJobs(name string) (int, []string) {
 		}
 	}
 	if allSkipBusy && rs.ActiveTransfers() > 0 {
-		return 0, []string{fmt.Sprintf("slave %s has %d active transfer(s)", rs.Name(), rs.ActiveTransfers())}
+		active := int(rs.ActiveTransfers())
+		sm.publishRemergeStatus(RemergeStatus{
+			Action:          "skipped",
+			Status:          "skipped",
+			Slave:           rs.Name(),
+			ActiveTransfers: active,
+			Message:         fmt.Sprintf("remerge skipped for %s: %d active transfer(s)", rs.Name(), active),
+		})
+		return 0, []string{fmt.Sprintf("slave %s has %d active transfer(s)", rs.Name(), active)}
 	}
 	stagger := sm.backgroundRemergeSnapshot().stagger
 	go func() {
@@ -1762,6 +1889,12 @@ func (sm *SlaveManager) StopRemerge(name string) error {
 	if err := IssueRemergeStop(rs); err != nil {
 		return err
 	}
+	sm.publishRemergeStatus(RemergeStatus{
+		Action:  "stopped",
+		Status:  "stopping",
+		Slave:   rs.Name(),
+		Message: fmt.Sprintf("remerge stop requested for %s", rs.Name()),
+	})
 	return nil
 }
 
@@ -2265,11 +2398,29 @@ func (sm *SlaveManager) runBackgroundRemergeJob(job backgroundRemergeJob, stagge
 	rs := sm.GetSlave(job.slaveName)
 	if rs == nil || !rs.IsOnline() {
 		log.Printf("[SlaveManager] Background remerge skipped: slave=%s job=%s is offline", job.slaveName, job.name)
+		sm.publishRemergeStatus(RemergeStatus{
+			Action:  "skipped",
+			Status:  "skipped",
+			Slave:   job.slaveName,
+			Job:     job.name,
+			Path:    job.basePath,
+			Roots:   job.rootMode,
+			Message: fmt.Sprintf("background remerge skipped for %s job=%s: slave is offline", job.slaveName, job.name),
+		})
 		return
 	}
 	targets := sm.expandBackgroundRemergeTargets(rs, job)
 	if len(targets) == 0 {
 		log.Printf("[SlaveManager] Background remerge skipped: slave=%s job=%s has no matching paths", job.slaveName, job.name)
+		sm.publishRemergeStatus(RemergeStatus{
+			Action:  "skipped",
+			Status:  "skipped",
+			Slave:   job.slaveName,
+			Job:     job.name,
+			Path:    job.basePath,
+			Roots:   job.rootMode,
+			Message: fmt.Sprintf("background remerge skipped for %s job=%s: no matching paths", job.slaveName, job.name),
+		})
 		return
 	}
 	for i, target := range targets {
@@ -2278,15 +2429,44 @@ func (sm *SlaveManager) runBackgroundRemergeJob(job backgroundRemergeJob, stagge
 		}
 		if rs.IsRemerging() {
 			log.Printf("[SlaveManager] Background remerge skipped: slave=%s job=%s path=%s already remerging", job.slaveName, job.name, target.basePath)
+			sm.publishRemergeStatus(RemergeStatus{
+				Action:  "skipped",
+				Status:  "skipped",
+				Slave:   job.slaveName,
+				Job:     job.name,
+				Path:    target.basePath,
+				Roots:   target.rootMode,
+				Message: fmt.Sprintf("background remerge skipped for %s job=%s path=%s: already remerging", job.slaveName, job.name, target.basePath),
+			})
 			continue
 		}
 		if job.skipBusy && rs.ActiveTransfers() > 0 {
+			active := int(rs.ActiveTransfers())
 			log.Printf("[SlaveManager] Background remerge skipped: slave=%s job=%s path=%s has %d active transfer(s)",
-				job.slaveName, job.name, target.basePath, rs.ActiveTransfers())
+				job.slaveName, job.name, target.basePath, active)
+			sm.publishRemergeStatus(RemergeStatus{
+				Action:          "skipped",
+				Status:          "skipped",
+				Slave:           job.slaveName,
+				Job:             job.name,
+				Path:            target.basePath,
+				Roots:           target.rootMode,
+				ActiveTransfers: active,
+				Message:         fmt.Sprintf("background remerge skipped for %s job=%s path=%s: %d active transfer(s)", job.slaveName, job.name, target.basePath, active),
+			})
 			continue
 		}
 		if !rs.remerging.CompareAndSwap(false, true) {
 			log.Printf("[SlaveManager] Background remerge skipped: slave=%s job=%s path=%s already remerging", job.slaveName, job.name, target.basePath)
+			sm.publishRemergeStatus(RemergeStatus{
+				Action:  "skipped",
+				Status:  "skipped",
+				Slave:   job.slaveName,
+				Job:     job.name,
+				Path:    target.basePath,
+				Roots:   target.rootMode,
+				Message: fmt.Sprintf("background remerge skipped for %s job=%s path=%s: already remerging", job.slaveName, job.name, target.basePath),
+			})
 			continue
 		}
 		log.Printf("[SlaveManager] Background remerge started: slave=%s job=%s path=%s roots=%s", job.slaveName, job.name, target.basePath, target.rootMode)
@@ -2294,6 +2474,7 @@ func (sm *SlaveManager) runBackgroundRemergeJob(job backgroundRemergeJob, stagge
 			delayMS:                job.delayMS,
 			pauseOnActiveTransfers: job.pauseOnActiveTransfers,
 			excludePaths:           job.excludePaths,
+			jobName:                job.name,
 		})
 		if stagger > 0 && i < len(targets)-1 {
 			if !sm.waitBackgroundRemergeLoop(stagger) {

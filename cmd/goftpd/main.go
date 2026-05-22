@@ -175,6 +175,34 @@ func main() {
 				Data:      data,
 			})
 		})
+		sm.SetRemergeStatusHook(func(status master.RemergeStatus) {
+			data := map[string]string{
+				"announce_type": "REMERGE",
+				"template":      "REMERGE",
+				"action":        status.Action,
+				"status":        status.Status,
+				"slave":         status.Slave,
+				"job":           status.Job,
+				"path":          status.Path,
+				"roots":         status.Roots,
+				"message":       remergeStatusMessage(status),
+			}
+			if status.Duration > 0 {
+				data["duration"] = formatDaemonDuration(status.Duration)
+			}
+			if status.ActiveTransfers > 0 {
+				data["active_transfers"] = fmt.Sprintf("%d", status.ActiveTransfers)
+			}
+			if status.StartedScans > 0 {
+				data["started_scans"] = fmt.Sprintf("%d", status.StartedScans)
+			}
+			core.PublishEvent(cfg, core.Event{
+				Type:      core.EventCustom,
+				Timestamp: time.Now(),
+				Path:      remergeEventPath(status.Path),
+				Data:      data,
+			})
+		})
 		policies := slavePoliciesFromConfig(cfg.Slaves)
 		sm.SetSlavePolicies(policies)
 		sm.SetBootstrapDirs(configuredBootstrapDirs(cfg))
@@ -597,6 +625,58 @@ func boolFromCfg(m map[string]interface{}, key string, def bool) bool {
 		return def
 	}
 	return b
+}
+
+func remergeStatusMessage(status master.RemergeStatus) string {
+	if msg := strings.TrimSpace(status.Message); msg != "" {
+		return msg
+	}
+	parts := []string{"remerge"}
+	if action := strings.TrimSpace(status.Action); action != "" {
+		parts = append(parts, action)
+	}
+	if slave := strings.TrimSpace(status.Slave); slave != "" {
+		parts = append(parts, "for", slave)
+	}
+	if job := strings.TrimSpace(status.Job); job != "" {
+		parts = append(parts, "job="+job)
+	}
+	if p := strings.TrimSpace(status.Path); p != "" {
+		parts = append(parts, "path="+p)
+	}
+	if roots := strings.TrimSpace(status.Roots); roots != "" {
+		parts = append(parts, "roots="+roots)
+	}
+	if status.Duration > 0 {
+		parts = append(parts, "duration="+formatDaemonDuration(status.Duration))
+	}
+	if status.ActiveTransfers > 0 {
+		parts = append(parts, fmt.Sprintf("active_transfers=%d", status.ActiveTransfers))
+	}
+	return strings.Join(parts, " ")
+}
+
+func remergeEventPath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return "/"
+	}
+	clean := path.Clean("/" + strings.TrimPrefix(p, "/"))
+	if clean == "." {
+		return "/"
+	}
+	return clean
+}
+
+func formatDaemonDuration(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	d = d.Truncate(time.Second)
+	if d < time.Second {
+		return "0s"
+	}
+	return d.String()
 }
 
 func warnDeprecatedMasterRemergeKeys(masterCfg map[string]interface{}) {

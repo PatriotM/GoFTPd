@@ -1281,13 +1281,24 @@ func (b *Bridge) ReadFile(filePath string) ([]byte, error) {
 	}
 	b.cacheMu.Unlock()
 
-	candidates, candidateErr := b.candidateSlavesForPath(filePath)
+	readPath := filePath
+	if resolved := b.ResolvePath(filePath); resolved != "" {
+		readPath = resolved
+	}
+	vfsFile := b.sm.GetVFS().GetFile(readPath)
+	if vfsFile == nil || vfsFile.IsDir {
+		err := fmt.Errorf("file not found: %s", filePath)
+		b.cacheReadFileResult(filePath, nil, err)
+		return nil, err
+	}
+
+	candidates, candidateErr := b.candidateSlavesForPath(readPath)
 	if candidateErr != nil {
 		return nil, candidateErr
 	}
 	var lastErr error
 	for _, slave := range candidates {
-		index, err := IssueReadFile(slave, filePath)
+		index, err := IssueReadFile(slave, readPath)
 		if err != nil {
 			lastErr = fmt.Errorf("issue readFile to %s: %w", slave.Name(), err)
 			continue

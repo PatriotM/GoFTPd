@@ -1355,17 +1355,6 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					siteName = "GoFTPd"
 				}
 
-				totalBytes, present, total := dirRaceProgress(bridge, s.Config, targetPath)
-				if s.Config.Debug {
-					log.Printf("[LIST/RACESTATS] dir=%s totalBytes=%d present=%d total=%d",
-						targetPath, totalBytes, present, total)
-				}
-
-				existingFiles := make(map[string]bool)
-				for _, e := range entries {
-					existingFiles[e.Name] = true
-				}
-
 				if zipscript.ShowStatusBarForDir(s.Config.Zipscript, targetPath) {
 					if statusName := dirRaceStatusName(bridge, s.Config, targetPath, siteName); strings.TrimSpace(statusName) != "" {
 						mode := "drwxr-xr-x"

@@ -5,6 +5,12 @@ reply_target: "channel"
 # Treat disk status older than this as stale/down.
 stale_after_seconds: 600
 
+# Output controls. Disable show_slave_lines when you only want named groups
+# like RACE / ARCHiVE / OFFSiTE ARCHiVE and not the raw slave name line.
+show_slave_lines: true
+show_named_groups: true
+show_total: true
+
 # Optional named groups shown by !df.
 #
 # You can group roots in two different ways:

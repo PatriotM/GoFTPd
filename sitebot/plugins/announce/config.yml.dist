@@ -22,6 +22,7 @@ type_routes:
   SELFIP: ["#goftpd-staff"]
   RELEASEGUARD: ["#goftpd-staff"]
   SLAVEAUTH: ["#goftpd-staff"]
+  REMERGE: ["#goftpd-staff"]
   SLOWUPLOADWARN: ["#goftpd-staff"]
   SLOWUPLOADKICK: ["#goftpd-staff"]
   SLOWDOWNLOADWARN: ["#goftpd-staff"]

@@ -374,6 +374,12 @@ func (rs *RemoteSlave) applyRemergeFlowControl(masterSlaveManager *SlaveManager,
 				return
 			}
 			rs.remergePaused.Store(false)
+			masterSlaveManager.publishRemergeStatus(RemergeStatus{
+				Action:  "resumed",
+				Status:  "running",
+				Slave:   rs.name,
+				Message: fmt.Sprintf("remerge resumed for %s: queue depth %d <= resume threshold %d", rs.name, depth, resumeThreshold),
+			})
 		}
 		return
 	}
@@ -383,6 +389,12 @@ func (rs *RemoteSlave) applyRemergeFlowControl(masterSlaveManager *SlaveManager,
 			return
 		}
 		rs.remergePaused.Store(true)
+		masterSlaveManager.publishRemergeStatus(RemergeStatus{
+			Action:  "paused",
+			Status:  "paused",
+			Slave:   rs.name,
+			Message: fmt.Sprintf("remerge paused for %s: queue depth %d > pause threshold %d", rs.name, depth, pauseThreshold),
+		})
 	}
 }
 
