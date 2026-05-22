@@ -67,6 +67,5 @@ slave:
   bind_ip: ""
 
   timeout: 60
-  ignore_partial_remerge: false
 
   transfer_buffer_size: 262144

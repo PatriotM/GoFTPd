@@ -189,7 +189,38 @@ cp etc/config-slave-example.yml etc/config-slave.yml
 ./goftpd --config etc/config-slave.yml
 ```
 
-The master can route uploads by section, path, and weight:
+For the common same-box setup, where master and one slave run on the same
+server, keep it boring: name the slave `LOCAL`, do not add `sections`, `paths`,
+or `weight`, and only configure the remerge jobs you want the master to run.
+
+```yaml
+slaves:
+  - name: "LOCAL"
+    remerge:
+      jobs:
+        - name: "site_root"
+          enabled: true
+          interval_seconds: 21600
+          roots: "normal"
+          path: "/"
+          exclude_paths:
+            - "/ARCHiVE"
+          delay_ms: 10
+          pause_on_active_transfers: 1
+          skip_busy_slave: true
+
+        - name: "mounted_roots"
+          enabled: true
+          interval_seconds: 43200
+          roots: "mounted"
+          mount_paths: ["*"]
+          delay_ms: 25
+          pause_on_active_transfers: 1
+          skip_busy_slave: true
+```
+
+The `sections`, `paths`, and `weight` fields are only needed when you have
+multiple slaves and want routing/affinity rules. Example:
 
 ```yaml
 slaves:
@@ -272,32 +303,6 @@ config. Keep the slave config focused on physical roots and connection details;
 put scan behavior in `slaves[].remerge.jobs[]` so the master controls what gets
 indexed and how aggressively it is walked.
 
-```yml
-slaves:
-  - name: "LOCAL"
-    remerge:
-      jobs:
-        - name: "site_root"
-          enabled: true
-          interval_seconds: 21600
-          roots: "normal"
-          path: "/"
-          exclude_paths:
-            - "/ARCHiVE"
-          delay_ms: 10
-          pause_on_active_transfers: 1
-          skip_busy_slave: true
-
-        - name: "mounted_roots"
-          enabled: true
-          interval_seconds: 43200
-          roots: "mounted"
-          mount_paths: ["*"]
-          delay_ms: 25
-          pause_on_active_transfers: 1
-          skip_busy_slave: true
-```
-
 `roots: "normal"` scans only the slave's normal `roots`. `roots: "mounted"`
 scans only `mounted_roots`. `mount_paths: ["*"]` means all mounted root
 mount paths reported by that slave. `delay_ms` sleeps after each streamed
@@ -306,6 +311,8 @@ directory and automatically yields inside very large directories too; try
 slave is serving uploads/downloads, so live traffic gets priority over
 background scans. If a remerge is already hurting the box, `SITE REMERGESTOP
 <slave|*>` asks active slave remerge jobs to abort without restarting the daemon.
+If you do not use `mounted_roots`, remove the `mounted_roots` job and the
+`/ARCHiVE` exclude from the same-box example.
 
 On a slave host, the role-specific settings you normally care about are:
 

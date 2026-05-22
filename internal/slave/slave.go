@@ -37,21 +37,20 @@ const (
 // Slave is the slave daemon,
 // It connects to a master, sends its name, then enters a command/response loop.
 type Slave struct {
-	name                 string
-	masterHost           string
-	masterPort           int
-	roots                []MountedRoot
-	pasvPortMin          int
-	pasvPortMax          int
-	pasvNext             uint32
-	tlsEnabled           bool
-	tlsCert              string
-	tlsKey               string
-	bindIP               string
-	ignorePartialRemerge bool
-	transferBufferSize   int
-	freeSpaceMB          int
-	debug                bool
+	name               string
+	masterHost         string
+	masterPort         int
+	roots              []MountedRoot
+	pasvPortMin        int
+	pasvPortMax        int
+	pasvNext           uint32
+	tlsEnabled         bool
+	tlsCert            string
+	tlsKey             string
+	bindIP             string
+	transferBufferSize int
+	freeSpaceMB        int
+	debug              bool
 
 	conn            net.Conn
 	stream          *protocol.ObjectStream
@@ -91,22 +90,21 @@ func (s *Slave) writeObjectNoActivity(obj interface{}) error {
 
 // SlaveConfig holds slave configuration loaded from YAML
 type SlaveConfig struct {
-	Name                 string        `yaml:"name"`
-	MasterHost           string        `yaml:"master_host"`
-	MasterPort           int           `yaml:"master_port"`
-	Roots                []string      `yaml:"roots"` // e.g. ["/data/site", "/data2/site"]
-	MountedRoots         []MountedRoot `yaml:"mounted_roots"`
-	PasvPortMin          int           `yaml:"pasv_port_min"`
-	PasvPortMax          int           `yaml:"pasv_port_max"`
-	TLSEnabled           bool          `yaml:"tls_enabled"`
-	TLSCert              string        `yaml:"tls_cert"`
-	TLSKey               string        `yaml:"tls_key"`
-	BindIP               string        `yaml:"bind_ip"`
-	Timeout              int           `yaml:"timeout"` // seconds, default 60
-	IgnorePartialRemerge bool          `yaml:"ignore_partial_remerge"`
-	TransferBufferSize   int           `yaml:"transfer_buffer_size"`
-	FreeSpaceMB          int           `yaml:"free_space_mb"`
-	Debug                bool
+	Name               string        `yaml:"name"`
+	MasterHost         string        `yaml:"master_host"`
+	MasterPort         int           `yaml:"master_port"`
+	Roots              []string      `yaml:"roots"` // e.g. ["/data/site", "/data2/site"]
+	MountedRoots       []MountedRoot `yaml:"mounted_roots"`
+	PasvPortMin        int           `yaml:"pasv_port_min"`
+	PasvPortMax        int           `yaml:"pasv_port_max"`
+	TLSEnabled         bool          `yaml:"tls_enabled"`
+	TLSCert            string        `yaml:"tls_cert"`
+	TLSKey             string        `yaml:"tls_key"`
+	BindIP             string        `yaml:"bind_ip"`
+	Timeout            int           `yaml:"timeout"` // seconds, default 60
+	TransferBufferSize int           `yaml:"transfer_buffer_size"`
+	FreeSpaceMB        int           `yaml:"free_space_mb"`
+	Debug              bool
 }
 
 type MountedRoot struct {
@@ -131,21 +129,20 @@ func NewSlave(cfg SlaveConfig) *Slave {
 		bufferSize = minTransferBufferSize
 	}
 	return &Slave{
-		name:                 cfg.Name,
-		masterHost:           cfg.MasterHost,
-		masterPort:           cfg.MasterPort,
-		roots:                roots,
-		pasvPortMin:          cfg.PasvPortMin,
-		pasvPortMax:          cfg.PasvPortMax,
-		tlsEnabled:           cfg.TLSEnabled,
-		tlsCert:              cfg.TLSCert,
-		tlsKey:               cfg.TLSKey,
-		bindIP:               cfg.BindIP,
-		timeout:              timeout,
-		ignorePartialRemerge: cfg.IgnorePartialRemerge,
-		transferBufferSize:   bufferSize,
-		freeSpaceMB:          cfg.FreeSpaceMB,
-		debug:                cfg.Debug,
+		name:               cfg.Name,
+		masterHost:         cfg.MasterHost,
+		masterPort:         cfg.MasterPort,
+		roots:              roots,
+		pasvPortMin:        cfg.PasvPortMin,
+		pasvPortMax:        cfg.PasvPortMax,
+		tlsEnabled:         cfg.TLSEnabled,
+		tlsCert:            cfg.TLSCert,
+		tlsKey:             cfg.TLSKey,
+		bindIP:             cfg.BindIP,
+		timeout:            timeout,
+		transferBufferSize: bufferSize,
+		freeSpaceMB:        cfg.FreeSpaceMB,
+		debug:              cfg.Debug,
 	}
 }
 
@@ -1172,39 +1169,24 @@ func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
 	if len(ac.Args) > 0 {
 		basePath = ac.Args[0]
 	}
-	instantOnline := len(ac.Args) > 4 && strings.EqualFold(strings.TrimSpace(ac.Args[4]), "true")
 	rootMode := "all"
-	if len(ac.Args) > 5 {
-		rootMode = normalizeRemergeRootMode(ac.Args[5])
+	if len(ac.Args) > 2 {
+		rootMode = normalizeRemergeRootMode(ac.Args[2])
 	}
 	remergeDelay := time.Duration(0)
 	remergePauseOnActiveTransfers := 0
-	excludePathsStart := 6
-	if len(ac.Args) > 7 {
-		if delayMS, err := strconv.Atoi(strings.TrimSpace(ac.Args[6])); err == nil {
-			if pauseOnActive, err := strconv.Atoi(strings.TrimSpace(ac.Args[7])); err == nil {
+	excludePathsStart := 3
+	if len(ac.Args) > 4 {
+		if delayMS, err := strconv.Atoi(strings.TrimSpace(ac.Args[3])); err == nil {
+			if pauseOnActive, err := strconv.Atoi(strings.TrimSpace(ac.Args[4])); err == nil {
 				if delayMS > 0 {
 					remergeDelay = time.Duration(delayMS) * time.Millisecond
 				}
 				if pauseOnActive > 0 {
 					remergePauseOnActiveTransfers = pauseOnActive
 				}
-				excludePathsStart = 8
+				excludePathsStart = 5
 			}
-		}
-	}
-	partialRemerge := len(ac.Args) > 1 && strings.EqualFold(strings.TrimSpace(ac.Args[1]), "true") && !s.ignorePartialRemerge && !instantOnline
-	skipAgeCutoff := int64(0)
-	if partialRemerge && len(ac.Args) > 2 {
-		if cutoff, err := strconv.ParseInt(strings.TrimSpace(ac.Args[2]), 10, 64); err == nil {
-			skipAgeCutoff = cutoff
-			if len(ac.Args) > 3 {
-				if masterTime, err := strconv.ParseInt(strings.TrimSpace(ac.Args[3]), 10, 64); err == nil && cutoff != 0 {
-					skipAgeCutoff += time.Now().UnixMilli() - masterTime
-				}
-			}
-		} else {
-			partialRemerge = false
 		}
 	}
 	excludePaths := normalizeExcludeVFSPaths(ac.Args[excludePathsStart:])
@@ -1233,7 +1215,7 @@ func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
 		log.Printf("[Slave] Remerge: scanning root %s", scanRoot)
 
 		counts := remergeScanCounts{}
-		if err := s.scanRemergeDirectory(target, scanRoot, excludePaths, partialRemerge, skipAgeCutoff, opts, &counts); err != nil {
+		if err := s.scanRemergeDirectory(target, scanRoot, excludePaths, opts, &counts); err != nil {
 			if s.remergeAbort.Load() {
 				log.Printf("[Slave] Remerge root %s stopped: abort requested", target.root.Path)
 				return &protocol.AsyncResponseError{Index: ac.Index, Message: "remerge stopped"}
@@ -1262,7 +1244,7 @@ type remergeScanOptions struct {
 	pauseOnActiveTransfers int
 }
 
-func (s *Slave) scanRemergeDirectory(target scanTarget, dir string, excludePaths []string, partialRemerge bool, skipAgeCutoff int64, opts remergeScanOptions, counts *remergeScanCounts) error {
+func (s *Slave) scanRemergeDirectory(target scanTarget, dir string, excludePaths []string, opts remergeScanOptions, counts *remergeScanCounts) error {
 	if !s.waitForRemergeSlot(opts) {
 		if s.remergeAbort.Load() {
 			return fmt.Errorf("remerge stopped")
@@ -1305,10 +1287,6 @@ func (s *Slave) scanRemergeDirectory(target scanTarget, dir string, excludePaths
 		if !ok || isExcludedVFSPath(childVirtualPath, excludePaths) || isSkippedRemergeSubtree(childVirtualPath, target.skipVirtualSubtrees) {
 			continue
 		}
-		if partialRemerge && !info.IsDir() && info.ModTime().UnixMilli() < skipAgeCutoff {
-			continue
-		}
-
 		inode := protocol.LightRemoteInode{
 			Name:         info.Name(),
 			IsDir:        info.IsDir(),
@@ -1352,7 +1330,7 @@ func (s *Slave) scanRemergeDirectory(target scanTarget, dir string, excludePaths
 	}
 
 	for _, childDir := range childDirs {
-		if err := s.scanRemergeDirectory(target, childDir, excludePaths, partialRemerge, skipAgeCutoff, opts, counts); err != nil {
+		if err := s.scanRemergeDirectory(target, childDir, excludePaths, opts, counts); err != nil {
 			return err
 		}
 	}

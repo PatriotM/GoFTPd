@@ -103,14 +103,47 @@ slave:
                                 # Set explicitly if the slave sits behind NAT.
   timeout:       60             # Slave-side inactivity timeout for master traffic.
                                 # Keep this aligned with master.heartbeat_timeout.
-  ignore_partial_remerge: false # If true, the slave ignores partial remerge requests
-                                # and always performs a full scan.
   transfer_buffer_size: 262144  # Optional slave data-transfer buffer size in bytes.
                                 # Default is 262144 (256 KiB). Minimum is 32768.
 
 
 # =============================================================================
-#  Slave routing policies — master-only
+#  Slave policies - master-only
+#
+#  Common same-box setup:
+#  If master and slave run on the same server and the slave is named LOCAL,
+#  you normally only need the LOCAL policy below. Do not add sections, paths,
+#  or weight unless you have multiple slaves and want route/affinity rules.
+#  If you do not use slave.mounted_roots, remove the mounted_roots job and the
+#  /ARCHiVE exclude from the site_root job.
+#
+#  Use ONE slaves: block. The examples below are commented; copy the shape you
+#  need and remove comments.
+#
+# slaves:
+#   - name: "LOCAL"             # Must match slave.name in the slave config
+#     remerge:
+#       jobs:
+#         - name: "site_root"
+#           enabled: true
+#           interval_seconds: 21600
+#           roots: "normal"    # normal slave.roots only
+#           path: "/"
+#           exclude_paths:
+#             - "/ARCHiVE"     # skip archive here if archive is mounted_roots
+#           delay_ms: 10
+#           pause_on_active_transfers: 1
+#           skip_busy_slave: true
+#         - name: "mounted_roots"
+#           enabled: true
+#           interval_seconds: 43200
+#           roots: "mounted"   # slave.mounted_roots only
+#           mount_paths: ["*"] # all mounted_roots mount_path values
+#           delay_ms: 25
+#           pause_on_active_transfers: 1
+#           skip_busy_slave: true
+#
+#  Multi-slave routing options:
 #  Control which sections/paths each slave accepts, and load-balancing weights.
 #
 #    name:     Must match the slave's `slave.name`
@@ -137,26 +170,6 @@ slave:
 #     sections: ["TV-1080P", "TV-720P"]
 #     paths: ["/TV-*/*"]
 #     weight: 2
-#     remerge:
-#       jobs:
-#         - name: "site_root"
-#           enabled: true
-#           interval_seconds: 21600
-#           roots: "normal"          # normal slave.roots only
-#           path: "/"
-#           exclude_paths:
-#             - "/ARCHiVE"           # Example: do not walk this VFS path in the site job
-#           delay_ms: 10
-#           pause_on_active_transfers: 1
-#           skip_busy_slave: true
-#         - name: "mounted_roots"
-#           enabled: true
-#           interval_seconds: 43200
-#           roots: "mounted"         # slave.mounted_roots only
-#           mount_paths: ["*"]       # all mounted_roots mount_path values for this slave
-#           delay_ms: 25
-#           pause_on_active_transfers: 1
-#           skip_busy_slave: true
 #   - name: "SLAVE2"
 #     sections: ["MP3", "FLAC"]
 #     weight: 1

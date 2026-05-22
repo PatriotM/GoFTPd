@@ -1338,7 +1338,7 @@ func (sm *SlaveManager) initializeSlaveRemerge(rs *RemoteSlave, basePath string,
 	}
 
 	excludePaths := append(sm.getExcludePaths(), opts.excludePaths...)
-	index, err := IssueRemerge(rs, basePath, false, 0, time.Now().UnixMilli(), instantOnline, rootMode, RemergeCommandSettings{
+	index, err := IssueRemerge(rs, basePath, instantOnline, rootMode, RemergeCommandSettings{
 		DelayMS:                opts.delayMS,
 		PauseOnActiveTransfers: opts.pauseOnActiveTransfers,
 	}, excludePaths)

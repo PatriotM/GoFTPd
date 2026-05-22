@@ -527,9 +527,9 @@ func startSlave(cfg *core.Config) {
 	pasvMax := intFromCfg(slaveCfg, "pasv_port_max", 0)
 	bindIP, _ := slaveCfg["bind_ip"].(string)
 	timeout := intFromCfg(slaveCfg, "timeout", 60)
-	ignorePartialRemerge := boolFromCfg(slaveCfg, "ignore_partial_remerge", false)
 	transferBufferSize := intFromCfg(slaveCfg, "transfer_buffer_size", 0)
 	warnDeprecatedConfigKeys("slave", slaveCfg, map[string]string{
+		"ignore_partial_remerge":            "remove it; remerge scans are always explicit full directory snapshots",
 		"remerge_delay_ms":                  "move it to master slaves[].remerge.jobs[].delay_ms",
 		"remerge_pause_on_active_transfers": "move it to master slaves[].remerge.jobs[].pause_on_active_transfers",
 		"remerge_entry_yield_every":         "remove it; delay_ms now also yields inside very large directories",
@@ -540,22 +540,21 @@ func startSlave(cfg *core.Config) {
 		name, masterHost, masterPort, roots, mountedRoots, bindIP, pasvMin, pasvMax)
 
 	s := slave.NewSlave(slave.SlaveConfig{
-		Name:                 name,
-		MasterHost:           masterHost,
-		MasterPort:           masterPort,
-		Roots:                roots,
-		MountedRoots:         mountedRoots,
-		PasvPortMin:          pasvMin,
-		PasvPortMax:          pasvMax,
-		TLSEnabled:           cfg.TLSEnabled,
-		TLSCert:              cfg.TLSCert,
-		TLSKey:               cfg.TLSKey,
-		BindIP:               bindIP,
-		Timeout:              timeout,
-		IgnorePartialRemerge: ignorePartialRemerge,
-		TransferBufferSize:   transferBufferSize,
-		FreeSpaceMB:          cfg.FreeSpaceMB,
-		Debug:                cfg.Debug,
+		Name:               name,
+		MasterHost:         masterHost,
+		MasterPort:         masterPort,
+		Roots:              roots,
+		MountedRoots:       mountedRoots,
+		PasvPortMin:        pasvMin,
+		PasvPortMax:        pasvMax,
+		TLSEnabled:         cfg.TLSEnabled,
+		TLSCert:            cfg.TLSCert,
+		TLSKey:             cfg.TLSKey,
+		BindIP:             bindIP,
+		Timeout:            timeout,
+		TransferBufferSize: transferBufferSize,
+		FreeSpaceMB:        cfg.FreeSpaceMB,
+		Debug:              cfg.Debug,
 	})
 
 	// Boot blocks until disconnected

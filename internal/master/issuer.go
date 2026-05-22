@@ -223,7 +223,7 @@ type RemergeCommandSettings struct {
 
 // IssueRemerge tells the slave to scan and send its file listing.
 // ().
-func IssueRemerge(rs *RemoteSlave, path string, partialRemerge bool, skipAgeCutoff int64, masterTime int64, instantOnline bool, rootMode string, settings RemergeCommandSettings, excludePaths []string) (string, error) {
+func IssueRemerge(rs *RemoteSlave, path string, instantOnline bool, rootMode string, settings RemergeCommandSettings, excludePaths []string) (string, error) {
 	index, err := rs.FetchIndex()
 	if err != nil {
 		return "", err
@@ -231,9 +231,6 @@ func IssueRemerge(rs *RemoteSlave, path string, partialRemerge bool, skipAgeCuto
 	rootMode = normalizeRemergeRootMode(rootMode)
 	args := []string{
 		path,
-		fmt.Sprintf("%v", partialRemerge),
-		fmt.Sprintf("%d", skipAgeCutoff),
-		fmt.Sprintf("%d", masterTime),
 		fmt.Sprintf("%v", instantOnline),
 		rootMode,
 		fmt.Sprintf("%d", maxInt(settings.DelayMS, 0)),
