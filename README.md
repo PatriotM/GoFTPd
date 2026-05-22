@@ -357,10 +357,12 @@ behavior.
 `master.manual_remerge_mode` controls `SITE REMERGE` separately and defaults to
 `instant`, so large hand-triggered remerges do not take the site offline.
 
-If `master.remerge_checksums: true`, remerge only asks slaves for CRCs when the
-current VFS entry does not already have a stored checksum. Unchanged files with
-preserved checksum state should not be re-CRC'd just because the master was
-restarted.
+If `master.remerge_checksums: true`, remerge only asks slaves for CRCs for SFV
+payload files that are present in VFS but still have no stored checksum.
+`master.remerge_checksum_threads` limits how many releases can run that CRC
+refresh at the same time. Files inside one release are checked sequentially, so
+the safe default is `1`; raise it to `2` or `4` only when the archive disks can
+handle the extra read load.
 
 For sites where files can disappear outside GoFTPd, for example external move
 or cleanup scripts, configure slow background VFS jobs under the master

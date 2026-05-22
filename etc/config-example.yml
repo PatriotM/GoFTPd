@@ -66,6 +66,10 @@ master:
                                 # files missing a stored checksum in the VFS.
                                 # Leave this off for imported/legacy trees unless you
                                 # explicitly want that extra verification pass.
+  remerge_checksum_threads: 1   # Max releases CRC-refreshed at the same time when
+                                # remerge_checksums is true. Files inside one release
+                                # are checked one-by-one. Raise to 2/4 only if disks
+                                # can handle the extra reads.
 # =============================================================================
 #  Slave block — used when mode: slave
 #  This is the only role-specific block a slave needs. On a master-only box,

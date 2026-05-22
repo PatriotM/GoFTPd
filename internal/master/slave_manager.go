@@ -25,7 +25,10 @@ import (
 //
 
 const (
-	vfsFilePath = "userdata/vfs.dat"
+	vfsFilePath                         = "userdata/vfs.dat"
+	defaultRemergeChecksumThreads       = 1
+	maxRemergeChecksumThreads           = 32
+	remergeChecksumResponseWaitDuration = 24 * time.Hour
 )
 
 type releaseRaceWindow struct {
@@ -117,7 +120,9 @@ type SlaveManager struct {
 	authState       map[string]*slaveAuthState
 	remergeCRCJobs  sync.Map
 	remergeSFVJobs  sync.Map
+	remergeCRCMu    sync.RWMutex
 	remergeCRCSem   chan struct{}
+	remergeCRCSlots atomic.Int64
 	remergePauseAt  atomic.Int64
 	remergeResumeAt atomic.Int64
 
@@ -194,9 +199,10 @@ func NewSlaveManager(host string, port int, tlsEnabled bool, tlsCert, tlsKey str
 		releaseAnnouncements:  make(map[string]map[string]bool),
 		releaseRaceWindows:    make(map[string]*releaseRaceWindow),
 		authState:             make(map[string]*slaveAuthState),
-		remergeCRCSem:         make(chan struct{}, 16),
+		remergeCRCSem:         make(chan struct{}, defaultRemergeChecksumThreads),
 		backgroundRemergeWake: make(chan struct{}, 1),
 	}
+	sm.remergeCRCSlots.Store(defaultRemergeChecksumThreads)
 	sm.remergeMode.Store("off")
 	sm.manualRemergeMode.Store("instant")
 	sm.remergePauseAt.Store(250)
@@ -486,6 +492,50 @@ func (sm *SlaveManager) SetExcludePaths(paths []string) {
 
 func (sm *SlaveManager) SetEnableRemergeChecksums(enabled bool) {
 	sm.enableRemergeChecksums.Store(enabled)
+}
+
+func (sm *SlaveManager) SetRemergeChecksumThreads(threads int) {
+	if sm == nil {
+		return
+	}
+	threads = normalizeRemergeChecksumThreads(threads)
+	sm.remergeCRCMu.Lock()
+	defer sm.remergeCRCMu.Unlock()
+	if current := int(sm.remergeCRCSlots.Load()); current == threads && sm.remergeCRCSem != nil {
+		return
+	}
+	sm.remergeCRCSem = make(chan struct{}, threads)
+	sm.remergeCRCSlots.Store(int64(threads))
+	log.Printf("[SlaveManager] Remerge checksum workers set to %d", threads)
+}
+
+func (sm *SlaveManager) RemergeChecksumThreads() int {
+	if sm == nil {
+		return defaultRemergeChecksumThreads
+	}
+	if threads := int(sm.remergeCRCSlots.Load()); threads > 0 {
+		return threads
+	}
+	return defaultRemergeChecksumThreads
+}
+
+func (sm *SlaveManager) remergeChecksumSemaphore() chan struct{} {
+	if sm == nil {
+		return nil
+	}
+	sm.remergeCRCMu.RLock()
+	defer sm.remergeCRCMu.RUnlock()
+	return sm.remergeCRCSem
+}
+
+func normalizeRemergeChecksumThreads(threads int) int {
+	if threads <= 0 {
+		return defaultRemergeChecksumThreads
+	}
+	if threads > maxRemergeChecksumThreads {
+		return maxRemergeChecksumThreads
+	}
+	return threads
 }
 
 func (sm *SlaveManager) SetRemergeFlowControl(pauseThreshold, resumeThreshold int) {
@@ -1578,9 +1628,6 @@ func (sm *SlaveManager) ProcessRemerge(rs *RemoteSlave, resp *protocol.AsyncResp
 		if !inode.IsDir && strings.HasSuffix(strings.ToLower(inode.Name), ".sfv") {
 			sfvPaths = append(sfvPaths, fullPath)
 		}
-		if sm.shouldRefreshRemergeChecksum(fullPath, inode) {
-			sm.scheduleRemergeChecksumRefresh(rs, fullPath)
-		}
 	}
 	for _, sfvPath := range sfvPaths {
 		sm.scheduleRemergeSFVParse(rs, sfvPath)
@@ -1600,66 +1647,6 @@ func (sm *SlaveManager) ProcessRemerge(rs *RemoteSlave, resp *protocol.AsyncResp
 	for releasePath := range touchedReleases {
 		sm.syncStatusMarkersForRelease(releasePath)
 	}
-}
-
-func (sm *SlaveManager) shouldRefreshRemergeChecksum(filePath string, inode protocol.LightRemoteInode) bool {
-	if !sm.enableRemergeChecksums.Load() {
-		return false
-	}
-	if inode.IsDir || inode.IsSymlink || inode.Size <= 0 {
-		return false
-	}
-	meta := sm.vfs.GetSFVData(path.Dir(filePath))
-	if meta == nil || len(meta.SFVEntries) == 0 {
-		return false
-	}
-	if _, ok := meta.SFVEntries[strings.ToLower(path.Base(filePath))]; !ok {
-		return false
-	}
-	current := sm.vfs.GetFile(filePath)
-	return current != nil && current.Checksum == 0
-}
-
-func (sm *SlaveManager) scheduleRemergeChecksumRefresh(rs *RemoteSlave, filePath string) {
-	if rs == nil || !rs.IsOnline() {
-		return
-	}
-	jobKey := rs.Name() + "|" + filepath.Clean(filePath)
-	if _, loaded := sm.remergeCRCJobs.LoadOrStore(jobKey, struct{}{}); loaded {
-		return
-	}
-	go func() {
-		defer sm.remergeCRCJobs.Delete(jobKey)
-		if sm.remergeCRCSem != nil {
-			sm.remergeCRCSem <- struct{}{}
-			defer func() { <-sm.remergeCRCSem }()
-		}
-
-		index, err := IssueChecksum(rs, filePath)
-		if err != nil {
-			return
-		}
-		resp, err := rs.FetchResponse(index, 30*time.Second)
-		if err != nil {
-			return
-		}
-		checksumResp, ok := resp.(*protocol.AsyncResponseChecksum)
-		if !ok {
-			return
-		}
-		meta := sm.vfs.GetSFVData(path.Dir(filePath))
-		if meta != nil && len(meta.SFVEntries) > 0 {
-			if expectedCRC, exists := meta.SFVEntries[strings.ToLower(path.Base(filePath))]; exists && expectedCRC != 0 && checksumResp.Checksum != expectedCRC {
-				log.Printf("[SlaveManager] Remerge CRC mismatch for %s on %s: got %08X expected %08X - keeping file and marking it unverified",
-					filePath, rs.Name(), checksumResp.Checksum, expectedCRC)
-				sm.vfs.UpdateFileVerification(filePath, checksumResp.Checksum)
-				sm.SyncStatusMarkersForPath(filePath, false)
-				return
-			}
-		}
-		sm.vfs.UpdateFileVerification(filePath, checksumResp.Checksum)
-		sm.SyncStatusMarkersForPath(filePath, false)
-	}()
 }
 
 func (sm *SlaveManager) scheduleRemergeSFVParse(rs *RemoteSlave, sfvPath string) {
@@ -1695,20 +1682,102 @@ func (sm *SlaveManager) scheduleRemergeSFVParse(rs *RemoteSlave, sfvPath string)
 		sm.vfs.SetSFVDataWithChecksum(dirPath, sfvName, sfvResp.Checksum, sfvMap)
 		sm.syncMissingMarkersAfterRemerge(rs, dirPath, sfvMap)
 		sm.syncStatusMarkersForRelease(dirPath)
-
-		for _, child := range sm.vfs.ListDirectory(dirPath) {
-			if child == nil || child.IsDir || child.Size <= 0 {
-				continue
-			}
-			nameKey := strings.ToLower(path.Base(child.Path))
-			if _, ok := sfvMap[nameKey]; !ok {
-				continue
-			}
-			if sm.enableRemergeChecksums.Load() && child.Checksum == 0 {
-				sm.scheduleRemergeChecksumRefresh(rs, child.Path)
-			}
-		}
+		sm.scheduleRemergeReleaseChecksumRefresh(rs, dirPath, sfvMap)
 	}()
+}
+
+func (sm *SlaveManager) scheduleRemergeReleaseChecksumRefresh(rs *RemoteSlave, dirPath string, sfvMap map[string]uint32) {
+	if sm == nil || rs == nil || !rs.IsOnline() || !sm.enableRemergeChecksums.Load() || len(sfvMap) == 0 {
+		return
+	}
+	dirPath = path.Clean("/" + strings.TrimSpace(dirPath))
+	if dirPath == "." || dirPath == "" {
+		return
+	}
+	jobKey := rs.Name() + "|" + filepath.Clean(dirPath)
+	if _, loaded := sm.remergeCRCJobs.LoadOrStore(jobKey, struct{}{}); loaded {
+		return
+	}
+	sfvCopy := make(map[string]uint32, len(sfvMap))
+	for name, checksum := range sfvMap {
+		sfvCopy[name] = checksum
+	}
+	go func() {
+		defer sm.remergeCRCJobs.Delete(jobKey)
+		sem := sm.remergeChecksumSemaphore()
+		if sem != nil {
+			sem <- struct{}{}
+			defer func() { <-sem }()
+		}
+		sm.refreshRemergeReleaseChecksums(rs, dirPath, sfvCopy)
+	}()
+}
+
+func (sm *SlaveManager) refreshRemergeReleaseChecksums(rs *RemoteSlave, dirPath string, sfvMap map[string]uint32) {
+	targets := sm.remergeChecksumTargets(dirPath, sfvMap)
+	if len(targets) == 0 {
+		return
+	}
+	log.Printf("[SlaveManager] Remerge CRC refresh started for %s on %s (%d file(s), workers=%d)",
+		dirPath, rs.Name(), len(targets), sm.RemergeChecksumThreads())
+	for _, target := range targets {
+		if rs == nil || !rs.IsOnline() {
+			return
+		}
+		index, err := IssueChecksum(rs, target.filePath)
+		if err != nil {
+			return
+		}
+		resp, err := rs.FetchResponse(index, remergeChecksumResponseWaitDuration)
+		if err != nil {
+			log.Printf("[SlaveManager] Remerge CRC refresh stopped for %s on %s: %v", target.filePath, rs.Name(), err)
+			return
+		}
+		checksumResp, ok := resp.(*protocol.AsyncResponseChecksum)
+		if !ok {
+			continue
+		}
+		if target.expectedCRC != 0 && checksumResp.Checksum != target.expectedCRC {
+			log.Printf("[SlaveManager] Remerge CRC mismatch for %s on %s: got %08X expected %08X - keeping file and marking it unverified",
+				target.filePath, rs.Name(), checksumResp.Checksum, target.expectedCRC)
+		}
+		sm.vfs.UpdateFileVerification(target.filePath, checksumResp.Checksum)
+		sm.SyncStatusMarkersForPath(target.filePath, false)
+	}
+	log.Printf("[SlaveManager] Remerge CRC refresh complete for %s on %s", dirPath, rs.Name())
+}
+
+type remergeChecksumTarget struct {
+	filePath    string
+	expectedCRC uint32
+}
+
+func (sm *SlaveManager) remergeChecksumTargets(dirPath string, sfvMap map[string]uint32) []remergeChecksumTarget {
+	entries := sm.vfs.ListDirectory(dirPath)
+	filesByKey := make(map[string]*VFSFile, len(entries))
+	for _, entry := range entries {
+		if entry == nil || entry.IsDir || entry.IsSymlink || entry.Size <= 0 {
+			continue
+		}
+		filesByKey[raceFileKey(path.Base(entry.Path))] = entry
+	}
+	keys := make([]string, 0, len(sfvMap))
+	for fileName := range sfvMap {
+		keys = append(keys, fileName)
+	}
+	sort.Strings(keys)
+	targets := make([]remergeChecksumTarget, 0, len(keys))
+	for _, fileName := range keys {
+		entry := filesByKey[raceFileKey(fileName)]
+		if entry == nil || entry.Checksum != 0 {
+			continue
+		}
+		targets = append(targets, remergeChecksumTarget{
+			filePath:    entry.Path,
+			expectedCRC: sfvMap[fileName],
+		})
+	}
+	return targets
 }
 
 func (sm *SlaveManager) syncMissingMarkersAfterRemerge(rs *RemoteSlave, dirPath string, sfvMap map[string]uint32) {

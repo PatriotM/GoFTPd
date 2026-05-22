@@ -199,7 +199,7 @@ func main() {
 			core.PublishEvent(cfg, core.Event{
 				Type:      core.EventCustom,
 				Timestamp: time.Now(),
-				Path:      remergeEventPath(status.Path),
+				Path:      "/",
 				Data:      data,
 			})
 		})
@@ -212,6 +212,7 @@ func main() {
 		sm.SetStatusMarkerConfig(cfg.Zipscript)
 		sm.SetRemergeMode(stringFromCfg(cfg.Master, "remerge_mode", "off"))
 		sm.SetManualRemergeMode(stringFromCfg(cfg.Master, "manual_remerge_mode", "instant"))
+		sm.SetRemergeChecksumThreads(intFromCfg(cfg.Master, "remerge_checksum_threads", 1))
 		sm.SetEnableRemergeChecksums(boolFromCfg(cfg.Master, "remerge_checksums", false))
 		warnDeprecatedMasterRemergeKeys(cfg.Master)
 		if err := sm.Start(); err != nil {
@@ -244,6 +245,7 @@ func main() {
 			sm.SetStatusMarkerConfig(c.Zipscript)
 			sm.SetRemergeMode(stringFromCfg(c.Master, "remerge_mode", "off"))
 			sm.SetManualRemergeMode(stringFromCfg(c.Master, "manual_remerge_mode", "instant"))
+			sm.SetRemergeChecksumThreads(intFromCfg(c.Master, "remerge_checksum_threads", 1))
 			sm.SetEnableRemergeChecksums(boolFromCfg(c.Master, "remerge_checksums", false))
 			warnDeprecatedMasterRemergeKeys(c.Master)
 			if err := sm.ConfigureAuthAllowlist(stringSliceFromCfg(c.Master, "slave_allowlist")); err != nil {
@@ -654,18 +656,6 @@ func remergeStatusMessage(status master.RemergeStatus) string {
 		parts = append(parts, fmt.Sprintf("active_transfers=%d", status.ActiveTransfers))
 	}
 	return strings.Join(parts, " ")
-}
-
-func remergeEventPath(p string) string {
-	p = strings.TrimSpace(p)
-	if p == "" {
-		return "/"
-	}
-	clean := path.Clean("/" + strings.TrimPrefix(p, "/"))
-	if clean == "." {
-		return "/"
-	}
-	return clean
 }
 
 func formatDaemonDuration(d time.Duration) string {
