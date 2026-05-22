@@ -5,6 +5,10 @@ import (
 	"time"
 )
 
+// TransferReadyFunc is called once a passthrough PORT transfer has a slave-side
+// transfer identity, allowing live BW to match the control session to slave stats.
+type TransferReadyFunc func(slaveName string, transferIdx int32)
+
 // MasterBridge is the interface that internal/core uses to talk to the master's
 // SlaveManager without importing internal/master (which would be circular).
 // The SlaveManager implements this interface and is injected via Config.MasterManager.
@@ -179,10 +183,10 @@ type MasterBridge interface {
 	RunOnSlaveCommand(dirPath, command string, args []string, env map[string]string, timeoutSeconds int, preferredSlave string) (string, error)
 
 	// Passthrough PORT: tell slave to connect out to remote address and receive file.
-	SlaveConnectAndReceive(filePath, remoteAddr, owner, group string, position int64, encrypted bool, sslClientMode bool, transferType byte) (int64, uint32, int64, error)
+	SlaveConnectAndReceive(filePath, remoteAddr, owner, group string, position int64, encrypted bool, sslClientMode bool, transferType byte, onReady TransferReadyFunc) (int64, uint32, int64, error)
 
 	// Passthrough PORT: tell the owning slave to connect out to remote address and send file.
-	SlaveConnectAndSend(filePath, remoteAddr, username, primaryGroup string, position int64, encrypted bool, sslClientMode bool, transferType byte) (uint32, int64, error)
+	SlaveConnectAndSend(filePath, remoteAddr, username, primaryGroup string, position int64, encrypted bool, sslClientMode bool, transferType byte, onReady TransferReadyFunc) (uint32, int64, error)
 
 	// Passthrough: ask a slave to listen and return its IP:port + transfer index.
 	// sslClientMode selects the TLS role for secure FXP passive sockets.

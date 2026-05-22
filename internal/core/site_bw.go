@@ -26,10 +26,7 @@ func (s *Session) HandleSiteBW(args []string) bool {
 	snaps := listActiveSessions()
 	uniqueUsers := map[string]struct{}{}
 	if targetUser != "" {
-		for _, snap := range snaps {
-			if !strings.EqualFold(strings.TrimSpace(snap.User), targetUser) {
-				continue
-			}
+		if snap, ok := findUserBandwidthSnapshot(snaps, targetUser); ok {
 			fmt.Fprintf(s.Conn, "200 %s\r\n", formatUserBandwidthLine(snap, slaveStats))
 			return false
 		}
@@ -91,6 +88,25 @@ func (s *Session) HandleSiteBW(args []string) bool {
 		browsing, idling,
 		totalUsers, totalConnections, formatBandwidthSpeed(totalSpeed))
 	return false
+}
+
+func findUserBandwidthSnapshot(snaps []sessionSnapshot, targetUser string) (sessionSnapshot, bool) {
+	targetUser = strings.TrimSpace(targetUser)
+	var fallback sessionSnapshot
+	found := false
+	for _, snap := range snaps {
+		if !strings.EqualFold(strings.TrimSpace(snap.User), targetUser) {
+			continue
+		}
+		if classifyBandwidthState(snap) == "upload" || classifyBandwidthState(snap) == "download" {
+			return snap, true
+		}
+		if !found {
+			fallback = snap
+			found = true
+		}
+	}
+	return fallback, found
 }
 
 func (s *Session) handleSiteBWSlave(args []string, slaveStats []LiveTransferStat) {

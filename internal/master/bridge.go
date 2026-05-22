@@ -2307,7 +2307,7 @@ func (b *Bridge) SlaveSendPassthrough(filePath string, transferIdx int32, slaveN
 
 // SlaveConnectAndReceive tells a slave to connect out to a remote address (PORT mode passthrough)
 // and receive a file. The slave connects directly to the remote site — master doesn't touch the data.
-func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group string, position int64, encrypted bool, sslClientMode bool, transferType byte) (int64, uint32, int64, error) {
+func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group string, position int64, encrypted bool, sslClientMode bool, transferType byte, onReady core.TransferReadyFunc) (int64, uint32, int64, error) {
 	var slave *RemoteSlave
 	if position > 0 {
 		slave = b.sm.SelectSlaveForDownload(filePath)
@@ -2344,6 +2344,9 @@ func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group strin
 	transferResp, ok := resp.(*protocol.AsyncResponseTransfer)
 	if !ok {
 		return 0, 0, 0, fmt.Errorf("unexpected response from slave")
+	}
+	if onReady != nil {
+		onReady(slave.Name(), transferResp.Info.TransferIndex)
 	}
 
 	// Tell slave to receive the file on this connection
@@ -2400,7 +2403,7 @@ func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group strin
 
 // SlaveConnectAndSend tells the owning slave to connect out to a remote address (PORT mode passthrough)
 // and send a file directly. The master only orchestrates the control flow.
-func (b *Bridge) SlaveConnectAndSend(filePath, remoteAddr, username, primaryGroup string, position int64, encrypted bool, sslClientMode bool, transferType byte) (uint32, int64, error) {
+func (b *Bridge) SlaveConnectAndSend(filePath, remoteAddr, username, primaryGroup string, position int64, encrypted bool, sslClientMode bool, transferType byte, onReady core.TransferReadyFunc) (uint32, int64, error) {
 	slave := b.sm.SelectSlaveForDownload(filePath)
 	if slave == nil {
 		return 0, 0, fmt.Errorf("file not found on any available slave: %s", filePath)
@@ -2432,6 +2435,9 @@ func (b *Bridge) SlaveConnectAndSend(filePath, remoteAddr, username, primaryGrou
 	transferResp, ok := resp.(*protocol.AsyncResponseTransfer)
 	if !ok {
 		return 0, 0, fmt.Errorf("unexpected response from slave")
+	}
+	if onReady != nil {
+		onReady(slave.Name(), transferResp.Info.TransferIndex)
 	}
 
 	minSpeed, maxSpeed, graceSeconds := b.transferSpeedLimits(username, primaryGroup, filePath, "download")

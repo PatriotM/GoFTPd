@@ -28,10 +28,10 @@ func (s *Session) HandleSiteRemerge(args []string) bool {
 			return false
 		}
 		if len(errs) > 0 {
-			fmt.Fprintf(s.Conn, "200 REMERGE started %d configured scan(s); skipped: %s\r\n", started, strings.Join(errs, "; "))
+			fmt.Fprintf(s.Conn, "200 REMERGE requested %d configured scan(s); skipped: %s\r\n", started, strings.Join(errs, "; "))
 			return false
 		}
-		fmt.Fprintf(s.Conn, "200 REMERGE started %d configured scan(s).\r\n", started)
+		fmt.Fprintf(s.Conn, "200 REMERGE requested %d configured scan(s).\r\n", started)
 		return false
 	}
 
@@ -41,10 +41,10 @@ func (s *Session) HandleSiteRemerge(args []string) bool {
 		return false
 	}
 	if len(errs) > 0 {
-		fmt.Fprintf(s.Conn, "200 REMERGE started for %s (%d configured scan(s)); skipped: %s\r\n", target, started, strings.Join(errs, "; "))
+		fmt.Fprintf(s.Conn, "200 REMERGE requested for %s (%d configured scan(s)); skipped: %s\r\n", target, started, strings.Join(errs, "; "))
 		return false
 	}
-	fmt.Fprintf(s.Conn, "200 REMERGE started for %s (%d configured scan(s)).\r\n", target, started)
+	fmt.Fprintf(s.Conn, "200 REMERGE requested for %s (%d configured scan(s)).\r\n", target, started)
 	return false
 }
 

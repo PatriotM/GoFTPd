@@ -230,6 +230,20 @@ func formatRemergeDuration(d time.Duration) string {
 	return d.String()
 }
 
+func isSlaveRemergeAlreadyRunningError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "remerge already running on slave")
+}
+
+func isSlaveRemergeStoppedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "remerge stopped")
+}
+
 func (sm *SlaveManager) SetSecurityHook(fn func(ip, remoteAddr, action, reason string, strikes, limit int, bannedUntil time.Time)) {
 	sm.securityHook = fn
 }
@@ -1361,17 +1375,8 @@ func (sm *SlaveManager) initializeSlaveRemerge(rs *RemoteSlave, basePath string,
 			jobName = "startup"
 		}
 	}
-	log.Printf("[SlaveManager] Starting remerge for slave %s (mode=%s base=%s roots=%s scoped=%v delay_ms=%d pause_on_active_transfers=%d)",
+	log.Printf("[SlaveManager] Requesting remerge for slave %s (mode=%s base=%s roots=%s scoped=%v delay_ms=%d pause_on_active_transfers=%d)",
 		rs.name, mode, basePath, rootMode, scoped, opts.delayMS, opts.pauseOnActiveTransfers)
-	sm.publishRemergeStatus(RemergeStatus{
-		Action:  "started",
-		Status:  "running",
-		Slave:   rs.name,
-		Job:     jobName,
-		Path:    basePath,
-		Roots:   rootMode,
-		Message: fmt.Sprintf("remerge started for %s job=%s path=%s roots=%s", rs.name, jobName, basePath, rootMode),
-	})
 
 	rs.remerging.Store(true)
 	if instantOnline {
@@ -1417,21 +1422,45 @@ func (sm *SlaveManager) initializeSlaveRemerge(rs *RemoteSlave, basePath string,
 		}
 		return
 	}
+	sm.publishRemergeStatus(RemergeStatus{
+		Action:  "requested",
+		Status:  "requested",
+		Slave:   rs.name,
+		Job:     jobName,
+		Path:    basePath,
+		Roots:   rootMode,
+		Message: fmt.Sprintf("remerge requested for %s job=%s path=%s roots=%s", rs.name, jobName, basePath, rootMode),
+	})
 
 	// Wait for remerge with no timeout (0 = use default actualTimeout per response,
 	// but we pass a very long timeout so large sites can finish)
 	remergeComplete := false
 	_, err = rs.FetchResponse(index, 60*time.Minute)
 	if err != nil {
-		log.Printf("[SlaveManager] Remerge did not complete for %s: %v (slave stays online)", rs.name, err)
+		action := "failed"
+		status := "failed"
+		message := fmt.Sprintf("remerge did not complete for %s job=%s path=%s: %v", rs.name, jobName, basePath, err)
+		if isSlaveRemergeAlreadyRunningError(err) {
+			action = "skipped"
+			status = "skipped"
+			message = fmt.Sprintf("remerge skipped for %s job=%s path=%s: already running on slave", rs.name, jobName, basePath)
+			log.Printf("[SlaveManager] Remerge skipped for %s: already running on slave", rs.name)
+		} else if isSlaveRemergeStoppedError(err) {
+			action = "stopped"
+			status = "stopped"
+			message = fmt.Sprintf("remerge stopped for %s job=%s path=%s", rs.name, jobName, basePath)
+			log.Printf("[SlaveManager] Remerge stopped for %s", rs.name)
+		} else {
+			log.Printf("[SlaveManager] Remerge did not complete for %s: %v (slave stays online)", rs.name, err)
+		}
 		sm.publishRemergeStatus(RemergeStatus{
-			Action:   "failed",
-			Status:   "failed",
+			Action:   action,
+			Status:   status,
 			Slave:    rs.name,
 			Job:      jobName,
 			Path:     basePath,
 			Roots:    rootMode,
-			Message:  fmt.Sprintf("remerge did not complete for %s job=%s path=%s: %v", rs.name, jobName, basePath, err),
+			Message:  message,
 			Duration: time.Since(startedAt),
 		})
 	} else {
@@ -2469,7 +2498,7 @@ func (sm *SlaveManager) runBackgroundRemergeJob(job backgroundRemergeJob, stagge
 			})
 			continue
 		}
-		log.Printf("[SlaveManager] Background remerge started: slave=%s job=%s path=%s roots=%s", job.slaveName, job.name, target.basePath, target.rootMode)
+		log.Printf("[SlaveManager] Background remerge requested: slave=%s job=%s path=%s roots=%s", job.slaveName, job.name, target.basePath, target.rootMode)
 		sm.initializeSlaveRemerge(rs, target.basePath, target.rootMode, true, true, remergeCommandOptions{
 			delayMS:                job.delayMS,
 			pauseOnActiveTransfers: job.pauseOnActiveTransfers,
