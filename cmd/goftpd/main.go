@@ -706,6 +706,7 @@ func slavePoliciesFromConfig(slaves []core.SlavePolicyConfig) map[string]master.
 				ExcludePaths:           job.ExcludePaths,
 				DelayMS:                job.DelayMS,
 				PauseOnActiveTransfers: job.PauseOnActiveTransfers,
+				Timeout:                time.Duration(job.TimeoutSeconds) * time.Second,
 				SkipBusy:               job.SkipBusySlave,
 			})
 		}

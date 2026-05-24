@@ -393,6 +393,7 @@ slaves:
             - "/ARCHiVE"
           delay_ms: 10
           pause_on_active_transfers: 1
+          timeout_seconds: 3600
           skip_busy_slave: true
 
         - name: "mounted_storage"
@@ -402,6 +403,7 @@ slaves:
           mount_paths: ["*"]
           delay_ms: 25
           pause_on_active_transfers: 1
+          timeout_seconds: 86400
           skip_busy_slave: true
 ```
 
@@ -410,6 +412,10 @@ start 5 minutes after boot, then wait 60 seconds between paths from the same
 mounted-root job. As each scanned directory reports back, stale direct VFS
 children are pruned right away, so old directories do not need to wait for the
 whole tree to finish.
+
+`timeout_seconds` controls how long the master waits for the slave's final
+remerge response before marking that job failed. If omitted, normal/all-root
+jobs default to 3600 seconds and mounted-root jobs default to 86400 seconds.
 
 For the common setup where normal releases live in `roots` and slower disks are
 configured as `mounted_roots` at `/ARCHiVE`, use two jobs like above: one
@@ -580,7 +586,8 @@ can wipe requests with `REQWIPE`. The sitebot request plugin can pass the IRC
 nick through using `-by:<nick>` only when the FTP login is listed in
 `request.proxy_users`. Filled requests are tracked in the request plugin's
 stored metadata on the request root, and `REQTOP` ranks users by filled
-request count without relying on `.reqfills` text files.
+request count without relying on `.reqfills` text files. The old `.requests`
+sidecar file is not used either; the request list also lives in VFS metadata.
 
 ### Slowkick
 

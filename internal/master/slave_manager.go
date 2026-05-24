@@ -29,6 +29,8 @@ const (
 	defaultRemergeChecksumThreads       = 1
 	maxRemergeChecksumThreads           = 32
 	remergeChecksumResponseWaitDuration = 24 * time.Hour
+	defaultRemergeResponseWaitDuration  = 60 * time.Minute
+	defaultMountedRemergeWaitDuration   = 24 * time.Hour
 )
 
 type releaseRaceWindow struct {
@@ -53,6 +55,7 @@ type backgroundRemergeJob struct {
 	excludePaths           []string
 	delayMS                int
 	pauseOnActiveTransfers int
+	timeout                time.Duration
 	skipBusy               bool
 }
 
@@ -171,6 +174,7 @@ type SlaveRemergeJobPolicy struct {
 	ExcludePaths           []string
 	DelayMS                int
 	PauseOnActiveTransfers int
+	Timeout                time.Duration
 	SkipBusy               bool
 }
 
@@ -179,6 +183,7 @@ type remergeCommandOptions struct {
 	pauseOnActiveTransfers int
 	excludePaths           []string
 	jobName                string
+	timeout                time.Duration
 }
 
 func NewSlaveManager(host string, port int, tlsEnabled bool, tlsCert, tlsKey string, heartbeatTimeout time.Duration) *SlaveManager {
@@ -248,6 +253,13 @@ func isSlaveRemergeStoppedError(err error) bool {
 		return false
 	}
 	return strings.Contains(strings.ToLower(err.Error()), "remerge stopped")
+}
+
+func isResponseTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "timeout waiting for response")
 }
 
 func (sm *SlaveManager) SetSecurityHook(fn func(ip, remoteAddr, action, reason string, strikes, limit int, bannedUntil time.Time)) {
@@ -372,6 +384,7 @@ func (sm *SlaveManager) SetSlavePolicies(policies map[string]SlaveRoutePolicy) {
 				excludePaths:           normalizeVFSPathList(job.ExcludePaths),
 				delayMS:                maxInt(job.DelayMS, 0),
 				pauseOnActiveTransfers: maxInt(job.PauseOnActiveTransfers, 0),
+				timeout:                job.Timeout,
 				skipBusy:               job.SkipBusy,
 			})
 		}
@@ -396,6 +409,9 @@ func normalizeSlaveRemergeJobs(slaveName string, jobs []SlaveRemergeJobPolicy) [
 		}
 		if job.PauseOnActiveTransfers < 0 {
 			job.PauseOnActiveTransfers = 0
+		}
+		if job.Timeout < 0 {
+			job.Timeout = 0
 		}
 		job.Path = normalizeRemergeJobPath(job.Path)
 		job.MountPaths = normalizeVFSPathList(job.MountPaths)
@@ -428,6 +444,16 @@ func normalizeRemergeJobPath(p string) string {
 		return "/"
 	}
 	return path.Clean("/" + p)
+}
+
+func remergeResponseWaitDuration(rootMode string, configured time.Duration) time.Duration {
+	if configured > 0 {
+		return configured
+	}
+	if normalizeRemergeRootMode(rootMode) == "mounted" {
+		return defaultMountedRemergeWaitDuration
+	}
+	return defaultRemergeResponseWaitDuration
 }
 
 func normalizeVFSPathList(paths []string) []string {
@@ -1427,6 +1453,7 @@ func (sm *SlaveManager) initializeSlaveRemerge(rs *RemoteSlave, basePath string,
 	}
 	log.Printf("[SlaveManager] Requesting remerge for slave %s (mode=%s base=%s roots=%s scoped=%v delay_ms=%d pause_on_active_transfers=%d)",
 		rs.name, mode, basePath, rootMode, scoped, opts.delayMS, opts.pauseOnActiveTransfers)
+	responseWait := remergeResponseWaitDuration(rootMode, opts.timeout)
 
 	rs.remerging.Store(true)
 	if instantOnline {
@@ -1482,10 +1509,11 @@ func (sm *SlaveManager) initializeSlaveRemerge(rs *RemoteSlave, basePath string,
 		Message: fmt.Sprintf("remerge requested for %s job=%s path=%s roots=%s", rs.name, jobName, basePath, rootMode),
 	})
 
-	// Wait for remerge with no timeout (0 = use default actualTimeout per response,
-	// but we pass a very long timeout so large sites can finish)
+	// Wait for the final remerge response. Directory snapshots are processed
+	// while the slave scans; this wait only controls when the job is considered
+	// done or failed.
 	remergeComplete := false
-	_, err = rs.FetchResponse(index, 60*time.Minute)
+	_, err = rs.FetchResponse(index, responseWait)
 	if err != nil {
 		action := "failed"
 		status := "failed"
@@ -1502,6 +1530,11 @@ func (sm *SlaveManager) initializeSlaveRemerge(rs *RemoteSlave, basePath string,
 			log.Printf("[SlaveManager] Remerge stopped for %s", rs.name)
 		} else {
 			log.Printf("[SlaveManager] Remerge did not complete for %s: %v (slave stays online)", rs.name, err)
+			if isResponseTimeoutError(err) {
+				if stopErr := IssueRemergeStop(rs); stopErr != nil {
+					log.Printf("[SlaveManager] Failed to stop timed-out remerge for %s: %v", rs.name, stopErr)
+				}
+			}
 		}
 		sm.publishRemergeStatus(RemergeStatus{
 			Action:   action,
@@ -1514,7 +1547,7 @@ func (sm *SlaveManager) initializeSlaveRemerge(rs *RemoteSlave, basePath string,
 			Duration: time.Since(startedAt),
 		})
 	} else {
-		if err := rs.WaitForRemergeDrain(60 * time.Minute); err != nil {
+		if err := rs.WaitForRemergeDrain(responseWait); err != nil {
 			log.Printf("[SlaveManager] Remerge queue did not drain for %s: %v", rs.name, err)
 			sm.publishRemergeStatus(RemergeStatus{
 				Action:   "failed",
@@ -2573,6 +2606,7 @@ func (sm *SlaveManager) runBackgroundRemergeJob(job backgroundRemergeJob, stagge
 			pauseOnActiveTransfers: job.pauseOnActiveTransfers,
 			excludePaths:           job.excludePaths,
 			jobName:                job.name,
+			timeout:                job.timeout,
 		})
 		if stagger > 0 && i < len(targets)-1 {
 			if !sm.waitBackgroundRemergeLoop(stagger) {

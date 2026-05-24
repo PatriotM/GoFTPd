@@ -272,6 +272,7 @@ func TestSetSlavePoliciesConfiguresBackgroundRemergeJobs(t *testing.T) {
 					ExcludePaths:           []string{"ARCHiVE"},
 					DelayMS:                10,
 					PauseOnActiveTransfers: 1,
+					Timeout:                30 * time.Minute,
 					SkipBusy:               true,
 				},
 				{
@@ -304,8 +305,32 @@ func TestSetSlavePoliciesConfiguresBackgroundRemergeJobs(t *testing.T) {
 	if cfg.jobs[0].delayMS != 10 || cfg.jobs[0].pauseOnActiveTransfers != 1 || !cfg.jobs[0].skipBusy {
 		t.Fatalf("first job throttle fields = %+v", cfg.jobs[0])
 	}
+	if cfg.jobs[0].timeout != 30*time.Minute {
+		t.Fatalf("first job timeout = %s, want 30m", cfg.jobs[0].timeout)
+	}
 	if cfg.jobs[1].rootMode != "mounted" || len(cfg.jobs[1].mountPaths) != 1 || cfg.jobs[1].mountPaths[0] != "/ARCHiVE" {
 		t.Fatalf("second job = %+v, want mounted /ARCHiVE", cfg.jobs[1])
+	}
+}
+
+func TestRemergeResponseWaitDurationDefaultsMountedJobsLonger(t *testing.T) {
+	if got := remergeResponseWaitDuration("normal", 0); got != defaultRemergeResponseWaitDuration {
+		t.Fatalf("normal timeout = %s, want %s", got, defaultRemergeResponseWaitDuration)
+	}
+	if got := remergeResponseWaitDuration("mounted", 0); got != defaultMountedRemergeWaitDuration {
+		t.Fatalf("mounted timeout = %s, want %s", got, defaultMountedRemergeWaitDuration)
+	}
+	if got := remergeResponseWaitDuration("mounted", 2*time.Hour); got != 2*time.Hour {
+		t.Fatalf("configured timeout = %s, want 2h", got)
+	}
+}
+
+func TestIsResponseTimeoutError(t *testing.T) {
+	if !isResponseTimeoutError(errors.New("timeout waiting for response 123 from slave LOCAL")) {
+		t.Fatalf("expected response timeout to be detected")
+	}
+	if isResponseTimeoutError(errors.New("slave error: remerge stopped")) {
+		t.Fatalf("did not expect non-timeout error to match")
 	}
 }
 

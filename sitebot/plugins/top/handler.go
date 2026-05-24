@@ -31,6 +31,8 @@ type Plugin struct {
 	replyTarget     string
 	defaultCount    int
 	maxCount        int
+	excludedUsers   map[string]struct{}
+	excludedGroups  map[string]struct{}
 	autoEnabled     bool
 	autoInterval    time.Duration
 	autoOnlyNonZero bool
@@ -98,6 +100,12 @@ func (p *Plugin) Initialize(config map[string]interface{}) error {
 	}
 	if p.defaultCount > p.maxCount {
 		p.defaultCount = p.maxCount
+	}
+	if raw, ok := configValueOK(cfg, config, "excluded_users", "top_excluded_users"); ok {
+		p.excludedUsers = lowerStringSet(plugin.ToStringSlice(raw, nil))
+	}
+	if raw, ok := configValueOK(cfg, config, "excluded_groups", "top_excluded_groups"); ok {
+		p.excludedGroups = lowerStringSet(plugin.ToStringSlice(raw, nil))
 	}
 	if b, ok := boolConfig(configValue(cfg, config, "auto_enabled", "top_auto_enabled")); ok {
 		p.autoEnabled = b
@@ -244,6 +252,9 @@ func (p *Plugin) loadDayUploadStats() ([]uploaderStat, int64, int64, error) {
 			}
 			continue
 		}
+		if p.isExcluded(stat) {
+			continue
+		}
 		if p.autoOnlyNonZero && stat.Files == 0 && stat.Bytes == 0 {
 			continue
 		}
@@ -267,6 +278,16 @@ func (p *Plugin) loadDayUploadStats() ([]uploaderStat, int64, int64, error) {
 	return stats, totalFiles, totalBytes, nil
 }
 
+func (p *Plugin) isExcluded(stat uploaderStat) bool {
+	if _, ok := p.excludedUsers[strings.ToLower(strings.TrimSpace(stat.User))]; ok {
+		return true
+	}
+	if _, ok := p.excludedGroups[strings.ToLower(strings.TrimSpace(stat.Group))]; ok {
+		return true
+	}
+	return false
+}
+
 func parseDayUploadSnapshot(path, username string, now time.Time) (uploaderStat, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -278,12 +299,12 @@ func parseDayUploadSnapshot(path, username string, now time.Time) (uploaderStat,
 	}
 	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
 	var (
-		foundDayUp bool
-		files       int64
-		bytes       int64
-		lastLogin   int64
+		foundDayUp   bool
+		files        int64
+		bytes        int64
+		lastLogin    int64
 		periodAnchor int64
-		group       = "Unknown"
+		group        = "Unknown"
 	)
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -520,4 +541,15 @@ func boolConfig(raw interface{}) (bool, bool) {
 		}
 	}
 	return false, false
+}
+
+func lowerStringSet(values []string) map[string]struct{} {
+	out := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value != "" {
+			out[value] = struct{}{}
+		}
+	}
+	return out
 }
