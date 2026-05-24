@@ -151,49 +151,57 @@ func TestRemoteSlaveOfflineClearsVFSFiles(t *testing.T) {
 	}
 }
 
-func TestShouldRefreshRemergeChecksumForTrackedUnverifiedPayload(t *testing.T) {
+func TestRemergeChecksumTargetsOnlyMissingKnownReleaseChecksums(t *testing.T) {
 	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
-	sm.SetEnableRemergeChecksums(true)
 	sm.vfs.AddFile("/X265/release", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
-	sm.vfs.SetSFVData("/X265/release", "release.sfv", map[string]uint32{
-		"file.r00": 1,
-	})
 	sm.vfs.AddFile("/X265/release/file.r00", VFSFile{
 		Size:      100,
 		Seen:      true,
 		SlaveName: "LOCAL",
 		Checksum:  0,
 	})
+	sm.vfs.AddFile("/X265/release/file.r01", VFSFile{
+		Size:      100,
+		Seen:      true,
+		SlaveName: "LOCAL",
+		Checksum:  2,
+	})
+	sm.vfs.AddFile("/X265/release/file.nfo", VFSFile{
+		Size:      100,
+		Seen:      true,
+		SlaveName: "LOCAL",
+		Checksum:  0,
+	})
 
-	if !sm.shouldRefreshRemergeChecksum("/X265/release/file.r00", protocol.LightRemoteInode{Name: "file.r00", Size: 100}) {
-		t.Fatalf("expected tracked unverified payload to request a remerge checksum refresh")
+	targets := sm.remergeChecksumTargets("/X265/release", map[string]uint32{
+		"file.r00": 1,
+		"file.r01": 2,
+		"file.r02": 3,
+	})
+	if len(targets) != 1 {
+		t.Fatalf("targets = %+v, want one unverified known payload", targets)
 	}
-
-	sm.vfs.UpdateFileVerification("/X265/release/file.r00", 1)
-	if sm.shouldRefreshRemergeChecksum("/X265/release/file.r00", protocol.LightRemoteInode{Name: "file.r00", Size: 100}) {
-		t.Fatalf("expected already verified payload to skip remerge checksum refresh")
-	}
-
-	if sm.shouldRefreshRemergeChecksum("/X265/release/file.nfo", protocol.LightRemoteInode{Name: "file.nfo", Size: 100}) {
-		t.Fatalf("expected untracked side file to skip remerge checksum refresh")
+	if targets[0].filePath != "/X265/release/file.r00" || targets[0].expectedCRC != 1 {
+		t.Fatalf("target = %+v, want file.r00 crc 1", targets[0])
 	}
 }
 
-func TestShouldRefreshRemergeChecksumDisabledByDefault(t *testing.T) {
+func TestSetRemergeChecksumThreadsNormalizes(t *testing.T) {
 	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
-	sm.vfs.AddFile("/X265/release", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
-	sm.vfs.SetSFVData("/X265/release", "release.sfv", map[string]uint32{
-		"file.r00": 1,
-	})
-	sm.vfs.AddFile("/X265/release/file.r00", VFSFile{
-		Size:      100,
-		Seen:      true,
-		SlaveName: "LOCAL",
-		Checksum:  0,
-	})
 
-	if sm.shouldRefreshRemergeChecksum("/X265/release/file.r00", protocol.LightRemoteInode{Name: "file.r00", Size: 100}) {
-		t.Fatalf("expected remerge checksum refresh to stay disabled by default")
+	sm.SetRemergeChecksumThreads(0)
+	if got := sm.RemergeChecksumThreads(); got != defaultRemergeChecksumThreads {
+		t.Fatalf("threads = %d, want default %d", got, defaultRemergeChecksumThreads)
+	}
+
+	sm.SetRemergeChecksumThreads(4)
+	if got := sm.RemergeChecksumThreads(); got != 4 {
+		t.Fatalf("threads = %d, want 4", got)
+	}
+
+	sm.SetRemergeChecksumThreads(maxRemergeChecksumThreads + 10)
+	if got := sm.RemergeChecksumThreads(); got != maxRemergeChecksumThreads {
+		t.Fatalf("threads = %d, want cap %d", got, maxRemergeChecksumThreads)
 	}
 }
 
@@ -264,6 +272,7 @@ func TestSetSlavePoliciesConfiguresBackgroundRemergeJobs(t *testing.T) {
 					ExcludePaths:           []string{"ARCHiVE"},
 					DelayMS:                10,
 					PauseOnActiveTransfers: 1,
+					Timeout:                30 * time.Minute,
 					SkipBusy:               true,
 				},
 				{
@@ -296,8 +305,32 @@ func TestSetSlavePoliciesConfiguresBackgroundRemergeJobs(t *testing.T) {
 	if cfg.jobs[0].delayMS != 10 || cfg.jobs[0].pauseOnActiveTransfers != 1 || !cfg.jobs[0].skipBusy {
 		t.Fatalf("first job throttle fields = %+v", cfg.jobs[0])
 	}
+	if cfg.jobs[0].timeout != 30*time.Minute {
+		t.Fatalf("first job timeout = %s, want 30m", cfg.jobs[0].timeout)
+	}
 	if cfg.jobs[1].rootMode != "mounted" || len(cfg.jobs[1].mountPaths) != 1 || cfg.jobs[1].mountPaths[0] != "/ARCHiVE" {
 		t.Fatalf("second job = %+v, want mounted /ARCHiVE", cfg.jobs[1])
+	}
+}
+
+func TestRemergeResponseWaitDurationDefaultsMountedJobsLonger(t *testing.T) {
+	if got := remergeResponseWaitDuration("normal", 0); got != defaultRemergeResponseWaitDuration {
+		t.Fatalf("normal timeout = %s, want %s", got, defaultRemergeResponseWaitDuration)
+	}
+	if got := remergeResponseWaitDuration("mounted", 0); got != defaultMountedRemergeWaitDuration {
+		t.Fatalf("mounted timeout = %s, want %s", got, defaultMountedRemergeWaitDuration)
+	}
+	if got := remergeResponseWaitDuration("mounted", 2*time.Hour); got != 2*time.Hour {
+		t.Fatalf("configured timeout = %s, want 2h", got)
+	}
+}
+
+func TestIsResponseTimeoutError(t *testing.T) {
+	if !isResponseTimeoutError(errors.New("timeout waiting for response 123 from slave LOCAL")) {
+		t.Fatalf("expected response timeout to be detected")
+	}
+	if isResponseTimeoutError(errors.New("slave error: remerge stopped")) {
+		t.Fatalf("did not expect non-timeout error to match")
 	}
 }
 

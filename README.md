@@ -357,10 +357,12 @@ behavior.
 `master.manual_remerge_mode` controls `SITE REMERGE` separately and defaults to
 `instant`, so large hand-triggered remerges do not take the site offline.
 
-If `master.remerge_checksums: true`, remerge only asks slaves for CRCs when the
-current VFS entry does not already have a stored checksum. Unchanged files with
-preserved checksum state should not be re-CRC'd just because the master was
-restarted.
+If `master.remerge_checksums: true`, remerge only asks slaves for CRCs for SFV
+payload files that are present in VFS but still have no stored checksum.
+`master.remerge_checksum_threads` limits how many releases can run that CRC
+refresh at the same time. Files inside one release are checked sequentially, so
+the safe default is `1`; raise it to `2` or `4` only when the archive disks can
+handle the extra read load.
 
 For sites where files can disappear outside GoFTPd, for example external move
 or cleanup scripts, configure slow background VFS jobs under the master
@@ -391,6 +393,7 @@ slaves:
             - "/ARCHiVE"
           delay_ms: 10
           pause_on_active_transfers: 1
+          timeout_seconds: 3600
           skip_busy_slave: true
 
         - name: "mounted_storage"
@@ -400,6 +403,7 @@ slaves:
           mount_paths: ["*"]
           delay_ms: 25
           pause_on_active_transfers: 1
+          timeout_seconds: 86400
           skip_busy_slave: true
 ```
 
@@ -408,6 +412,10 @@ start 5 minutes after boot, then wait 60 seconds between paths from the same
 mounted-root job. As each scanned directory reports back, stale direct VFS
 children are pruned right away, so old directories do not need to wait for the
 whole tree to finish.
+
+`timeout_seconds` controls how long the master waits for the slave's final
+remerge response before marking that job failed. If omitted, normal/all-root
+jobs default to 3600 seconds and mounted-root jobs default to 86400 seconds.
 
 For the common setup where normal releases live in `roots` and slower disks are
 configured as `mounted_roots` at `/ARCHiVE`, use two jobs like above: one
@@ -578,7 +586,8 @@ can wipe requests with `REQWIPE`. The sitebot request plugin can pass the IRC
 nick through using `-by:<nick>` only when the FTP login is listed in
 `request.proxy_users`. Filled requests are tracked in the request plugin's
 stored metadata on the request root, and `REQTOP` ranks users by filled
-request count without relying on `.reqfills` text files.
+request count without relying on `.reqfills` text files. The old `.requests`
+sidecar file is not used either; the request list also lives in VFS metadata.
 
 ### Slowkick
 

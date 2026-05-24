@@ -197,6 +197,7 @@ type SlaveRemergeJobConfig struct {
 	ExcludePaths           []string `yaml:"exclude_paths"`
 	DelayMS                int      `yaml:"delay_ms"`
 	PauseOnActiveTransfers int      `yaml:"pause_on_active_transfers"`
+	TimeoutSeconds         int      `yaml:"timeout_seconds"`
 	SkipBusySlave          bool     `yaml:"skip_busy_slave"`
 }
 

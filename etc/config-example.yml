@@ -66,6 +66,10 @@ master:
                                 # files missing a stored checksum in the VFS.
                                 # Leave this off for imported/legacy trees unless you
                                 # explicitly want that extra verification pass.
+  remerge_checksum_threads: 1   # Max releases CRC-refreshed at the same time when
+                                # remerge_checksums is true. Files inside one release
+                                # are checked one-by-one. Raise to 2/4 only if disks
+                                # can handle the extra reads.
 # =============================================================================
 #  Slave block — used when mode: slave
 #  This is the only role-specific block a slave needs. On a master-only box,
@@ -133,6 +137,7 @@ slave:
 #             - "/ARCHiVE"     # skip archive here if archive is mounted_roots
 #           delay_ms: 10
 #           pause_on_active_transfers: 1
+#           timeout_seconds: 3600 # Optional; default is 3600 for normal/all roots
 #           skip_busy_slave: true
 #         - name: "mounted_roots"
 #           enabled: true
@@ -141,6 +146,7 @@ slave:
 #           mount_paths: ["*"] # all mounted_roots mount_path values
 #           delay_ms: 25
 #           pause_on_active_transfers: 1
+#           timeout_seconds: 86400 # Optional; default is 86400 for mounted roots
 #           skip_busy_slave: true
 #
 #  Multi-slave routing options:
@@ -640,8 +646,10 @@ plugins:
     #   SITE REQDEL <number|Release.Name-GRP>
     #   SITE REQWIPE <number|Release.Name-GRP>
     # Enabling the plugin creates this base directory on startup.
+    # Request list and REQTOP fill counters are stored in VFS metadata on that
+    # request root, not in .requests/.reqfills text files.
     # Optional in plugins/request/config.yml:
-    #   storage_slave: "LOCAL"  # keep request metadata and REQ-* dirs on one slave
+    #   storage_slave: "LOCAL"  # keep request metadata and REQ-/FILLED-* dirs on one slave
     config_file: "plugins/request/config.yml"
   releaseguard:
     enabled: false

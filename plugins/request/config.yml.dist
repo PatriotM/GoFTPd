@@ -6,11 +6,12 @@
 #   SITE REQDEL <number|Release.Name-GRP>
 #   SITE REQWIPE <number|Release.Name-GRP>
 dir: "/REQUESTS"
-reqfile: "/REQUESTS/.requests"
-fill_stats_file: "/REQUESTS/.reqfills"
 
-# Optional: pin request storage to one writable slave. This keeps the base dir,
-# .requests, .reqfills and REQ-* dirs together instead of using automatic
+# Requests and REQTOP fill counters are stored in VFS metadata on `dir`.
+# No .requests or .reqfills sidecar files are written.
+
+# Optional: pin request storage to one writable slave. This keeps the request
+# root metadata and REQ-/FILLED-* dirs together instead of using automatic
 # upload routing. Leave empty to auto-select like normal writes.
 # storage_slave: "LOCAL"
 
@@ -38,8 +39,8 @@ show_on_request: false
 show_on_fill: false
 
 # When false, SITE REQUEST creates REQ-<release> immediately.
-# When true, only the .requests entry is created first and FILLED-<release> is
-# created later at fill time.
+# When true, only the VFS request metadata entry is created first and
+# FILLED-<release> is created later at fill time.
 do_not_create_dir_until_filled: false
 
 # Staff flags required for SITE REQWIPE.

@@ -18,6 +18,11 @@ reply_target: "channel"
 default_count: 10
 max_count: 25
 
+# Optional case-insensitive filters. Matching users/groups are removed from
+# the leaderboard and from total files/size.
+excluded_users: []
+excluded_groups: []
+
 # Optional periodic announce. Routed through sitebot's normal type routing as
 # output type TOP, then announce.default_channel, then irc.channels.
 auto_enabled: false

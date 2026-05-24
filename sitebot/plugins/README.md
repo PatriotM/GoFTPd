@@ -19,7 +19,7 @@ NOTICE) that the bot sends to channels.
 - **banned** - handles `!banned` by querying `SITE BANNED`
 - **selfip** - handles `!ip`, `!ips`, `!addip`, `!delip`, `!chgip` through `SITE SELFIP`
 - **quota** - tracks trial/quota users from GoFTPd user files and handles `!quota` plus staff `!quotactl ...`
-- **top** - handles `!top`, reading daily upload stats from goftpd user files and optionally auto-announcing the leaderboard
+- **top** - handles `!top`, reading daily upload stats from goftpd user files with optional user/group excludes and timed auto-announce
 - **rules** - handles `!rules`, reading a configured rules file or falling back to `SITE RULES`
 - **topic** - handles staff-only `!topic #channel topic text`, using FiSH topic encryption when a channel key exists
 - **control** - built-in staff control surface for `!refresh` and `!restart`
