@@ -39,8 +39,9 @@ func (b *testBridge) RelocatePathToSlave(from, toDir, toName, targetSlave string
 	b.deleted = append(b.deleted, cleanAbs(path.Join(toDir, toName)))
 	return nil
 }
-func (b *testBridge) WriteFile(path string, content []byte) error { return nil }
-func (b *testBridge) ReadFile(path string) ([]byte, error)        { return nil, nil }
+func (b *testBridge) ScrubReleaseRaceMetadata(dirPath, owner, group string) error { return nil }
+func (b *testBridge) WriteFile(path string, content []byte) error                 { return nil }
+func (b *testBridge) ReadFile(path string) ([]byte, error)                        { return nil, nil }
 func (b *testBridge) ProbeMediaInfo(path, binary string, timeoutSeconds int) (map[string]string, error) {
 	return nil, nil
 }

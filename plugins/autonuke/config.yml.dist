@@ -17,7 +17,8 @@ timeout_seconds: 10
 # Also stores history.jsonl with warn/nuke/skip/cleanup events.
 state_dir: "logs/autonuke"
 
-# Prefix used by normal nukes on site.
+# Prefix used by normal nukes on site. The reason is stored in nuke metadata
+# and IRC output, not in the directory name.
 nuked_prefix: "[NUKED]-"
 
 # Polling interval.

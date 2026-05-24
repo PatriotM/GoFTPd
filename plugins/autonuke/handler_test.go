@@ -12,6 +12,7 @@ import (
 
 type testBridge struct {
 	entries map[string][]plugin.FileEntry
+	deleted []string
 }
 
 func (b *testBridge) PluginListDir(path string) []plugin.FileEntry {
@@ -26,14 +27,18 @@ func (b *testBridge) Chmod(path string, mode uint32) error { return nil }
 func (b *testBridge) CreateSparseFile(path string, size int64, owner, group string) error {
 	return nil
 }
-func (b *testBridge) DeleteFile(path string) error                  { return nil }
+func (b *testBridge) DeleteFile(path string) error {
+	b.deleted = append(b.deleted, path)
+	return nil
+}
 func (b *testBridge) RenameFile(from, toDir, toName string) error   { return nil }
 func (b *testBridge) RelocatePath(from, toDir, toName string) error { return nil }
 func (b *testBridge) RelocatePathToSlave(from, toDir, toName, targetSlave string) error {
 	return nil
 }
-func (b *testBridge) WriteFile(path string, content []byte) error { return nil }
-func (b *testBridge) ReadFile(path string) ([]byte, error)        { return nil, nil }
+func (b *testBridge) ScrubReleaseRaceMetadata(dirPath, owner, group string) error { return nil }
+func (b *testBridge) WriteFile(path string, content []byte) error                 { return nil }
+func (b *testBridge) ReadFile(path string) ([]byte, error)                        { return nil, nil }
 func (b *testBridge) ProbeMediaInfo(path, binary string, timeoutSeconds int) (map[string]string, error) {
 	return nil, nil
 }
@@ -209,5 +214,39 @@ func TestTimedNukeReason(t *testing.T) {
 		if got := timedNukeReason(tt.base, tt.minutes); got != tt.want {
 			t.Fatalf("%s: timedNukeReason(%q, %d) = %q, want %q", tt.name, tt.base, tt.minutes, got, tt.want)
 		}
+	}
+}
+
+func TestCleanupOldNukesDeletesBridgePathAfterSiteWipe(t *testing.T) {
+	tmp := t.TempDir()
+	old := time.Now().Add(-2 * time.Hour).Unix()
+	bridge := &testBridge{entries: map[string][]plugin.FileEntry{
+		"/TV-1080P": {
+			{Name: "[NUKED]-Old.Release-GRP", IsDir: true, ModTime: old},
+		},
+	}}
+	var siteArgs []string
+	h := &Handler{
+		svc: &plugin.Services{Bridge: bridge},
+		cfg: config{
+			StateDir:    tmp,
+			NukedPrefix: "[NUKED]-",
+			Sections:    []string{"/TV-1080P/*"},
+			DeleteNukes: deleteRule{DeleteAfterMin: 30},
+		},
+		siteRunner: func(args string) ([]string, error) {
+			siteArgs = append(siteArgs, args)
+			return []string{"200 Wiped /TV-1080P/[NUKED]-Old.Release-GRP."}, nil
+		},
+	}
+
+	h.cleanupOldNukes()
+
+	want := "/TV-1080P/[NUKED]-Old.Release-GRP"
+	if len(siteArgs) != 1 || siteArgs[0] != "WIPE "+want {
+		t.Fatalf("siteArgs = %#v, want WIPE %s", siteArgs, want)
+	}
+	if len(bridge.deleted) != 1 || bridge.deleted[0] != want {
+		t.Fatalf("deleted = %#v, want %s", bridge.deleted, want)
 	}
 }

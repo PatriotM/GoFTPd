@@ -26,6 +26,8 @@ type Plugin struct {
 	dateddirsConfig string
 	bwDuration      int
 	bwIntervalMs    int
+	preOwner        string
+	preGroup        string
 	affils          []AffilRule
 	affilsFile      string
 	permissionsFile string
@@ -82,6 +84,8 @@ func New() *Plugin {
 		dateddirsConfig: "plugins/dateddirs/config.yml",
 		bwDuration:      30,
 		bwIntervalMs:    500,
+		preOwner:        "PRE",
+		preGroup:        "PRE",
 		affilsFile:      "etc/affils.yml",
 		permissionsFile: "etc/permissions.yml",
 		groupFile:       "etc/group",
@@ -122,6 +126,12 @@ func (p *Plugin) Init(svc *plugin.Services, cfg map[string]interface{}) error {
 	}
 	if n := intConfig(cfg["bw_interval_ms"], 0); n > 0 {
 		p.bwIntervalMs = n
+	}
+	if s := stringConfig(cfg, "pre_owner", ""); strings.TrimSpace(s) != "" {
+		p.preOwner = strings.TrimSpace(s)
+	}
+	if s := stringConfig(cfg, "pre_group", ""); strings.TrimSpace(s) != "" {
+		p.preGroup = strings.TrimSpace(s)
 	}
 	if b, ok := cfg["debug"].(bool); ok {
 		p.debug = b
@@ -230,7 +240,14 @@ func (p *Plugin) HandleSiteCommand(ctx plugin.SiteContext, command string, args 
 	mbytes := float64(totalBytes) / 1024.0 / 1024.0
 	metaVars := p.preMetadataVars(src, canonicalSection, relname)
 
-	p.svc.Bridge.RenameFile(src, destSection, relname)
+	if err := p.svc.Bridge.RenameFile(src, destSection, relname); err != nil {
+		ctx.Reply("550 PRE move failed: %v\r\n", err)
+		return true
+	}
+	preOwner, preGroup := p.preReleaseOwnerGroup(match.rule.Group)
+	if err := p.svc.Bridge.ScrubReleaseRaceMetadata(dst, preOwner, preGroup); err != nil {
+		p.logf("could not scrub PRE metadata for %s: %v", dst, err)
+	}
 	p.logf("%s pre'd %s to %s (%d files, %.0f MB)", ctx.UserName(), relname, dst, present, mbytes)
 	creditAwarded := p.applyPreCredits(users, match.rule.CreditRatio)
 
@@ -238,7 +255,7 @@ func (p *Plugin) HandleSiteCommand(ctx plugin.SiteContext, command string, args 
 		"relname":     relname,
 		"section":     canonicalSection,
 		"group":       match.rule.Group,
-		"user":        ctx.UserName(),
+		"user":        match.rule.Group,
 		"t_files":     fmt.Sprintf("%d", present),
 		"t_mbytes":    fmt.Sprintf("%.0fMB", mbytes),
 		"pre_ratio":   fmt.Sprintf("%d", match.rule.CreditRatio),
@@ -624,6 +641,7 @@ func (p *Plugin) runBWSampler(dst, relname, section, group string) {
 	userAggs := map[string]*userAgg{}
 	prev := map[string]userSnapshot{}
 	idleSlots := 0
+	hadActivity := false
 	const idleBreak = 20
 
 	for slot := 1; slot <= slots; slot++ {
@@ -648,6 +666,7 @@ func (p *Plugin) runBWSampler(dst, relname, section, group string) {
 			bps := int64(float64(deltaBytes) * 1000.0 / float64(intervalMs))
 			if bps > 0 {
 				anyActivity = true
+				hadActivity = true
 			}
 			slotTotalBps += bps
 
@@ -675,6 +694,9 @@ func (p *Plugin) runBWSampler(dst, relname, section, group string) {
 		} else {
 			idleSlots = 0
 		}
+	}
+	if !hadActivity {
+		return
 	}
 
 	actualSlots := len(perSec) - 1
@@ -799,6 +821,24 @@ func (p *Plugin) logf(format string, args ...interface{}) {
 	if p.debug {
 		log.Printf("[PRE] "+format, args...)
 	}
+}
+
+func (p *Plugin) preReleaseOwnerGroup(affilGroup string) (string, string) {
+	owner := strings.TrimSpace(p.preOwner)
+	group := strings.TrimSpace(p.preGroup)
+	if owner == "" {
+		owner = "PRE"
+	}
+	if group == "" {
+		group = "PRE"
+	}
+	if strings.EqualFold(group, "%group") || strings.EqualFold(group, "{group}") {
+		group = strings.TrimSpace(affilGroup)
+		if group == "" {
+			group = "PRE"
+		}
+	}
+	return owner, group
 }
 
 func sectionAllowed(allowed []string, section string) bool {
