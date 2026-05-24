@@ -14,6 +14,12 @@ base: "/PRE"
 bw_duration: 30
 bw_interval_ms: 500
 
+# Public ownership applied after SITE PRE. This prevents public PRE listings
+# and race banners from exposing the private affil uploader/racer.
+# Use pre_group: "%group" if you prefer the affil group as listed group owner.
+pre_owner: "PRE"
+pre_group: "PRE"
+
 # Sections where SITE PRE is allowed. These are the canonical destination
 # paths, so typing "mp3" still resolves to "/MP3" when MP3 is listed here.
 sections:

@@ -211,6 +211,42 @@ func (vfs *VirtualFileSystem) UpdateFileVerification(path string, checksum uint3
 	return true
 }
 
+// ScrubReleaseRaceMetadata neutralizes a release tree after it moves out of a
+// private race area. Ownership is rewritten for listings, while transfer times
+// are cleared so CWD/STOR race stats no longer expose the original racers.
+func (vfs *VirtualFileSystem) ScrubReleaseRaceMetadata(rootPath, owner, group string) {
+	vfs.mu.Lock()
+	defer vfs.mu.Unlock()
+
+	rootPath = cleanVFSPath(rootPath)
+	owner = strings.TrimSpace(owner)
+	group = strings.TrimSpace(group)
+	changed := false
+	for filePath, file := range vfs.files {
+		if file == nil {
+			continue
+		}
+		if filePath != rootPath && !strings.HasPrefix(filePath, rootPath+"/") {
+			continue
+		}
+		if owner != "" && file.Owner != owner {
+			file.Owner = owner
+			changed = true
+		}
+		if group != "" && file.Group != group {
+			file.Group = group
+			changed = true
+		}
+		if !file.IsDir && file.XferTime != 0 {
+			file.XferTime = 0
+			changed = true
+		}
+	}
+	if changed {
+		vfs.markPersistDirtyLocked()
+	}
+}
+
 func (vfs *VirtualFileSystem) SetHiddenPaths(paths []string) {
 	vfs.mu.Lock()
 	defer vfs.mu.Unlock()

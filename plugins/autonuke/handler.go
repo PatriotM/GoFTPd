@@ -23,12 +23,13 @@ import (
 )
 
 type Handler struct {
-	svc      *pluginpkg.Services
-	debug    bool
-	cfg      config
-	stopCh   chan struct{}
-	stopOnce sync.Once
-	wg       sync.WaitGroup
+	svc        *pluginpkg.Services
+	debug      bool
+	cfg        config
+	siteRunner func(siteArgs string) ([]string, error)
+	stopCh     chan struct{}
+	stopOnce   sync.Once
+	wg         sync.WaitGroup
 }
 
 type config struct {
@@ -563,6 +564,9 @@ func (h *Handler) cleanupOldNukes() {
 				}, "delete old nuke failed", err.Error())
 				continue
 			}
+			if err := h.svc.Bridge.DeleteFile(target); err != nil && !isCleanupNotFoundError(err) {
+				h.logf("delete old nuke VFS cleanup skipped for %s: %v", target, err)
+			}
 			h.logf("deleted old nuked release %s after %s", target, formatMinutes(limitMinutes))
 			h.appendHistory("cleanup_deleted", releaseCandidate{
 				Path:    target,
@@ -805,6 +809,9 @@ func visibleEntries(entries []pluginpkg.FileEntry) []pluginpkg.FileEntry {
 }
 
 func (h *Handler) runSITE(siteArgs string) ([]string, error) {
+	if h.siteRunner != nil {
+		return h.siteRunner(siteArgs)
+	}
 	addr := net.JoinHostPort(h.cfg.Host, strconv.Itoa(h.cfg.Port))
 	timeout := time.Duration(h.cfg.TimeoutSeconds) * time.Second
 	rawConn, err := net.DialTimeout("tcp", addr, timeout)
@@ -874,6 +881,14 @@ func (h *Handler) runSITE(siteArgs string) ([]string, error) {
 		return clean, errors.New(responseText(clean))
 	}
 	return clean, nil
+}
+
+func isCleanupNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "not found") || strings.Contains(msg, "no such file")
 }
 
 func readFTPResponse(r *bufio.Reader) (int, []string, error) {

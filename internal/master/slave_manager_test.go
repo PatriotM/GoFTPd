@@ -597,6 +597,40 @@ func TestStatusMarkerSyncDeletesMarkerPointingOutsideParent(t *testing.T) {
 	}
 }
 
+func TestStatusMarkerSyncSkipsAndPrunesNukedReleaseMarkers(t *testing.T) {
+	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
+	sm.SetStatusMarkerConfig(zipscript.Config{
+		Enabled: true,
+		Incomplete: zipscript.IncompleteConfig{
+			Enabled:        true,
+			Indicator:      "[incomplete]-%0",
+			NoSFVIndicator: "[no-sfv]-%0",
+			NFOIndicator:   "[no-nfo]-%0",
+		},
+	})
+
+	nukedPath := "/X265/[NUKED]-release"
+	sm.vfs.AddFile("/X265", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.AddFile(nukedPath, VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.SetSFVData(nukedPath, "release.sfv", map[string]uint32{
+		"file.r00": 1,
+		"file.r01": 2,
+	})
+	sm.vfs.AddFile(nukedPath+"/release.sfv", VFSFile{Size: 10, Seen: true, SlaveName: "LOCAL"})
+	sm.vfs.AddFile(nukedPath+"/file.r00", VFSFile{Size: 100, Seen: true, SlaveName: "LOCAL", Checksum: 1})
+
+	sm.SyncStatusMarkersForPath(nukedPath, true)
+	if got := sm.vfs.GetFile("/X265/[incomplete]-[NUKED]-release"); got != nil {
+		t.Fatalf("expected nuked release not to get incomplete marker, got %+v", got)
+	}
+
+	sm.vfs.AddSymlink("/X265/[incomplete]-[NUKED]-release", nukedPath)
+	sm.SyncStatusMarkersForPath("/X265", true)
+	if got := sm.vfs.GetFile("/X265/[incomplete]-[NUKED]-release"); got != nil {
+		t.Fatalf("expected stale nuked incomplete marker to be pruned, got %+v", got)
+	}
+}
+
 func TestRequestStatusMarkersWorkBeforeReqFill(t *testing.T) {
 	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
 	sm.SetStatusMarkerConfig(zipscript.Config{

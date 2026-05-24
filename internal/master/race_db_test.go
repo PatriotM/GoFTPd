@@ -170,6 +170,54 @@ func TestRecordUploadDoesNotRewriteExistingPresentRaceWinner(t *testing.T) {
 	}
 }
 
+func TestRaceDBScrubReleaseRaceMetadataKeepsCompletenessButHidesRacers(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "race.db")
+	rdb, err := NewRaceDB(dbPath)
+	if err != nil {
+		t.Fatalf("NewRaceDB failed: %v", err)
+	}
+	defer rdb.Close()
+
+	releasePath := "/GAMES/release"
+	if err := rdb.SaveSFV(releasePath, "release.sfv", map[string]uint32{"file.r00": 0x1234}); err != nil {
+		t.Fatalf("SaveSFV failed: %v", err)
+	}
+	if err := rdb.RecordUpload(releasePath+"/file.r00", "racer", "iND", 100, 1000, 0x1234); err != nil {
+		t.Fatalf("RecordUpload failed: %v", err)
+	}
+
+	users, _, _, present, total := rdb.GetRaceStats(releasePath)
+	if len(users) != 1 || present != 1 || total != 1 {
+		t.Fatalf("expected visible race stats before scrub, users=%d present=%d total=%d", len(users), present, total)
+	}
+
+	if err := rdb.ScrubReleaseRaceMetadata(releasePath, "PRE", "PRE"); err != nil {
+		t.Fatalf("ScrubReleaseRaceMetadata failed: %v", err)
+	}
+
+	users, groups, totalBytes, present, total := rdb.GetRaceStats(releasePath)
+	if len(users) != 0 || len(groups) != 0 {
+		t.Fatalf("expected scrubbed race stats to hide users/groups, users=%v groups=%v", users, groups)
+	}
+	if present != 1 || total != 1 || totalBytes != 100 {
+		t.Fatalf("expected completeness to survive scrub, present=%d total=%d bytes=%d", present, total, totalBytes)
+	}
+
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile(releasePath, VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile(releasePath+"/file.r00", VFSFile{Size: 100, Seen: true, Owner: "GoFTPd", Group: "GoFTPd", Checksum: 0x1234})
+	if hydrated, err := rdb.HydrateVFS(vfs); err != nil || hydrated != 0 {
+		t.Fatalf("HydrateVFS hydrated=%d err=%v", hydrated, err)
+	}
+	file := vfs.GetFile(releasePath + "/file.r00")
+	if file.Owner != "GoFTPd" || file.Group != "GoFTPd" {
+		t.Fatalf("expected scrubbed race DB rows not to hydrate race owner/group, got %s/%s", file.Owner, file.Group)
+	}
+	if file.XferTime != 0 {
+		t.Fatalf("expected scrubbed transfer time to stay 0, got %d", file.XferTime)
+	}
+}
+
 func TestReplaceReleaseFilesPreservesExistingRaceMetadataFromWeakRescan(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "race.db")
 	rdb, err := NewRaceDB(dbPath)

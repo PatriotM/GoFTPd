@@ -1086,14 +1086,10 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 		outs = p.appendTargeted(outs, "SLOWDOWNLOADKICK", p.render("SLOWDOWNLOADKICK", vars, "SLOWDN: "+message), p.slowDnKickChans)
 	case event.EventPre:
 		group := vars["group"]
-		user := vars["user"]
 		if group == "" {
 			group = evt.Group
 		}
-		if user == "" {
-			user = evt.User
-		}
-		fallback := fmt.Sprintf("PRE: [%s] %s by %s (%s) - %s/%s%s", section, rel, group, user, vars["t_mbytes"], vars["t_files"], vars["pre_suffix"])
+		fallback := fmt.Sprintf("PRE: [%s] %s by %s - %s/%sF%s", section, rel, group, vars["t_mbytes"], vars["t_files"], vars["pre_suffix"])
 		outs = append(outs, plugin.Output{Type: "PRE", Text: p.render("PRE", vars, fallback)})
 	case event.EventPreAudioInfo:
 		meta := []string{}

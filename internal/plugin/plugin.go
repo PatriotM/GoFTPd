@@ -218,6 +218,7 @@ type MasterBridge interface {
 	RenameFile(from, toDir, toName string) error
 	RelocatePath(from, toDir, toName string) error
 	RelocatePathToSlave(from, toDir, toName, targetSlave string) error
+	ScrubReleaseRaceMetadata(dirPath, owner, group string) error
 	WriteFile(path string, content []byte) error
 	ReadFile(path string) ([]byte, error)
 	ProbeMediaInfo(path, binary string, timeoutSeconds int) (map[string]string, error)

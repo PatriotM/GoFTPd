@@ -130,6 +130,9 @@ func (sm *SlaveManager) syncStatusMarkersForRelease(releasePath string) {
 	parentDir := path.Dir(releasePath)
 	relName := path.Base(releasePath)
 	sm.deleteStatusMarkersForRelease(cfg, parentDir, relName, releasePath)
+	if isNukedReleaseName(relName) {
+		return
+	}
 
 	if zipscript.IsIgnoredReleaseSubdir(cfg, releasePath) || !zipscript.UsesReleaseCheckEntry(cfg, releasePath) {
 		return
@@ -158,6 +161,9 @@ func (sm *SlaveManager) syncStatusMarkersForRelease(releasePath string) {
 func (sm *SlaveManager) statusMarkerReleaseForPath(cfg zipscript.Config, releasePath string, entry *VFSFile) (zipscript.StatusMarkerRelease, bool) {
 	releasePath = path.Clean("/" + strings.TrimSpace(releasePath))
 	if releasePath == "/" || releasePath == "." || entry == nil {
+		return zipscript.StatusMarkerRelease{}, false
+	}
+	if isNukedReleaseName(path.Base(releasePath)) {
 		return zipscript.StatusMarkerRelease{}, false
 	}
 	status, ok := sm.vfs.GetReleaseStatus(releasePath)
@@ -244,7 +250,7 @@ func (sm *SlaveManager) pruneStaleStatusMarkersForDir(dirPath string) {
 		}
 		cleanTarget := path.Clean("/" + strings.TrimSpace(entry.LinkTarget))
 		targetEntry := sm.vfs.GetFile(cleanTarget)
-		if cleanTarget == "/" || cleanTarget == "." || path.Dir(cleanTarget) != dirPath || targetEntry == nil || !targetEntry.IsDir {
+		if cleanTarget == "/" || cleanTarget == "." || path.Dir(cleanTarget) != dirPath || targetEntry == nil || !targetEntry.IsDir || isNukedReleaseName(path.Base(cleanTarget)) {
 			sm.vfs.DeleteFile(entry.Path)
 		}
 	}
@@ -285,8 +291,12 @@ func (sm *SlaveManager) syncStatusMarkersForDir(dirPath string) {
 	for markerPath, target := range existingMarkers {
 		cleanTarget := path.Clean("/" + strings.TrimSpace(target))
 		targetEntry := sm.vfs.GetFile(cleanTarget)
-		if cleanTarget == "/" || cleanTarget == "." || path.Dir(cleanTarget) != dirPath || targetEntry == nil || !targetEntry.IsDir {
+		if cleanTarget == "/" || cleanTarget == "." || path.Dir(cleanTarget) != dirPath || targetEntry == nil || !targetEntry.IsDir || isNukedReleaseName(path.Base(cleanTarget)) {
 			sm.vfs.DeleteFile(markerPath)
 		}
 	}
+}
+
+func isNukedReleaseName(name string) bool {
+	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(name)), "[NUKED]-")
 }

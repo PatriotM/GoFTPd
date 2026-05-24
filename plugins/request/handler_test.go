@@ -510,6 +510,9 @@ func (b *requestTestBridge) ProbeMediaInfo(string, string, int) (map[string]stri
 	return nil, nil
 }
 func (b *requestTestBridge) CacheMediaInfo(string, map[string]string) {}
+func (b *requestTestBridge) ScrubReleaseRaceMetadata(string, string, string) error {
+	return nil
+}
 func (b *requestTestBridge) FileExists(p string) bool {
 	p = cleanAbs(p)
 	_, fileOK := b.files[p]

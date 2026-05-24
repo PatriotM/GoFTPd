@@ -776,6 +776,21 @@ func (b *Bridge) RelocatePath(from, toDir, toName string) error {
 	return b.RelocatePathToSlave(from, toDir, toName, "")
 }
 
+func (b *Bridge) ScrubReleaseRaceMetadata(dirPath, owner, group string) error {
+	if b == nil || b.sm == nil {
+		return fmt.Errorf("master bridge unavailable")
+	}
+	cleanDirPath := filepath.Clean(dirPath)
+	b.sm.GetVFS().ScrubReleaseRaceMetadata(cleanDirPath, owner, group)
+	b.sm.ResetReleaseRaceWindow(cleanDirPath)
+	if b.raceDB != nil {
+		if err := b.raceDB.ScrubReleaseRaceMetadata(cleanDirPath, owner, group); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (b *Bridge) RelocatePathToSlave(from, toDir, toName, targetSlave string) error {
 	file := b.sm.GetVFS().GetFile(from)
 	if file == nil {

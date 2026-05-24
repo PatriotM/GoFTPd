@@ -132,6 +132,43 @@ func TestVFSRaceStatsUseCachedDirectChildren(t *testing.T) {
 	}
 }
 
+func TestVFSScrubReleaseRaceMetadataKeepsCompletenessButHidesRacers(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/GAMES/release", VFSFile{IsDir: true, Seen: true, Owner: "racer", Group: "iND"})
+	vfs.SetSFVData("/GAMES/release", "release.sfv", map[string]uint32{"file.r00": 0x1234})
+	vfs.AddFile("/GAMES/release/file.r00", VFSFile{
+		Size:     100,
+		Seen:     true,
+		Owner:    "racer",
+		Group:    "iND",
+		XferTime: 1000,
+		Checksum: 0x1234,
+	})
+
+	users, _, _, present, total := vfs.GetRaceStats("/GAMES/release")
+	if len(users) != 1 || present != 1 || total != 1 {
+		t.Fatalf("expected visible race stats before scrub, users=%d present=%d total=%d", len(users), present, total)
+	}
+
+	vfs.ScrubReleaseRaceMetadata("/GAMES/release", "PRE", "PRE")
+
+	users, groups, totalBytes, present, total := vfs.GetRaceStats("/GAMES/release")
+	if len(users) != 0 || len(groups) != 0 {
+		t.Fatalf("expected scrubbed race stats to hide users/groups, users=%v groups=%v", users, groups)
+	}
+	if present != 1 || total != 1 || totalBytes != 100 {
+		t.Fatalf("expected completeness to survive scrub, present=%d total=%d bytes=%d", present, total, totalBytes)
+	}
+	dir := vfs.GetFile("/GAMES/release")
+	file := vfs.GetFile("/GAMES/release/file.r00")
+	if dir.Owner != "PRE" || dir.Group != "PRE" || file.Owner != "PRE" || file.Group != "PRE" {
+		t.Fatalf("expected owner/group PRE/PRE after scrub, dir=%s/%s file=%s/%s", dir.Owner, dir.Group, file.Owner, file.Group)
+	}
+	if file.XferTime != 0 {
+		t.Fatalf("expected transfer time to be cleared, got %d", file.XferTime)
+	}
+}
+
 func TestVFSRaceStatsRefreshAfterDelete(t *testing.T) {
 	vfs := NewVirtualFileSystem()
 	vfs.AddFile("/site/MP3/release", VFSFile{IsDir: true, Seen: true})

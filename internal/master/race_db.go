@@ -456,6 +456,26 @@ func (r *RaceDB) RenamePath(from, to string, isDir bool) error {
 	return err
 }
 
+func (r *RaceDB) ScrubReleaseRaceMetadata(dirPath, owner, group string) error {
+	if r == nil || r.db == nil {
+		return nil
+	}
+	dirPath = filepath.Clean(dirPath)
+	owner = strings.TrimSpace(owner)
+	group = strings.TrimSpace(group)
+	_, err := r.db.Exec(`
+        UPDATE release_files
+        SET uploader = ?,
+            grp = ?,
+            duration_ms = 0,
+            updated_at = strftime('%s','now')
+        WHERE release_id IN (
+            SELECT id FROM releases WHERE path = ? OR path LIKE ?
+        )
+    `, owner, group, dirPath, dirPath+"/%")
+	return err
+}
+
 func (r *RaceDB) Reconcile(vfs *VirtualFileSystem) error {
 	releaseRows, err := r.db.Query(`SELECT path FROM releases`)
 	if err != nil {
@@ -579,6 +599,7 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
          AND e.filename = p.filename
         WHERE p.release_id = ?
           AND p.is_present = 1
+          AND p.duration_ms > 0
           AND p.checksum = e.expected_crc32
         GROUP BY p.uploader, p.grp
         ORDER BY COALESCE(SUM(p.size_bytes),0) DESC, COUNT(*) DESC, p.uploader ASC
@@ -688,6 +709,7 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
          AND e.filename = p.filename
         WHERE p.release_id = ?
           AND p.is_present = 1
+          AND p.duration_ms > 0
           AND p.checksum = e.expected_crc32
         GROUP BY p.grp
         ORDER BY COALESCE(SUM(p.size_bytes),0) DESC, COUNT(*) DESC, p.grp ASC

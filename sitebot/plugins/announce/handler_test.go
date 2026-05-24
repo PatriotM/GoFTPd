@@ -105,6 +105,36 @@ func TestVarsProvidesDrFTPDStyleAliases(t *testing.T) {
 	}
 }
 
+func TestPreAnnounceUsesGroupNotSiteCommandUser(t *testing.T) {
+	p := New()
+	outs, err := p.OnEvent(&event.Event{
+		Type:    event.EventPre,
+		Section: "GAMES",
+		User:    "",
+		Group:   "",
+		Path:    "/GAMES/test0r",
+		Data: map[string]string{
+			"relname":  "test0r",
+			"group":    "iND",
+			"user":     "iND",
+			"t_mbytes": "56MB",
+			"t_files":  "12",
+		},
+	})
+	if err != nil {
+		t.Fatalf("OnEvent PRE failed: %v", err)
+	}
+	if len(outs) != 1 {
+		t.Fatalf("expected one PRE output, got %+v", outs)
+	}
+	if strings.Contains(outs[0].Text, "test0r)") || strings.Contains(outs[0].Text, "(test0r") {
+		t.Fatalf("PRE output leaked site command user: %q", outs[0].Text)
+	}
+	if !strings.Contains(outs[0].Text, "by iND") || !strings.Contains(outs[0].Text, "56MB/12F") {
+		t.Fatalf("PRE output should use group and file suffix, got %q", outs[0].Text)
+	}
+}
+
 func TestUploadRaceAnnouncesStopAfterComplete(t *testing.T) {
 	p := New()
 
