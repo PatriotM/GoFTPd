@@ -24,6 +24,7 @@ const (
 	EventDownload         EventType = "DOWNLOAD"
 	EventDelete           EventType = "DELETE"
 	EventNuke             EventType = "NUKE"
+	EventAutonukeWarn     EventType = "AUTONUKEWARN"
 	EventRaceEnd          EventType = "RACEEND"    // COMPLETE line only
 	EventRaceStats        EventType = "RACESTATS"  // STATS_HOF + STATS_SPEEDS
 	EventRaceUser         EventType = "RACEUSER"   // one per racer in HOF

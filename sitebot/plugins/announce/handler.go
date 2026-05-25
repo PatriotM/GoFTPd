@@ -201,6 +201,9 @@ func releaseName(evt *event.Event) string {
 	if evt.Type == event.EventNuke || evt.Type == event.EventUnnuke {
 		return base
 	}
+	if evt.Type == event.EventAutonukeWarn {
+		return base
+	}
 	name := strings.ToLower(evt.Filename)
 	if strings.Contains(name, ".") {
 		releaseDir := path.Base(path.Dir(clean))
@@ -940,6 +943,25 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 		}
 	case event.EventUnnuke:
 		outs = append(outs, plugin.Output{Type: "UNNUKE", Text: p.render("UNNUKE", vars, fmt.Sprintf("UNNUKE: [%s] %s by %s", section, rel, evt.User))})
+	case event.EventAutonukeWarn:
+		message := strings.TrimSpace(vars["message"])
+		if message == "" {
+			tag := strings.TrimSpace(vars["tag"])
+			if tag == "" {
+				tag = "AUTONUKE"
+			}
+			owner := strings.TrimSpace(vars["owner"])
+			if owner == "" {
+				owner = "-"
+			}
+			message = fmt.Sprintf("%s: [%s] %s owner=%s warned after %s, nukes after %s",
+				tag, section, rel, owner, vars["warn_after"], vars["nuke_after"])
+			if detail := strings.TrimSpace(vars["detail"]); detail != "" {
+				message += " [" + detail + "]"
+			}
+		}
+		vars["message"] = message
+		outs = append(outs, plugin.Output{Type: "AUTONUKEWARN", Text: p.render("AUTONUKEWARN", vars, "WARN: "+message)})
 	case event.EventLoginFail:
 		key := loginFailKey(vars)
 		if key != "|||" && p.loginFailCooldown > 0 {

@@ -58,6 +58,31 @@ func TestReleaseNameUsesDirectoryBaseForNukeEvents(t *testing.T) {
 	}
 }
 
+func TestAutonukeWarnAnnounceUsesMessage(t *testing.T) {
+	p := New()
+	outs, err := p.OnEvent(&event.Event{
+		Type:    event.EventAutonukeWarn,
+		Section: "0DAY",
+		Path:    "/0DAY/Example.Release-GRP",
+		Data: map[string]string{
+			"relname": "Example.Release-GRP",
+			"message": "ANUKEINC: [0DAY] Example.Release-GRP owner=test0r warned after 30 seconds, nukes after 60 seconds",
+		},
+	})
+	if err != nil {
+		t.Fatalf("OnEvent AUTONUKEWARN failed: %v", err)
+	}
+	if len(outs) != 1 {
+		t.Fatalf("expected one AUTONUKEWARN output, got %+v", outs)
+	}
+	if outs[0].Type != "AUTONUKEWARN" {
+		t.Fatalf("output type = %q, want AUTONUKEWARN", outs[0].Type)
+	}
+	if !strings.Contains(outs[0].Text, "ANUKEINC: [0DAY] Example.Release-GRP") {
+		t.Fatalf("warning output missing message: %q", outs[0].Text)
+	}
+}
+
 func TestVarsProvidesDrFTPDStyleAliases(t *testing.T) {
 	p := New()
 	evt := &event.Event{

@@ -515,6 +515,20 @@ func (h *Handler) warn(rel releaseCandidate, key, tag, description string, warnA
 	}
 	h.logf(message)
 	h.appendHistory("warn", rel, description, detail)
+	if h.svc != nil && h.svc.EmitEvent != nil {
+		h.svc.EmitEvent(string(core.EventAutonukeWarn), rel.Path, rel.Name, rel.Section, 0, 0, map[string]string{
+			"relname":    rel.Name,
+			"section":    rel.Section,
+			"owner":      h.ownerLabel(rel),
+			"rule":       key,
+			"tag":        tag,
+			"reason":     description,
+			"detail":     detail,
+			"warn_after": formatMinutes(warnAfter),
+			"nuke_after": formatMinutes(nukeAfter),
+			"message":    message,
+		})
+	}
 }
 
 func (h *Handler) clearAllWarnings(rel releaseCandidate) {
