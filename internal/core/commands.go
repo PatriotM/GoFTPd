@@ -2225,9 +2225,21 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			if strings.EqualFold(s.TransferType, "I") {
 				typeName = "BINARY"
 			}
-			fmt.Fprintf(s.Conn, "211- %s server status:\r\n", s.Config.SiteNameShort)
-			fmt.Fprintf(s.Conn, " Connected from %s\r\n", s.Conn.RemoteAddr())
-			fmt.Fprintf(s.Conn, " Logged in as %s\r\n", s.User.Name)
+			siteName := "GoFTPd"
+			if s.Config != nil && strings.TrimSpace(s.Config.SiteNameShort) != "" {
+				siteName = s.Config.SiteNameShort
+			}
+			remoteAddr := "unknown"
+			if s.Conn != nil && s.Conn.RemoteAddr() != nil {
+				remoteAddr = s.Conn.RemoteAddr().String()
+			}
+			fmt.Fprintf(s.Conn, "211- %s server status:\r\n", siteName)
+			fmt.Fprintf(s.Conn, " Connected from %s\r\n", remoteAddr)
+			if s.User != nil && strings.TrimSpace(s.User.Name) != "" {
+				fmt.Fprintf(s.Conn, " Logged in as %s\r\n", s.User.Name)
+			} else {
+				fmt.Fprintf(s.Conn, " Not logged in\r\n")
+			}
 			fmt.Fprintf(s.Conn, " TYPE: %s, STRU: F, MODE: S\r\n", typeName)
 			fmt.Fprintf(s.Conn, "211 End of status.\r\n")
 			return false
