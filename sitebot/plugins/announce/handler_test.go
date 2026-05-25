@@ -83,6 +83,47 @@ func TestAutonukeWarnAnnounceUsesMessage(t *testing.T) {
 	}
 }
 
+func TestAutonukeDeleteAnnounceUsesMessage(t *testing.T) {
+	p := New()
+	outs, err := p.OnEvent(&event.Event{
+		Type:    event.EventAutonukeDelete,
+		Section: "TV-1080P",
+		Path:    "/TV-1080P/[NUKED]-Old.Release-GRP",
+		Data: map[string]string{
+			"message": "deleted old nuked release [TV-1080P] [NUKED]-Old.Release-GRP (deleted after 30 minutes)",
+		},
+	})
+	if err != nil {
+		t.Fatalf("OnEvent AUTONUKEDELETE failed: %v", err)
+	}
+	if len(outs) != 1 || outs[0].Type != "AUTONUKEDELETE" {
+		t.Fatalf("expected one AUTONUKEDELETE output, got %+v", outs)
+	}
+	if !strings.Contains(outs[0].Text, "deleted old nuked release") {
+		t.Fatalf("delete output missing message: %q", outs[0].Text)
+	}
+}
+
+func TestUserChangeAnnounceUsesMessage(t *testing.T) {
+	p := New()
+	outs, err := p.OnEvent(&event.Event{
+		Type: event.EventUserChange,
+		User: "Finity",
+		Data: map[string]string{
+			"message": "CHRATIO user test0r ratio 3 -> 0 by Finity",
+		},
+	})
+	if err != nil {
+		t.Fatalf("OnEvent USERCHANGE failed: %v", err)
+	}
+	if len(outs) != 1 || outs[0].Type != "USERCHANGE" {
+		t.Fatalf("expected one USERCHANGE output, got %+v", outs)
+	}
+	if !strings.Contains(outs[0].Text, "CHRATIO user test0r ratio 3 -> 0 by Finity") {
+		t.Fatalf("userchange output missing message: %q", outs[0].Text)
+	}
+}
+
 func TestVarsProvidesDrFTPDStyleAliases(t *testing.T) {
 	p := New()
 	evt := &event.Event{

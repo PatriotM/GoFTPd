@@ -25,6 +25,7 @@ const (
 	EventDelete           EventType = "DELETE"
 	EventNuke             EventType = "NUKE"
 	EventAutonukeWarn     EventType = "AUTONUKEWARN"
+	EventAutonukeDelete   EventType = "AUTONUKEDELETE"
 	EventRaceEnd          EventType = "RACEEND"    // COMPLETE line only
 	EventRaceStats        EventType = "RACESTATS"  // STATS_HOF + STATS_SPEEDS
 	EventRaceUser         EventType = "RACEUSER"   // one per racer in HOF
@@ -32,6 +33,7 @@ const (
 	EventRaceGroup        EventType = "RACEGROUP"  // one per group in GroupTop
 	EventRaceFooter       EventType = "RACEFOOTER" // STATS_END line
 	EventNewUser          EventType = "NEWUSER"
+	EventUserChange       EventType = "USERCHANGE"
 	EventLoginFail        EventType = "LOGINFAIL"
 	EventSelfIP           EventType = "SELFIP"
 	EventSlaveAuthFail    EventType = "SLAVEAUTHFAIL"

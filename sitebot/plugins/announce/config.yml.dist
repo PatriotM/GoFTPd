@@ -15,11 +15,13 @@ loginfail_cooldown_seconds: 10
 type_routes:
   NUKE: ["#goftpd-nuke"]
   AUTONUKEWARN: ["#goftpd-nuke"]
+  AUTONUKEDELETE: ["#goftpd-nuke"]
   UNNUKE: ["#goftpd-nuke"]
   NEWDAY: ["#goftpd"]
   SPEEDTEST: ["#goftpd"]
   TOP: ["#goftpd-chat"]
   LOGIN: ["#goftpd-staff"]
+  USERCHANGE: ["#goftpd-staff"]
   SELFIP: ["#goftpd-staff"]
   RELEASEGUARD: ["#goftpd-staff"]
   SLAVEAUTH: ["#goftpd-staff"]

@@ -269,8 +269,16 @@ func TestCleanupOldNukesDeletesBridgePathAfterSiteWipe(t *testing.T) {
 		},
 	}}
 	var siteArgs []string
+	var gotType string
+	var gotData map[string]string
 	h := &Handler{
-		svc: &plugin.Services{Bridge: bridge},
+		svc: &plugin.Services{
+			Bridge: bridge,
+			EmitEvent: func(eventType, path, filename, section string, size int64, speed float64, data map[string]string) {
+				gotType = eventType
+				gotData = data
+			},
+		},
 		cfg: config{
 			StateDir:    tmp,
 			NukedPrefix: "[NUKED]-",
@@ -291,5 +299,11 @@ func TestCleanupOldNukesDeletesBridgePathAfterSiteWipe(t *testing.T) {
 	}
 	if len(bridge.deleted) != 1 || bridge.deleted[0] != want {
 		t.Fatalf("deleted = %#v, want %s", bridge.deleted, want)
+	}
+	if gotType != string(core.EventAutonukeDelete) {
+		t.Fatalf("event type = %q, want %q", gotType, core.EventAutonukeDelete)
+	}
+	if !strings.Contains(gotData["message"], "deleted old nuked release") {
+		t.Fatalf("cleanup announce missing message: %#v", gotData)
 	}
 }
