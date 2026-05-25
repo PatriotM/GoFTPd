@@ -13,6 +13,7 @@ import (
 
 type testBridge struct {
 	entries map[string][]plugin.FileEntry
+	sfvData map[string]map[string]uint32
 	deleted []string
 }
 
@@ -46,7 +47,12 @@ func (b *testBridge) ProbeMediaInfo(path, binary string, timeoutSeconds int) (ma
 func (b *testBridge) CacheMediaInfo(path string, fields map[string]string) {}
 func (b *testBridge) FileExists(path string) bool                          { return false }
 func (b *testBridge) GetFileSize(path string) int64                        { return -1 }
-func (b *testBridge) GetSFVData(dirPath string) map[string]uint32          { return nil }
+func (b *testBridge) GetSFVData(dirPath string) map[string]uint32 {
+	if b.sfvData == nil {
+		return nil
+	}
+	return b.sfvData[dirPath]
+}
 func (b *testBridge) GetRequestData(dirPath string) ([]plugin.RequestRecord, []plugin.RequestFillRecord) {
 	return nil, nil
 }
@@ -211,6 +217,76 @@ func TestWarnEmitsAutonukeWarnEvent(t *testing.T) {
 	}
 	if !strings.Contains(gotData["message"], "ANUKEINC: [0DAY] Example.Release-GRP") {
 		t.Fatalf("message missing release warning: %q", gotData["message"])
+	}
+}
+
+func TestBannedRuleTakesPriorityOverIncomplete(t *testing.T) {
+	tmp := t.TempDir()
+	rel := releaseCandidate{
+		Path:    "/GAMES/Bad.Release_NSW-GRP",
+		Name:    "Bad.Release_NSW-GRP",
+		Section: "GAMES",
+		Owner:   "test0r",
+		ModTime: time.Now().Add(-2 * time.Hour).Unix(),
+	}
+
+	var siteArgs string
+	h := &Handler{
+		cfg: config{
+			StateDir:         tmp,
+			NukedPrefix:      "[NUKED]-",
+			ApprovalMarkers:  []string{".approved"},
+			CheckCompleteDir: true,
+			Empty:            timedRule{Enabled: false},
+			HalfEmpty:        timedPayloadRule{timedRule: timedRule{Enabled: false}},
+			Incomplete: incompleteRule{
+				timedRule: timedRule{
+					Enabled:      true,
+					NukeAfterMin: 1,
+					Multiplier:   10,
+					Reason:       "Incomplete",
+				},
+			},
+			Banned: timedPatternRules{
+				Enabled:      true,
+				NukeAfterMin: 1,
+				DefaultMulti: 3,
+				Rules: []patternRule{
+					{BasePath: "/GAMES", Patterns: []string{"_NSW"}, Description: "bad tag"},
+				},
+			},
+		},
+		svc: &plugin.Services{Bridge: &testBridge{
+			entries: map[string][]plugin.FileEntry{
+				rel.Path: {
+					{Name: "present.r00", IsDir: false},
+				},
+			},
+			sfvData: map[string]map[string]uint32{
+				rel.Path: {"missing.r01": 0},
+			},
+		}},
+		siteRunner: func(args string) ([]string, error) {
+			siteArgs = args
+			return []string{"200 OK"}, nil
+		},
+	}
+
+	h.processRelease(rel)
+
+	if !strings.Contains(siteArgs, "NUKE "+rel.Path+" x3 -Auto- bad tag") {
+		t.Fatalf("expected bad-tag nuke to win, got SITE args %q", siteArgs)
+	}
+	data, err := os.ReadFile(filepath.Join(tmp, "history.jsonl"))
+	if err != nil {
+		t.Fatalf("read history.jsonl: %v", err)
+	}
+	text := string(data)
+	if strings.Contains(text, "Incomplete") {
+		t.Fatalf("incomplete rule should not win over banned tag: %s", text)
+	}
+	if !strings.Contains(text, `"reason":"bad tag"`) {
+		t.Fatalf("history should record bad tag reason: %s", text)
 	}
 }
 

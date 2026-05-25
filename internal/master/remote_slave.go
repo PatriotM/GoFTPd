@@ -37,6 +37,9 @@ type RemoteSlave struct {
 	remerging         atomic.Bool
 	remergeQueueDepth atomic.Int64
 	remergePaused     atomic.Bool
+	remergeStateMu    sync.Mutex
+	remergeIndex      string
+	remergeTimedOut   bool
 	diskStatus        protocol.DiskStatus
 	diskMu            sync.RWMutex
 
@@ -87,6 +90,44 @@ func (rs *RemoteSlave) Name() string      { return rs.name }
 func (rs *RemoteSlave) IsOnline() bool    { return rs.online.Load() }
 func (rs *RemoteSlave) IsAvailable() bool { return rs.available.Load() }
 func (rs *RemoteSlave) IsRemerging() bool { return rs.remerging.Load() }
+
+func (rs *RemoteSlave) setActiveRemerge(index string) {
+	rs.remergeStateMu.Lock()
+	rs.remergeIndex = index
+	rs.remergeTimedOut = false
+	rs.remergeStateMu.Unlock()
+	rs.remerging.Store(index != "")
+}
+
+func (rs *RemoteSlave) markActiveRemergeTimedOut(index string) bool {
+	rs.remergeStateMu.Lock()
+	defer rs.remergeStateMu.Unlock()
+	if rs.remergeIndex != index {
+		return false
+	}
+	rs.remergeTimedOut = true
+	rs.remerging.Store(true)
+	return true
+}
+
+func (rs *RemoteSlave) clearActiveRemerge(index string) bool {
+	rs.remergeStateMu.Lock()
+	defer rs.remergeStateMu.Unlock()
+	if index != "" && rs.remergeIndex != index {
+		return false
+	}
+	rs.remergeIndex = ""
+	rs.remergeTimedOut = false
+	rs.remerging.Store(false)
+	rs.remergePaused.Store(false)
+	return true
+}
+
+func (rs *RemoteSlave) isTimedOutRemergeResponse(index string) bool {
+	rs.remergeStateMu.Lock()
+	defer rs.remergeStateMu.Unlock()
+	return index != "" && rs.remergeIndex == index && rs.remergeTimedOut
+}
 
 // ActiveTransfers returns the current number of in-flight data transfers on this slave.
 // Used by upload routing and background remerge skip-busy decisions.
@@ -435,6 +476,11 @@ func (rs *RemoteSlave) routeResponse(index string, obj interface{}) {
 		}
 		return
 	}
+	if rs.isTimedOutRemergeResponse(index) {
+		rs.clearActiveRemerge(index)
+		log.Printf("[Master] Late remerge response from slave %s cleared timed-out remerge state", rs.name)
+		return
+	}
 	rs.earlyResponses.Store(index, obj)
 }
 
@@ -446,8 +492,7 @@ func (rs *RemoteSlave) SetOffline(reason string) {
 
 	log.Printf("[Master] Slave %s going offline: %s", rs.name, reason)
 	rs.available.Store(false)
-	rs.remerging.Store(false)
-	rs.remergePaused.Store(false)
+	rs.clearActiveRemerge("")
 	rs.remergeQueueDepth.Store(0)
 	if rs.conn != nil {
 		rs.conn.Close()

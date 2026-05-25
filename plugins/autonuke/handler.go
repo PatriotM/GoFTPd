@@ -223,6 +223,9 @@ func (h *Handler) processRelease(rel releaseCandidate) {
 		h.clearAllWarnings(rel)
 		return
 	}
+	if h.handleBanned(rel) {
+		return
+	}
 	if h.handleEmpty(rel) {
 		return
 	}
@@ -230,9 +233,6 @@ func (h *Handler) processRelease(rel releaseCandidate) {
 		return
 	}
 	if h.handleHalfEmpty(rel) {
-		return
-	}
-	if h.handleBanned(rel) {
 		return
 	}
 	if h.handleAllowed(rel) {
