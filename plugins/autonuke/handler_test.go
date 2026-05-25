@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"goftpd/internal/core"
 	"goftpd/internal/plugin"
 )
 
@@ -171,6 +172,45 @@ func TestAppendHistoryWritesJSONL(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("history output missing %s: %s", want, text)
 		}
+	}
+}
+
+func TestWarnEmitsAutonukeWarnEvent(t *testing.T) {
+	tmp := t.TempDir()
+	var gotType, gotPath, gotFilename, gotSection string
+	var gotData map[string]string
+	h := &Handler{
+		cfg: config{StateDir: tmp},
+		svc: &plugin.Services{
+			EmitEvent: func(eventType, path, filename, section string, size int64, speed float64, data map[string]string) {
+				gotType = eventType
+				gotPath = path
+				gotFilename = filename
+				gotSection = section
+				gotData = data
+			},
+		},
+	}
+	rel := releaseCandidate{
+		Path:    "/0DAY/Example.Release-GRP",
+		Name:    "Example.Release-GRP",
+		Section: "0DAY",
+		Owner:   "test0r",
+	}
+
+	h.warn(rel, "incomplete", "ANUKEINC", "Incomplete", 30, 60, "2 files missing")
+
+	if gotType != string(core.EventAutonukeWarn) {
+		t.Fatalf("event type = %q, want %q", gotType, core.EventAutonukeWarn)
+	}
+	if gotPath != rel.Path || gotFilename != rel.Name || gotSection != rel.Section {
+		t.Fatalf("event target = (%q, %q, %q), want (%q, %q, %q)", gotPath, gotFilename, gotSection, rel.Path, rel.Name, rel.Section)
+	}
+	if gotData["tag"] != "ANUKEINC" || gotData["reason"] != "Incomplete" || gotData["warn_after"] != "30 minutes" || gotData["nuke_after"] != "60 minutes" {
+		t.Fatalf("unexpected event data: %#v", gotData)
+	}
+	if !strings.Contains(gotData["message"], "ANUKEINC: [0DAY] Example.Release-GRP") {
+		t.Fatalf("message missing release warning: %q", gotData["message"])
 	}
 }
 

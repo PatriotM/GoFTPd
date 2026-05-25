@@ -438,6 +438,7 @@ announce.TOPICCMD_DENIED = "%c02{TOPIC:} %c04{Staff command only.}"
 announce.TOPICCMD_USAGE = "%c02{TOPIC:} %c01{Usage:} %c05{!topic #channel topic text}"
 
 announce.NUKE = "%c04{NUKED:} %c14{[}%section_colored%c14{]} %c06{%relname}"
+announce.AUTONUKEWARN = "%c07{WARN:} %c05{%message}"
 announce.NUKE_FACTOR = "%c04{NUKED:} %c01{Was nuked factor} %c04{%multiplier_label} %c01{by} %c%sec_c2{%u_name}"
 announce.NUKE_REASON = "%c04{NUKED:} %c01{[reason]} %c14{-->} %c04{%reason}"
 announce.NUKE_NUKEES = "%c04{NUKED:} %c01{[nukees]} %c14{-->} %{nukees_colored}"

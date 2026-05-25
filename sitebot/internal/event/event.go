@@ -9,6 +9,7 @@ const (
 	EventDownload         EventType = "DOWNLOAD"
 	EventDelete           EventType = "DELETE"
 	EventNuke             EventType = "NUKE"
+	EventAutonukeWarn     EventType = "AUTONUKEWARN"
 	EventRaceEnd          EventType = "RACEEND"
 	EventRaceStats        EventType = "RACESTATS"
 	EventRaceUser         EventType = "RACEUSER"
