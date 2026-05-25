@@ -582,15 +582,32 @@ func (h *Handler) cleanupOldNukes() {
 				h.logf("delete old nuke VFS cleanup skipped for %s: %v", target, err)
 			}
 			h.logf("deleted old nuked release %s after %s", target, formatMinutes(limitMinutes))
-			h.appendHistory("cleanup_deleted", releaseCandidate{
+			rel := releaseCandidate{
 				Path:    target,
 				Name:    entry.Name,
 				Section: sectionFromPath(base),
 				Owner:   entry.Owner,
 				ModTime: entry.ModTime,
-			}, fmt.Sprintf("deleted after %s", formatMinutes(limitMinutes)), "")
+			}
+			reason := fmt.Sprintf("deleted after %s", formatMinutes(limitMinutes))
+			h.appendHistory("cleanup_deleted", rel, reason, "")
+			h.emitCleanupDeleted(rel, reason)
 		}
 	}
+}
+
+func (h *Handler) emitCleanupDeleted(rel releaseCandidate, reason string) {
+	if h == nil || h.svc == nil || h.svc.EmitEvent == nil {
+		return
+	}
+	message := fmt.Sprintf("deleted old nuked release [%s] %s (%s)", rel.Section, rel.Name, reason)
+	h.svc.EmitEvent(string(core.EventAutonukeDelete), rel.Path, rel.Name, rel.Section, 0, 0, map[string]string{
+		"relname": rel.Name,
+		"section": rel.Section,
+		"owner":   h.ownerLabel(rel),
+		"reason":  reason,
+		"message": message,
+	})
 }
 
 func (h *Handler) nukedAgeMinutes(nukedPath string, fallbackModTime int64) int {

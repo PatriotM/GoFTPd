@@ -18,6 +18,78 @@ import (
 const defaultUserTemplate = "etc/users/default.user"
 const deletedUsersDir = "etc/users/.deleted"
 
+func (s *Session) emitUserChange(action, targetType, target, field, oldValue, newValue, detail string) {
+	if s == nil || s.Config == nil {
+		return
+	}
+	actor := ""
+	if s.User != nil {
+		actor = strings.TrimSpace(s.User.Name)
+	}
+	action = strings.ToUpper(strings.TrimSpace(action))
+	targetType = strings.ToLower(strings.TrimSpace(targetType))
+	target = strings.TrimSpace(target)
+	field = strings.TrimSpace(field)
+	oldValue = strings.TrimSpace(oldValue)
+	newValue = strings.TrimSpace(newValue)
+	detail = strings.TrimSpace(detail)
+
+	parts := []string{}
+	if action != "" {
+		parts = append(parts, action)
+	}
+	if targetType != "" {
+		parts = append(parts, targetType)
+	}
+	if target != "" {
+		parts = append(parts, target)
+	}
+	if field != "" {
+		parts = append(parts, field)
+	}
+	switch {
+	case oldValue != "" && newValue != "":
+		parts = append(parts, oldValue+" -> "+newValue)
+	case newValue != "":
+		parts = append(parts, newValue)
+	case oldValue != "":
+		parts = append(parts, oldValue)
+	}
+	if detail != "" {
+		parts = append(parts, "("+detail+")")
+	}
+	if actor != "" {
+		parts = append(parts, "by "+actor)
+	}
+	message := strings.Join(parts, " ")
+	if message == "" {
+		message = "user/group settings changed"
+	}
+	s.emitEvent(EventUserChange, "", "", 0, 0, map[string]string{
+		"actor":       actor,
+		"action":      action,
+		"target_type": targetType,
+		"target":      target,
+		"field":       field,
+		"old_value":   oldValue,
+		"new_value":   newValue,
+		"detail":      detail,
+		"message":     message,
+	})
+}
+
+func sortedUserGroups(u *user.User) []string {
+	if u == nil || len(u.Groups) == 0 {
+		return nil
+	}
+	groups := make([]string, 0, len(u.Groups))
+	for group := range u.Groups {
+		groups = append(groups, group)
+	}
+	sort.Strings(groups)
+	return groups
+}
+
 func deletedUserPath(username string) string {
 	return filepath.Join(deletedUsersDir, username)
 }
@@ -137,6 +209,7 @@ func (s *Session) HandleSiteAddUser(args []string) bool {
 	}
 
 	fmt.Fprintf(s.Conn, "200 User %s added with %d IP(s).\r\n", args[0], len(newUser.IPs))
+	s.emitUserChange("ADDUSER", "user", newUser.Name, "", "", "", fmt.Sprintf("group=%s ips=%d", newUser.PrimaryGroup, len(newUser.IPs)))
 	return false
 }
 
@@ -177,6 +250,7 @@ func (s *Session) HandleSiteGAddUser(args []string) bool {
 		return false
 	}
 	fmt.Fprintf(s.Conn, "200 User %s added to group %s with %d IP(s).\r\n", args[0], args[2], len(newUser.IPs))
+	s.emitUserChange("GADDUSER", "user", newUser.Name, "primary_group", "", newUser.PrimaryGroup, fmt.Sprintf("ips=%d", len(newUser.IPs)))
 	return false
 }
 
@@ -216,6 +290,7 @@ func (s *Session) HandleSiteGrpAdd(args []string) bool {
 	s.GroupMap[groupName] = nextGID
 	AddGroupToFile(groupName, desc, nextGID)
 	fmt.Fprintf(s.Conn, "200 Group %s added.\r\n", groupName)
+	s.emitUserChange("GRPADD", "group", groupName, "description", "", desc, fmt.Sprintf("gid=%d", nextGID))
 	return false
 }
 
@@ -232,6 +307,7 @@ func (s *Session) HandleSiteGrpDel(args []string) bool {
 	os.Remove(filepath.Join("etc", "groups", groupName))
 	delete(s.GroupMap, groupName)
 	fmt.Fprintf(s.Conn, "200 Group %s deleted.\r\n", groupName)
+	s.emitUserChange("GRPDEL", "group", groupName, "", "", "", "")
 	return false
 }
 
@@ -249,6 +325,7 @@ func (s *Session) HandleSiteChGrp(args []string) bool {
 		fmt.Fprintf(s.Conn, "550 User not found.\r\n")
 		return false
 	}
+	oldGroups := strings.Join(sortedUserGroups(targetUser), ",")
 
 	// Toggle group membership (drftpd style): if in group, remove; if not, add
 	var added, removed []string
@@ -274,6 +351,14 @@ func (s *Session) HandleSiteChGrp(args []string) bool {
 		msg += " removed " + strings.Join(removed, ",")
 	}
 	fmt.Fprintf(s.Conn, "%s.\r\n", msg)
+	detailParts := []string{}
+	if len(added) > 0 {
+		detailParts = append(detailParts, "added="+strings.Join(added, ","))
+	}
+	if len(removed) > 0 {
+		detailParts = append(detailParts, "removed="+strings.Join(removed, ","))
+	}
+	s.emitUserChange("CHGRP", "user", targetUser.Name, "groups", oldGroups, strings.Join(sortedUserGroups(targetUser), ","), strings.Join(detailParts, " "))
 	return false
 }
 
@@ -312,6 +397,7 @@ func (s *Session) HandleSiteFlags(args []string) bool {
 		return false
 	}
 	flags := args[1][1:]
+	oldFlags := targetUser.Flags
 
 	switch op {
 	case '=':
@@ -333,6 +419,7 @@ func (s *Session) HandleSiteFlags(args []string) bool {
 		return false
 	}
 	fmt.Fprintf(s.Conn, "200 Flags for %s: %s\r\n", args[0], targetUser.Flags)
+	s.emitUserChange("FLAGS", "user", targetUser.Name, "flags", oldFlags, targetUser.Flags, "op="+string(op)+flags)
 	return false
 }
 
@@ -350,6 +437,7 @@ func (s *Session) HandleSiteChPGrp(args []string) bool {
 		fmt.Fprintf(s.Conn, "550 User not found.\r\n")
 		return false
 	}
+	oldPrimary := targetUser.PrimaryGroup
 	targetUser.PrimaryGroup = args[1]
 	if gid, ok := s.GroupMap[args[1]]; ok {
 		targetUser.GID = gid
@@ -359,6 +447,7 @@ func (s *Session) HandleSiteChPGrp(args []string) bool {
 		return false
 	}
 	fmt.Fprintf(s.Conn, "200 Primary group changed.\r\n")
+	s.emitUserChange("CHPGRP", "user", targetUser.Name, "primary_group", oldPrimary, targetUser.PrimaryGroup, "")
 	return false
 }
 
@@ -376,12 +465,14 @@ func (s *Session) HandleSiteGAdmin(args []string) bool {
 		fmt.Fprintf(s.Conn, "550 User not found.\r\n")
 		return false
 	}
+	oldAdmin := targetUser.Groups[args[0]]
 	targetUser.Groups[args[0]] = 1
 	if err := targetUser.Save(); err != nil {
 		fmt.Fprintf(s.Conn, "550 Failed to save gadmin for %s: %v\r\n", args[1], err)
 		return false
 	}
 	fmt.Fprintf(s.Conn, "200 Gadmin set.\r\n")
+	s.emitUserChange("GADMIN", "user", targetUser.Name, "group_admin", fmt.Sprintf("%d", oldAdmin), args[0], "")
 	return false
 }
 
@@ -420,6 +511,7 @@ func (s *Session) HandleSiteChPass(args []string) bool {
 	}
 
 	fmt.Fprintf(s.Conn, "200 Password changed for %s.\r\n", args[0])
+	s.emitUserChange("CHPASS", "user", u.Name, "password", "", "changed", "")
 	return false
 }
 
@@ -454,6 +546,7 @@ func (s *Session) HandleSiteChRatio(args []string) bool {
 		}
 	}
 
+	oldRatio := u.Ratio
 	u.Ratio = ratio
 	if err := u.Save(); err != nil {
 		fmt.Fprintf(s.Conn, "550 Failed to save ratio for %s: %v\r\n", args[0], err)
@@ -461,6 +554,7 @@ func (s *Session) HandleSiteChRatio(args []string) bool {
 	}
 
 	fmt.Fprintf(s.Conn, "200 Ratio changed for %s: %d.\r\n", args[0], ratio)
+	s.emitUserChange("CHRATIO", "user", u.Name, "ratio", fmt.Sprintf("%d", oldRatio), fmt.Sprintf("%d", ratio), "")
 	return false
 }
 
@@ -541,6 +635,7 @@ func (s *Session) HandleSiteBan(args []string) bool {
 		return false
 	}
 	fmt.Fprintf(s.Conn, "200 User %s banned.\r\n", target)
+	s.emitUserChange("BAN", "user", target, "ban", "", "banned", reason)
 	return false
 }
 
@@ -564,6 +659,7 @@ func (s *Session) HandleSiteUnban(args []string) bool {
 		return false
 	}
 	fmt.Fprintf(s.Conn, "200 User %s unbanned.\r\n", target)
+	s.emitUserChange("UNBAN", "user", target, "ban", "banned", "unbanned", "")
 	return false
 }
 
@@ -742,6 +838,7 @@ func (s *Session) HandleSiteAddIP(args []string) bool {
 	}
 
 	added := 0
+	addedIPs := []string{}
 	for _, ip := range args[1:] {
 		if !strings.Contains(ip, "@") {
 			ip = "*@" + ip
@@ -757,6 +854,7 @@ func (s *Session) HandleSiteAddIP(args []string) bool {
 		if !exists {
 			u.IPs = append(u.IPs, ip)
 			added++
+			addedIPs = append(addedIPs, ip)
 		}
 	}
 
@@ -765,6 +863,9 @@ func (s *Session) HandleSiteAddIP(args []string) bool {
 		return false
 	}
 	fmt.Fprintf(s.Conn, "200 Added %d IP(s) to %s (total: %d).\r\n", added, args[0], len(u.IPs))
+	if added > 0 {
+		s.emitUserChange("ADDIP", "user", u.Name, "ip", "", strings.Join(addedIPs, ","), fmt.Sprintf("total=%d", len(u.IPs)))
+	}
 	return false
 }
 
@@ -787,6 +888,7 @@ func (s *Session) HandleSiteDelIP(args []string) bool {
 	}
 
 	removed := 0
+	removedIPs := []string{}
 	for _, ip := range args[1:] {
 		if !strings.Contains(ip, "@") {
 			ip = "*@" + ip
@@ -795,6 +897,7 @@ func (s *Session) HandleSiteDelIP(args []string) bool {
 			if existing == ip {
 				u.IPs = append(u.IPs[:i], u.IPs[i+1:]...)
 				removed++
+				removedIPs = append(removedIPs, ip)
 				break
 			}
 		}
@@ -805,6 +908,9 @@ func (s *Session) HandleSiteDelIP(args []string) bool {
 		return false
 	}
 	fmt.Fprintf(s.Conn, "200 Removed %d IP(s) from %s (remaining: %d).\r\n", removed, args[0], len(u.IPs))
+	if removed > 0 {
+		s.emitUserChange("DELIP", "user", u.Name, "ip", strings.Join(removedIPs, ","), "", fmt.Sprintf("remaining=%d", len(u.IPs)))
+	}
 	return false
 }
 
@@ -1246,6 +1352,7 @@ func (s *Session) HandleSiteTagline(args []string) bool {
 		fmt.Fprintf(s.Conn, "550 Access denied.\r\n")
 		return false
 	}
+	oldTagline := targetUser.Tagline
 	targetUser.Tagline = strings.TrimSpace(strings.Join(textArgs, " "))
 	if targetUser.Tagline == "" {
 		targetUser.Tagline = "No Tagline Set"
@@ -1255,6 +1362,7 @@ func (s *Session) HandleSiteTagline(args []string) bool {
 		return false
 	}
 	fmt.Fprintf(s.Conn, "200 Tagline changed for %s.\r\n", targetUser.Name)
+	s.emitUserChange("TAGLINE", "user", targetUser.Name, "tagline", oldTagline, targetUser.Tagline, "")
 	return false
 }
 
@@ -1277,6 +1385,7 @@ func (s *Session) HandleSiteChNumLogins(args []string) bool {
 		fmt.Fprintf(s.Conn, "550 Invalid num_logins value %q.\r\n", args[1])
 		return false
 	}
+	oldValue := u.LoginSlots
 	u.LoginSlots = value
 	u.LoginSlotsSet = true
 	if err := u.Save(); err != nil {
@@ -1284,6 +1393,7 @@ func (s *Session) HandleSiteChNumLogins(args []string) bool {
 		return false
 	}
 	fmt.Fprintf(s.Conn, "200 Num logins changed for %s: %d.\r\n", u.Name, value)
+	s.emitUserChange("CHNUMLOGINS", "user", u.Name, "num_logins", fmt.Sprintf("%d", oldValue), fmt.Sprintf("%d", value), "")
 	return false
 }
 
@@ -1306,6 +1416,7 @@ func (s *Session) HandleSiteChMaxSim(args []string) bool {
 		fmt.Fprintf(s.Conn, "550 Invalid max_sim value %q.\r\n", args[1])
 		return false
 	}
+	oldValue := u.MaxSim
 	u.MaxSim = value
 	u.MaxSimSet = true
 	if err := u.Save(); err != nil {
@@ -1313,6 +1424,7 @@ func (s *Session) HandleSiteChMaxSim(args []string) bool {
 		return false
 	}
 	fmt.Fprintf(s.Conn, "200 Max sim changed for %s: %d.\r\n", u.Name, value)
+	s.emitUserChange("CHMAXSIM", "user", u.Name, "max_sim", fmt.Sprintf("%d", oldValue), fmt.Sprintf("%d", value), "")
 	return false
 }
 
@@ -1335,6 +1447,7 @@ func (s *Session) HandleSiteChWklyAllotment(args []string) bool {
 		fmt.Fprintf(s.Conn, "550 Invalid wkly_allotment value %q.\r\n", args[1])
 		return false
 	}
+	oldValue := u.WeeklyAllotment
 	u.WeeklyAllotment = value
 	u.WeeklyAllotmentSet = true
 	if err := u.Save(); err != nil {
@@ -1342,6 +1455,7 @@ func (s *Session) HandleSiteChWklyAllotment(args []string) bool {
 		return false
 	}
 	fmt.Fprintf(s.Conn, "200 Weekly allotment changed for %s: %s.\r\n", u.Name, formatBytes(value))
+	s.emitUserChange("CHWKLYALLOTMENT", "user", u.Name, "wkly_allotment", formatBytes(oldValue), formatBytes(value), "")
 	return false
 }
 
@@ -1364,6 +1478,7 @@ func (s *Session) HandleSiteChUploadSlots(args []string) bool {
 		fmt.Fprintf(s.Conn, "550 Invalid upload slot value %q.\r\n", args[1])
 		return false
 	}
+	oldValue := u.UploadSlots
 	u.UploadSlots = value
 	u.UploadSlotsSet = true
 	if err := u.Save(); err != nil {
@@ -1371,6 +1486,7 @@ func (s *Session) HandleSiteChUploadSlots(args []string) bool {
 		return false
 	}
 	fmt.Fprintf(s.Conn, "200 Upload slots changed for %s: %d.\r\n", u.Name, value)
+	s.emitUserChange("CHUPLOADSLOTS", "user", u.Name, "upload_slots", fmt.Sprintf("%d", oldValue), fmt.Sprintf("%d", value), "")
 	return false
 }
 
@@ -1393,6 +1509,7 @@ func (s *Session) HandleSiteChDownloadSlots(args []string) bool {
 		fmt.Fprintf(s.Conn, "550 Invalid download slot value %q.\r\n", args[1])
 		return false
 	}
+	oldValue := u.DownloadSlots
 	u.DownloadSlots = value
 	u.DownloadSlotsSet = true
 	if err := u.Save(); err != nil {
@@ -1400,6 +1517,7 @@ func (s *Session) HandleSiteChDownloadSlots(args []string) bool {
 		return false
 	}
 	fmt.Fprintf(s.Conn, "200 Download slots changed for %s: %d.\r\n", u.Name, value)
+	s.emitUserChange("CHDOWNLOADSLOTS", "user", u.Name, "download_slots", fmt.Sprintf("%d", oldValue), fmt.Sprintf("%d", value), "")
 	return false
 }
 
@@ -1422,6 +1540,8 @@ func (s *Session) HandleSiteGroupSlots(args []string) bool {
 		fmt.Fprintf(s.Conn, "550 Invalid group slot value %q.\r\n", args[1])
 		return false
 	}
+	oldGroupSlots := u.GroupSlots
+	oldLeechSlots := u.LeechSlots
 	u.GroupSlots = value
 	u.GroupSlotsSet = true
 	if len(args) > 2 {
@@ -1436,6 +1556,7 @@ func (s *Session) HandleSiteGroupSlots(args []string) bool {
 		return false
 	}
 	fmt.Fprintf(s.Conn, "200 Group slots changed for %s: %d %d.\r\n", u.Name, u.GroupSlots, u.LeechSlots)
+	s.emitUserChange("GROUPSLOTS", "user", u.Name, "group_slots", fmt.Sprintf("%d/%d", oldGroupSlots, oldLeechSlots), fmt.Sprintf("%d/%d", u.GroupSlots, u.LeechSlots), "")
 	return false
 }
 
@@ -1467,12 +1588,14 @@ func (s *Session) HandleSiteGroupSimult(args []string) bool {
 		fmt.Fprintf(s.Conn, "550 Invalid simult value %q.\r\n", args[1])
 		return false
 	}
+	oldValue := groupCfg.Simult
 	groupCfg.Simult = value
 	if err := groupCfg.Save(); err != nil {
 		fmt.Fprintf(s.Conn, "550 Failed to save group %s: %v\r\n", group, err)
 		return false
 	}
 	fmt.Fprintf(s.Conn, "200 Group simult changed for %s: %d.\r\n", groupCfg.Name, value)
+	s.emitUserChange("GROUPSIMULT", "group", groupCfg.Name, "simult", fmt.Sprintf("%d", oldValue), fmt.Sprintf("%d", value), "")
 	return false
 }
 
@@ -1512,6 +1635,7 @@ func (s *Session) HandleSiteDelUser(args []string) bool {
 	}
 	RemoveUserFromPasswd(args[0], s.Config.PasswdFile)
 	fmt.Fprintf(s.Conn, "200 User %s deleted (can be restored with SITE READD).\r\n", args[0])
+	s.emitUserChange("DELUSER", "user", args[0], "", "", "", "stored for READD")
 	return false
 }
 
@@ -1573,6 +1697,7 @@ func (s *Session) HandleSiteReAdd(args []string) bool {
 		return false
 	}
 	fmt.Fprintf(s.Conn, "200 User %s restored.\r\n", args[0])
+	s.emitUserChange("READD", "user", args[0], "", "", "", "restored deleted user")
 	return false
 }
 
@@ -1607,5 +1732,6 @@ func (s *Session) HandleSiteRenUser(args []string) bool {
 		return false
 	}
 	fmt.Fprintf(s.Conn, "200 User %s renamed to %s.\r\n", oldName, newName)
+	s.emitUserChange("RENUSER", "user", newName, "username", oldName, newName, "")
 	return false
 }

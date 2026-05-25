@@ -201,7 +201,7 @@ func releaseName(evt *event.Event) string {
 	if evt.Type == event.EventNuke || evt.Type == event.EventUnnuke {
 		return base
 	}
-	if evt.Type == event.EventAutonukeWarn {
+	if evt.Type == event.EventAutonukeWarn || evt.Type == event.EventAutonukeDelete {
 		return base
 	}
 	name := strings.ToLower(evt.Filename)
@@ -962,6 +962,38 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 		}
 		vars["message"] = message
 		outs = append(outs, plugin.Output{Type: "AUTONUKEWARN", Text: p.render("AUTONUKEWARN", vars, "WARN: "+message)})
+	case event.EventAutonukeDelete:
+		message := strings.TrimSpace(vars["message"])
+		if message == "" {
+			message = fmt.Sprintf("deleted old nuked release [%s] %s", section, rel)
+			if reason := strings.TrimSpace(vars["reason"]); reason != "" {
+				message += " (" + reason + ")"
+			}
+		}
+		vars["message"] = message
+		outs = append(outs, plugin.Output{Type: "AUTONUKEDELETE", Text: p.render("AUTONUKEDELETE", vars, "AUTONUKE: "+message)})
+	case event.EventUserChange:
+		message := strings.TrimSpace(vars["message"])
+		if message == "" {
+			actor := strings.TrimSpace(vars["actor"])
+			if actor == "" {
+				actor = strings.TrimSpace(vars["user"])
+			}
+			message = fmt.Sprintf("%s %s %s %s", vars["action"], vars["target_type"], vars["target"], vars["field"])
+			if oldValue, newValue := strings.TrimSpace(vars["old_value"]), strings.TrimSpace(vars["new_value"]); oldValue != "" && newValue != "" {
+				message += fmt.Sprintf(" %s -> %s", oldValue, newValue)
+			} else if newValue != "" {
+				message += " " + newValue
+			}
+			if detail := strings.TrimSpace(vars["detail"]); detail != "" {
+				message += " (" + detail + ")"
+			}
+			if actor != "" {
+				message += " by " + actor
+			}
+		}
+		vars["message"] = strings.TrimSpace(message)
+		outs = append(outs, plugin.Output{Type: "USERCHANGE", Text: p.render("USERCHANGE", vars, "USER: "+vars["message"])})
 	case event.EventLoginFail:
 		key := loginFailKey(vars)
 		if key != "|||" && p.loginFailCooldown > 0 {

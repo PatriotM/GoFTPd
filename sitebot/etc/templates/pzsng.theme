@@ -381,6 +381,7 @@ announce.BNC_DOWN = "%c04{%index}.- %c06{%name} %c01{at} %c05{%host}%c01{:}%c05{
 announce.BNC_ERROR = "%b%c01{BNC:}%b %c04{%response}"
 
 announce.LOGINFAIL = "%c02{LOGiN:} %c04{%message}"
+announce.USERCHANGE = "%c02{USER:} %c05{%message}"
 announce.SLAVEAUTHFAIL = "%c04{SLAVESEC:} %c07{%message}"
 announce.REMERGE = "%c07{REMERGE:} %c05{%message}"
 announce.SLOWUPLOADWARN = "%c07{SLOWUP:} %c05{%message}"
@@ -439,6 +440,7 @@ announce.TOPICCMD_USAGE = "%c02{TOPIC:} %c01{Usage:} %c05{!topic #channel topic 
 
 announce.NUKE = "%c04{NUKED:} %c14{[}%section_colored%c14{]} %c06{%relname}"
 announce.AUTONUKEWARN = "%c07{WARN:} %c05{%message}"
+announce.AUTONUKEDELETE = "%c04{AUTONUKE:} %c05{%message}"
 announce.NUKE_FACTOR = "%c04{NUKED:} %c01{Was nuked factor} %c04{%multiplier_label} %c01{by} %c%sec_c2{%u_name}"
 announce.NUKE_REASON = "%c04{NUKED:} %c01{[reason]} %c14{-->} %c04{%reason}"
 announce.NUKE_NUKEES = "%c04{NUKED:} %c01{[nukees]} %c14{-->} %{nukees_colored}"
