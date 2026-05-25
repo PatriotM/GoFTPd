@@ -1101,6 +1101,41 @@ func TestVFSGetReleaseStatusForZipUsesCachedExpectedParts(t *testing.T) {
 	}
 }
 
+func TestVFSGetZipRaceStatsCountsZipPayloads(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/0DAY/release", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/0DAY/release/file_id.diz", VFSFile{Seen: true, Size: 20})
+	vfs.AddFile("/0DAY/release/core.nfo", VFSFile{Seen: true, Size: 30})
+	vfs.AddFile("/0DAY/release/a.zip", VFSFile{
+		Seen:         true,
+		Size:         100,
+		Owner:        "racer",
+		Group:        "iND",
+		LastModified: 100,
+		XferTime:     1000,
+	})
+	vfs.AddFile("/0DAY/release/b.z01", VFSFile{
+		Seen:         true,
+		Size:         200,
+		Owner:        "racer",
+		Group:        "iND",
+		LastModified: 101,
+		XferTime:     2000,
+	})
+	vfs.CacheZipExpectedParts("/0DAY/release", 3, 0)
+
+	users, groups, bytes, present, total := vfs.GetZipRaceStats("/0DAY/release")
+	if present != 2 || total != 3 || bytes != 300 {
+		t.Fatalf("expected zip stats 2/3 300 bytes, got present=%d total=%d bytes=%d", present, total, bytes)
+	}
+	if len(users) != 1 || users[0].Name != "racer" || users[0].Files != 2 || users[0].Bytes != 300 {
+		t.Fatalf("unexpected zip user stats: %#v", users)
+	}
+	if len(groups) != 1 || groups[0].Name != "iND" || groups[0].Files != 2 || groups[0].Bytes != 300 {
+		t.Fatalf("unexpected zip group stats: %#v", groups)
+	}
+}
+
 func TestVFSListDirectoryIgnoresMislinkedDeepChildren(t *testing.T) {
 	vfs := NewVirtualFileSystem()
 	vfs.AddFile("/MP3", VFSFile{IsDir: true, Seen: true})

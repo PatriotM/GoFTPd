@@ -5,6 +5,7 @@ permissions_file: "etc/permissions.yml"
 group_file: "etc/group"
 acl_base_path: "/"
 admin_flags: "1"
+admin_group: "SiteOP"
 dateddirs_config_file: "plugins/dateddirs/config.yml"
 
 # Base PRE root used for affil predirs.

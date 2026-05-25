@@ -538,3 +538,6 @@ func (b *requestTestBridge) GetDirMediaInfo(string) map[string]string { return n
 func (b *requestTestBridge) PluginGetVFSRaceStats(string) ([]plugin.RaceUser, []plugin.RaceGroup, int64, int, int) {
 	return nil, nil, 0, 0, 0
 }
+func (b *requestTestBridge) PluginGetVFSReleaseStats(dirPath string) ([]plugin.RaceUser, []plugin.RaceGroup, int64, int, int) {
+	return b.PluginGetVFSRaceStats(dirPath)
+}

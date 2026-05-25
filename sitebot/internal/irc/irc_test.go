@@ -118,23 +118,55 @@ func TestDH1080CtxNegotiatesSameKey(t *testing.T) {
 	}
 }
 
-func TestSendMessageTruncatesOverlongIRCLines(t *testing.T) {
+func TestSendMessageSplitsOverlongIRCLines(t *testing.T) {
 	conn := &recordingConn{}
 	bot := NewBot("irc.example.net", 6667, "Bot", "bot", "Bot")
 	bot.Conn = conn
 	bot.Connected = true
 
-	if err := bot.SendMessage("#chan", strings.Repeat("A", 900)); err != nil {
+	msg := strings.Repeat("longword ", 120)
+	if err := bot.SendMessage("#chan", msg); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
-	if len(conn.writes) != 1 {
-		t.Fatalf("expected one write, got %d", len(conn.writes))
+	if len(conn.writes) < 2 {
+		t.Fatalf("expected split writes, got %d", len(conn.writes))
 	}
-	line := strings.TrimSuffix(conn.writes[0], "\r\n")
-	if len(line) > maxIRCLineBytes {
-		t.Fatalf("IRC line length = %d, want <= %d", len(line), maxIRCLineBytes)
+	for _, write := range conn.writes {
+		line := strings.TrimSuffix(write, "\r\n")
+		if len(line) > maxIRCLineBytes {
+			t.Fatalf("IRC line length = %d, want <= %d", len(line), maxIRCLineBytes)
+		}
 	}
-	if !strings.HasSuffix(line, "...") {
-		t.Fatalf("expected truncated line to end with ellipsis, got %q", line)
+}
+
+func TestSendMessageSplitsEncryptedOverlongIRCLines(t *testing.T) {
+	conn := &recordingConn{}
+	bot := NewBot("irc.example.net", 6667, "Bot", "bot", "Bot")
+	bot.Conn = conn
+	bot.Connected = true
+	enc, err := NewBlowfishEncryptor("cbc:supersecretkey")
+	if err != nil {
+		t.Fatalf("NewBlowfishEncryptor: %v", err)
+	}
+	bot.Keys["#chan"] = enc
+
+	if err := bot.SendMessage("#chan", strings.Repeat("encrypted words ", 90)); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	if len(conn.writes) < 2 {
+		t.Fatalf("expected encrypted split writes, got %d", len(conn.writes))
+	}
+	for _, write := range conn.writes {
+		line := strings.TrimSuffix(write, "\r\n")
+		if len(line) > maxIRCLineBytes {
+			t.Fatalf("IRC line length = %d, want <= %d", len(line), maxIRCLineBytes)
+		}
+		payload := strings.TrimPrefix(line, "PRIVMSG #chan :")
+		if !strings.HasPrefix(payload, "+OK *") {
+			t.Fatalf("expected encrypted payload, got %q", payload)
+		}
+		if _, err := enc.Decrypt(strings.TrimPrefix(payload, "+OK *")); err != nil {
+			t.Fatalf("decrypt split payload: %v", err)
+		}
 	}
 }

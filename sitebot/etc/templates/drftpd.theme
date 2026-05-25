@@ -447,7 +447,7 @@ announce.NUKE_NUKEES = "%c15{NUKEES:} %{nukees_colored}"
 
 announce.UNNUKE = "%c15{UNNUKE} %c01{in }%section_colored%c01{: -> }%relname%b %c01{by }%user%b"
 
-announce.PRE = "%c15{PRE} %c01{in }%section_colored%c01{: -> }%group%b %c01{gives us }%relname%b %c01{(}%t_files%b %c01{files - }%t_mbytes%b%c01{).}%pre_suffix"
+announce.PRE = "%c15{PRE} %c01{in }%section_colored%c01{: -> }%group%b %c01{gives us }%relname%b %c01{to enjoy (}%t_files%b %c01{files - }%t_mbytes%b%c01{).}%pre_suffix"
 announce.PREAUDIOINFO = "%c15{PRE} %c01{in }%section_colored%c01{: -> }%relname%b %c01{:: }%pre_audio_head%b %c01{:: }%genre%b %c01{:: }%year%b %c01{:: }%bitrate%b"
 announce.PREMOVIEINFO = "%c15{PRE} %c01{in }%section_colored%c01{: -> }%relname%b %c01{:: }%title%b %c01{(}%year%b%c01{) :: }%genre%b %c01{:: }%rating%b"
 announce.PRETVINFO = "%c15{PRE} %c01{in }%section_colored%c01{: -> }%relname%b %c01{:: }%episode%b %c01{:: }%genre%b %c01{:: }%type%b %c01{:: }%network%b %c01{:: }%language%b"

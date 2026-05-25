@@ -34,6 +34,7 @@ type Plugin struct {
 	groupFile       string
 	aclBase         string
 	adminFlags      string
+	adminGroup      string
 	debug           bool
 }
 
@@ -91,6 +92,7 @@ func New() *Plugin {
 		groupFile:       "etc/group",
 		aclBase:         "/",
 		adminFlags:      "1",
+		adminGroup:      "SiteOP",
 	}
 }
 
@@ -119,6 +121,9 @@ func (p *Plugin) Init(svc *plugin.Services, cfg map[string]interface{}) error {
 	if s := stringConfig(cfg, "admin_flags", ""); strings.TrimSpace(s) != "" {
 		p.adminFlags = strings.TrimSpace(s)
 	}
+	if s := stringConfig(cfg, "admin_group", ""); strings.TrimSpace(s) != "" {
+		p.adminGroup = strings.TrimSpace(s)
+	}
 	p.sections = stringSliceConfig(cfg["sections"])
 	p.datedSections = stringSliceConfig(cfg["dated_sections"])
 	if n := intConfig(cfg["bw_duration"], 0); n > 0 {
@@ -137,7 +142,7 @@ func (p *Plugin) Init(svc *plugin.Services, cfg map[string]interface{}) error {
 		p.debug = b
 	}
 	p.affils = normalizeAffils(affilRulesConfig(cfg["affils"]), p.base)
-	if err := syncAffilPermissions(p.permissionsFile, p.aclBase, p.currentAffils()); err != nil {
+	if err := syncAffilPermissions(p.permissionsFile, p.aclBase, p.adminGroup, p.currentAffils()); err != nil {
 		p.logf("could not sync affil permissions from %s into %s: %v", p.affilsFile, p.permissionsFile, err)
 	}
 	return nil
@@ -236,7 +241,7 @@ func (p *Plugin) HandleSiteCommand(ctx plugin.SiteContext, command string, args 
 		return true
 	}
 
-	users, _, totalBytes, present, _ := p.svc.Bridge.PluginGetVFSRaceStats(src)
+	users, _, totalBytes, present, _ := p.svc.Bridge.PluginGetVFSReleaseStats(src)
 	mbytes := float64(totalBytes) / 1024.0 / 1024.0
 	metaVars := p.preMetadataVars(src, canonicalSection, relname)
 
@@ -388,7 +393,7 @@ func (p *Plugin) handleAddAffil(ctx plugin.SiteContext, args []string) bool {
 			if strings.TrimSpace(predir) == "" {
 				predir = path.Join(base, group)
 			}
-			if err := syncAffilPermissions(p.permissionsFile, p.aclBase, normalizeAffils(cfg.Groups, base)); err != nil {
+			if err := syncAffilPermissions(p.permissionsFile, p.aclBase, p.adminGroup, normalizeAffils(cfg.Groups, base)); err != nil {
 				ctx.Reply("550 Affil %s already exists, but could not repair permissions: %v\r\n", group, err)
 				return true
 			}
@@ -437,7 +442,7 @@ func (p *Plugin) handleAddAffil(ctx plugin.SiteContext, args []string) bool {
 		ctx.Reply("200 Continue checking permissions update.\r\n")
 	}
 
-	if err := syncAffilPermissions(p.permissionsFile, p.aclBase, normalizeAffils(cfg.Groups, base)); err != nil {
+	if err := syncAffilPermissions(p.permissionsFile, p.aclBase, p.adminGroup, normalizeAffils(cfg.Groups, base)); err != nil {
 		ctx.Reply("200- Affil %s added with predir %s\r\n", group, strings.Join(predirs, ", "))
 		ctx.Reply("200- WARNING: could not update %s: %v\r\n", p.permissionsFile, err)
 		ctx.Reply("200 Run SITE REHASH or restart sessions that need new ACL state.\r\n")
@@ -480,7 +485,7 @@ func (p *Plugin) handleDelAffil(ctx plugin.SiteContext, args []string) bool {
 		ctx.Reply("451 Could not update %s: %v\r\n", p.affilsFile, err)
 		return true
 	}
-	if err := syncAffilPermissions(p.permissionsFile, p.aclBase, normalizeAffils(cfg.Groups, cfg.Base)); err != nil {
+	if err := syncAffilPermissions(p.permissionsFile, p.aclBase, p.adminGroup, normalizeAffils(cfg.Groups, cfg.Base)); err != nil {
 		ctx.Reply("200- Affil %s removed from %s\r\n", removed.Group, p.affilsFile)
 		ctx.Reply("200- WARNING: could not update %s: %v\r\n", p.permissionsFile, err)
 		ctx.Reply("200 Predir %s was left on disk.\r\n", removed.Predir)
@@ -1562,7 +1567,7 @@ func validAffilGroup(group string) bool {
 	return true
 }
 
-func syncAffilPermissions(filePath, aclBase string, affils []AffilRule) error {
+func syncAffilPermissions(filePath, aclBase, adminGroup string, affils []AffilRule) error {
 	filePath = strings.TrimSpace(filePath)
 	if filePath == "" {
 		return fmt.Errorf("empty permissions file path")
@@ -1586,7 +1591,7 @@ func syncAffilPermissions(filePath, aclBase string, affils []AffilRule) error {
 		return fmt.Errorf("permissions rules must be a mapping")
 	}
 
-	generated := buildAffilPermissionNodes(aclBase, affils)
+	generated := buildAffilPermissionNodes(aclBase, adminGroup, affils)
 	for _, ruleType := range []string{"privpath", "list", "dirlog"} {
 		seq := ensureRuleSequence(rulesNode, ruleType)
 		removeGeneratedRuleEntries(seq, "pre")
@@ -1616,7 +1621,7 @@ func syncAffilPermissions(filePath, aclBase string, affils []AffilRule) error {
 	return os.WriteFile(filePath, buf.Bytes(), 0644)
 }
 
-func buildAffilPermissionNodes(aclBase string, affils []AffilRule) map[string][]*yaml.Node {
+func buildAffilPermissionNodes(aclBase, adminGroup string, affils []AffilRule) map[string][]*yaml.Node {
 	type keyedAffil struct {
 		group string
 		path  string
@@ -1653,13 +1658,13 @@ func buildAffilPermissionNodes(aclBase string, affils []AffilRule) map[string][]
 	}
 	for _, item := range keyed {
 		if affilPermissionEnabled(item.rule, "privpath", true) {
-			out["privpath"] = append(out["privpath"], buildAffilRuleEntryNode(item.path, item.rule.Group, affilSiteopOverride(item.rule), "privpath"))
+			out["privpath"] = append(out["privpath"], buildAffilRuleEntryNode(item.path, item.rule.Group, adminGroup, affilSiteopOverride(item.rule), "privpath"))
 		}
 		if affilPermissionEnabled(item.rule, "list", true) {
-			out["list"] = append(out["list"], buildAffilRuleEntryNode(item.path, item.rule.Group, affilSiteopOverride(item.rule), "list"))
+			out["list"] = append(out["list"], buildAffilRuleEntryNode(item.path, item.rule.Group, adminGroup, affilSiteopOverride(item.rule), "list"))
 		}
 		if affilPermissionEnabled(item.rule, "dirlog", true) {
-			out["dirlog"] = append(out["dirlog"], buildAffilRuleEntryNode(item.path, item.rule.Group, affilSiteopOverride(item.rule), "dirlog"))
+			out["dirlog"] = append(out["dirlog"], buildAffilRuleEntryNode(item.path, item.rule.Group, adminGroup, affilSiteopOverride(item.rule), "dirlog"))
 		}
 	}
 	return out
@@ -1738,18 +1743,22 @@ func affilSiteopOverride(affil AffilRule) bool {
 	return affilPermissionEnabled(affil, "siteop_override", true)
 }
 
-func buildAffilRuleEntryNode(aclPath, group string, siteopOverride bool, kind string) *yaml.Node {
+func buildAffilRuleEntryNode(aclPath, group, adminGroup string, siteopOverride bool, kind string) *yaml.Node {
 	entry := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 	appendMappingScalar(entry, "path", cleanAbs(aclPath))
-	appendMappingNode(entry, "required", buildAffilRequiredNode(group, siteopOverride))
+	appendMappingNode(entry, "required", buildAffilRequiredNode(group, adminGroup, siteopOverride))
 	appendMappingScalar(entry, "generated_by", "pre")
 	appendMappingScalar(entry, "generated_kind", kind)
 	appendMappingScalar(entry, "generated_group", strings.TrimSpace(group))
 	return entry
 }
 
-func buildAffilRequiredNode(group string, siteopOverride bool) *yaml.Node {
+func buildAffilRequiredNode(group, adminGroup string, siteopOverride bool) *yaml.Node {
 	group = strings.TrimSpace(group)
+	adminGroup = strings.TrimSpace(adminGroup)
+	if adminGroup == "" {
+		adminGroup = "SiteOP"
+	}
 	if !siteopOverride {
 		req := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 		appendMappingStringSequence(req, "all_groups", []string{group})
@@ -1762,9 +1771,11 @@ func buildAffilRequiredNode(group string, siteopOverride bool) *yaml.Node {
 	appendMappingStringSequence(groupReq, "all_groups", []string{group})
 	anyOf.Content = append(anyOf.Content, groupReq)
 
-	siteopReq := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-	appendMappingStringSequence(siteopReq, "all_groups", []string{"SiteOP"})
-	anyOf.Content = append(anyOf.Content, siteopReq)
+	if adminGroup != "" {
+		siteopReq := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		appendMappingStringSequence(siteopReq, "all_groups", []string{adminGroup})
+		anyOf.Content = append(anyOf.Content, siteopReq)
+	}
 
 	flagReq := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 	appendMappingStringSequence(flagReq, "all_flags", []string{"1"})
@@ -1927,12 +1938,12 @@ func renderPermissionsFile(cfg permissionsFileConfig) string {
 #   "A"           user must have flag A
 #   "=Admin"      user must be a member of group Admin
 #   "@Nick"       user must be FTP user Nick
-#   "=GROUP =SiteOP" user must be in GROUP OR SiteOP
+#   "=GROUP =Admin" user must be in GROUP OR Admin
 #   "!4"          user must NOT have flag 4
 #   "!=Group"     user must NOT be in group Group
 #   "!@Nick"      user must NOT be FTP user Nick
 #   "!*"          nobody; explicit deny
-#   "1 =SiteOP"   user must have flag 1 AND be in group SiteOP
+#   "1 =Admin"    user must have flag 1 AND be in group Admin
 #   "1 A =NUKERS" user must have flags 1 and A AND be in group NUKERS
 #
 # rule types used here:
@@ -1967,7 +1978,7 @@ rules:
 		},
 		{
 			Name:  "Private paths and affil predirs",
-			About: "Private paths hide/block dirs unless the user matches required. Affil PRE dirs should normally be only one privpath rule, e.g. =GROUP =SiteOP.",
+			About: "Private paths hide/block dirs unless the user matches required. Affil PRE dirs should normally be only one privpath rule, e.g. =GROUP =Admin.",
 			Types: []string{"privpath"},
 		},
 		{

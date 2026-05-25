@@ -230,6 +230,7 @@ type MasterBridge interface {
 	SetRequestData(dirPath string, requests []RequestRecord, fills []RequestFillRecord)
 	GetDirMediaInfo(dirPath string) map[string]string
 	PluginGetVFSRaceStats(dirPath string) (users []RaceUser, groups []RaceGroup, totalBytes int64, present int, total int)
+	PluginGetVFSReleaseStats(dirPath string) (users []RaceUser, groups []RaceGroup, totalBytes int64, present int, total int)
 }
 
 // Plugin is the interface every goftpd plugin must implement.
