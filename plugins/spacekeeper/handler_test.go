@@ -59,6 +59,9 @@ func (b *testBridge) PluginGetVFSRaceStats(dirPath string) ([]plugin.RaceUser, [
 	stats := b.raceStats[cleanAbs(dirPath)]
 	return nil, nil, 0, stats.present, stats.total
 }
+func (b *testBridge) PluginGetVFSReleaseStats(dirPath string) ([]plugin.RaceUser, []plugin.RaceGroup, int64, int, int) {
+	return b.PluginGetVFSRaceStats(dirPath)
+}
 
 func TestParseRulesAcceptsGiBThresholds(t *testing.T) {
 	rules := parseRules([]interface{}{

@@ -46,6 +46,9 @@ func (b *testBridge) GetDirMediaInfo(dirPath string) map[string]string { return 
 func (b *testBridge) PluginGetVFSRaceStats(dirPath string) ([]plugin.RaceUser, []plugin.RaceGroup, int64, int, int) {
 	return nil, nil, 0, 0, 0
 }
+func (b *testBridge) PluginGetVFSReleaseStats(dirPath string) ([]plugin.RaceUser, []plugin.RaceGroup, int64, int, int) {
+	return b.PluginGetVFSRaceStats(dirPath)
+}
 
 func TestUploadEventDeletesUploadedSpeedtestFile(t *testing.T) {
 	bridge := &testBridge{}

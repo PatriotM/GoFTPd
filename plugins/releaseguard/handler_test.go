@@ -46,6 +46,9 @@ func (b *testBridge) SetRequestData(dirPath string, requests []plugin.RequestRec
 func (b *testBridge) PluginGetVFSRaceStats(dirPath string) (users []plugin.RaceUser, groups []plugin.RaceGroup, totalBytes int64, present int, total int) {
 	return nil, nil, 0, 0, 0
 }
+func (b *testBridge) PluginGetVFSReleaseStats(dirPath string) (users []plugin.RaceUser, groups []plugin.RaceGroup, totalBytes int64, present int, total int) {
+	return b.PluginGetVFSRaceStats(dirPath)
+}
 
 func newPluginForTest(t *testing.T, cfg map[string]interface{}, entries map[string][]plugin.FileEntry) *Plugin {
 	t.Helper()

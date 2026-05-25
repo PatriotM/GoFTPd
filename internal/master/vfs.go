@@ -1493,6 +1493,28 @@ func (vfs *VirtualFileSystem) GetRaceStatsFiltered(dirPath string, excludeKeys m
 	return
 }
 
+// GetZipRaceStats computes ZIP release stats directly from observed ZIP payloads.
+func (vfs *VirtualFileSystem) GetZipRaceStats(dirPath string) (users []RaceUserStat, groups []RaceGroupStat, totalBytes int64, present int, total int) {
+	return vfs.GetZipRaceStatsFiltered(dirPath, nil)
+}
+
+// GetZipRaceStatsFiltered computes ZIP release stats, excluding currently open payloads.
+func (vfs *VirtualFileSystem) GetZipRaceStatsFiltered(dirPath string, excludeKeys map[string]bool) (users []RaceUserStat, groups []RaceGroupStat, totalBytes int64, present int, total int) {
+	vfs.mu.RLock()
+	cache := vfs.computeZipRaceStateFilteredLocked(filepath.Clean(dirPath), excludeKeys)
+	if cache == nil {
+		vfs.mu.RUnlock()
+		return
+	}
+	users = append(users, cache.Users...)
+	groups = append(groups, cache.Groups...)
+	totalBytes = cache.TotalBytes
+	present = cache.Present
+	total = cache.Total
+	vfs.mu.RUnlock()
+	return
+}
+
 func raceFileKey(name string) string {
 	name = strings.TrimSpace(filepath.ToSlash(name))
 	name = strings.TrimPrefix(name, "./")
@@ -1761,6 +1783,136 @@ func (vfs *VirtualFileSystem) computeRaceStateFilteredLocked(dirPath string, exc
 				continue
 			}
 			gs.Speed += us.Speed
+		}
+		cache.Groups = append(cache.Groups, *gs)
+	}
+	sort.Slice(cache.Groups, func(i, j int) bool {
+		if cache.Groups[i].Bytes != cache.Groups[j].Bytes {
+			return cache.Groups[i].Bytes > cache.Groups[j].Bytes
+		}
+		if cache.Groups[i].Files != cache.Groups[j].Files {
+			return cache.Groups[i].Files > cache.Groups[j].Files
+		}
+		return strings.ToLower(cache.Groups[i].Name) < strings.ToLower(cache.Groups[j].Name)
+	})
+
+	return cache
+}
+
+func (vfs *VirtualFileSystem) computeZipRaceStateFilteredLocked(dirPath string, excludeKeys map[string]bool) *VFSRaceCache {
+	dirPath = cleanVFSPath(dirPath)
+	userMap := make(map[string]*RaceUserStat)
+	groupMap := make(map[string]*RaceGroupStat)
+	userStartMs := make(map[string]int64)
+	userEndMs := make(map[string]int64)
+
+	cache := &VFSRaceCache{}
+	if expected, ok := vfs.getZipExpectedPartsLocked(dirPath); ok && expected > 0 {
+		cache.Total = expected
+	}
+	for childPath := range vfs.children[dirPath] {
+		f := vfs.files[childPath]
+		if f == nil || f.IsDir || f.IsSymlink {
+			continue
+		}
+		name := strings.TrimSpace(filepath.Base(childPath))
+		if strings.HasPrefix(name, ".") || !zipscript.IsZipPayloadName(name) {
+			continue
+		}
+		if excludeKeys[raceFileKey(name)] {
+			continue
+		}
+		cache.Present++
+		cache.TotalBytes += f.Size
+
+		if f.XferTime <= 0 {
+			continue
+		}
+		owner := f.Owner
+		if owner == "" {
+			owner = "unknown"
+		}
+		group := f.Group
+		if group == "" {
+			group = "NoGroup"
+		}
+
+		us := userMap[owner]
+		if us == nil {
+			us = &RaceUserStat{Name: owner, Group: group}
+			userMap[owner] = us
+		}
+		us.Files++
+		us.Bytes += f.Size
+		fileSpeed := float64(f.Size) / (float64(f.XferTime) / 1000.0)
+		if fileSpeed > us.PeakSpeed {
+			us.PeakSpeed = fileSpeed
+		}
+		if us.SlowSpeed == 0 || fileSpeed < us.SlowSpeed {
+			us.SlowSpeed = fileSpeed
+		}
+		us.DurationMs += f.XferTime
+		fileEndMs := f.LastModified * 1000
+		if fileEndMs <= 0 {
+			fileEndMs = time.Now().UnixMilli()
+		}
+		fileStartMs := fileEndMs - f.XferTime
+		if fileStartMs < 0 {
+			fileStartMs = 0
+		}
+		if start := userStartMs[owner]; start == 0 || fileStartMs < start {
+			userStartMs[owner] = fileStartMs
+		}
+		if fileEndMs > userEndMs[owner] {
+			userEndMs[owner] = fileEndMs
+		}
+
+		gs := groupMap[group]
+		if gs == nil {
+			gs = &RaceGroupStat{Name: group}
+			groupMap[group] = gs
+		}
+		gs.Files++
+		gs.Bytes += f.Size
+	}
+	if cache.Present == 0 && cache.Total == 0 {
+		return nil
+	}
+	if cache.Total < cache.Present {
+		cache.Total = cache.Present
+	}
+
+	cache.Users = make([]RaceUserStat, 0, len(userMap))
+	for _, us := range userMap {
+		if startMs, endMs := userStartMs[us.Name], userEndMs[us.Name]; us.Bytes > 0 && endMs > startMs {
+			us.Speed = float64(us.Bytes) / (float64(endMs-startMs) / 1000.0)
+		} else if us.Bytes > 0 && us.DurationMs > 0 {
+			us.Speed = float64(us.Bytes) / (float64(us.DurationMs) / 1000.0)
+		}
+		if cache.Total > 0 {
+			us.Percent = (us.Files * 100) / cache.Total
+		}
+		cache.Users = append(cache.Users, *us)
+	}
+	sort.Slice(cache.Users, func(i, j int) bool {
+		if cache.Users[i].Bytes != cache.Users[j].Bytes {
+			return cache.Users[i].Bytes > cache.Users[j].Bytes
+		}
+		if cache.Users[i].Files != cache.Users[j].Files {
+			return cache.Users[i].Files > cache.Users[j].Files
+		}
+		return strings.ToLower(cache.Users[i].Name) < strings.ToLower(cache.Users[j].Name)
+	})
+
+	cache.Groups = make([]RaceGroupStat, 0, len(groupMap))
+	for _, gs := range groupMap {
+		if cache.Total > 0 {
+			gs.Percent = (gs.Files * 100) / cache.Total
+		}
+		for _, us := range cache.Users {
+			if us.Group == gs.Name {
+				gs.Speed += us.Speed
+			}
 		}
 		cache.Groups = append(cache.Groups, *gs)
 	}

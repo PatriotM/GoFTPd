@@ -55,6 +55,9 @@ func (b *testBridge) GetDirMediaInfo(dirPath string) map[string]string { return 
 func (b *testBridge) PluginGetVFSRaceStats(dirPath string) (users []plugin.RaceUser, groups []plugin.RaceGroup, totalBytes int64, present int, total int) {
 	return nil, nil, 0, 0, 0
 }
+func (b *testBridge) PluginGetVFSReleaseStats(dirPath string) (users []plugin.RaceUser, groups []plugin.RaceGroup, totalBytes int64, present int, total int) {
+	return b.PluginGetVFSRaceStats(dirPath)
+}
 
 func TestLoadConfigNormalizesSections(t *testing.T) {
 	cfg := loadConfig(map[string]interface{}{

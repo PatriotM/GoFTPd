@@ -52,7 +52,7 @@ rules:
 		},
 	}
 
-	if err := syncAffilPermissions(filePath, "/", affils); err != nil {
+	if err := syncAffilPermissions(filePath, "/", "SiteOP", affils); err != nil {
 		t.Fatalf("syncAffilPermissions failed: %v", err)
 	}
 
@@ -100,12 +100,12 @@ func TestSyncAffilPermissionsRemovesStaleGeneratedRules(t *testing.T) {
 		{Group: "iND", Predir: "/PRE/iND", Permissions: map[string]interface{}{"acl_path": "/PRE/iND"}},
 		{Group: "GRPTST", Predir: "/PRE/GRPTST", Permissions: map[string]interface{}{"acl_path": "/PRE/GRPTST"}},
 	}
-	if err := syncAffilPermissions(filePath, "/", affils); err != nil {
+	if err := syncAffilPermissions(filePath, "/", "SiteOP", affils); err != nil {
 		t.Fatalf("initial sync failed: %v", err)
 	}
 
 	affils = affils[:1]
-	if err := syncAffilPermissions(filePath, "/", affils); err != nil {
+	if err := syncAffilPermissions(filePath, "/", "SiteOP", affils); err != nil {
 		t.Fatalf("second sync failed: %v", err)
 	}
 
@@ -119,6 +119,34 @@ func TestSyncAffilPermissionsRemovesStaleGeneratedRules(t *testing.T) {
 	}
 	if !strings.Contains(text, "/PRE/iND") {
 		t.Fatalf("expected iND rules to remain after sync")
+	}
+}
+
+func TestSyncAffilPermissionsUsesConfiguredAdminGroup(t *testing.T) {
+	filePath := filepath.Join(t.TempDir(), "permissions.yml")
+	input := `rules:
+  privpath: []
+  list: []
+  dirlog: []
+`
+	if err := os.WriteFile(filePath, []byte(input), 0644); err != nil {
+		t.Fatalf("write permissions file: %v", err)
+	}
+
+	affils := []AffilRule{{Group: "ABCD", Predir: "/GROUPS/ABCD"}}
+	if err := syncAffilPermissions(filePath, "/", "AdminTeam", affils); err != nil {
+		t.Fatalf("syncAffilPermissions failed: %v", err)
+	}
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read permissions file: %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, "AdminTeam") {
+		t.Fatalf("expected configured admin group in generated permissions:\n%s", text)
+	}
+	if strings.Contains(text, "SiteOP") {
+		t.Fatalf("did not expect hardcoded SiteOP in generated permissions:\n%s", text)
 	}
 }
 

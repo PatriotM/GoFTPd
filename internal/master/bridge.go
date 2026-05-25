@@ -1884,6 +1884,24 @@ func (b *Bridge) GetVFSRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFS
 	return convertRaceStats(users, groups, totalBytes, present, total)
 }
 
+// GetVFSReleaseStats returns the canonical release stats for PRE-like consumers.
+// SFV metadata remains authoritative; ZIP-only dirs fall back to observed ZIP payloads.
+func (b *Bridge) GetVFSReleaseStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRaceGroup, int64, int, int) {
+	coreUsers, coreGroups, totalBytes, present, total := b.GetVFSRaceStats(dirPath)
+	if hasCoreRaceStats(coreUsers, coreGroups, totalBytes, present, total) {
+		return coreUsers, coreGroups, totalBytes, present, total
+	}
+
+	cleanDirPath := filepath.Clean(dirPath)
+	excludeKeys := b.liveUploadingRaceKeysForDir(cleanDirPath)
+	users, groups, totalBytes, present, total := b.sm.GetVFS().GetZipRaceStatsFiltered(dirPath, excludeKeys)
+	return convertRaceStats(users, groups, totalBytes, present, total)
+}
+
+func hasCoreRaceStats(users []core.VFSRaceUser, groups []core.VFSRaceGroup, totalBytes int64, present int, total int) bool {
+	return len(users) > 0 || len(groups) > 0 || totalBytes > 0 || present > 0 || total > 0
+}
+
 func convertRaceStats(users []RaceUserStat, groups []RaceGroupStat, totalBytes int64, present int, total int) ([]core.VFSRaceUser, []core.VFSRaceGroup, int64, int, int) {
 	coreUsers := make([]core.VFSRaceUser, len(users))
 	for i, u := range users {
@@ -1917,37 +1935,22 @@ func (b *Bridge) GetVFSRaceStatsFresh(dirPath string) ([]core.VFSRaceUser, []cor
 	cleanDirPath := filepath.Clean(dirPath)
 	excludeKeys := b.liveUploadingRaceKeysForDirFresh(cleanDirPath)
 	users, groups, totalBytes, present, total := b.sm.GetVFS().GetRaceStatsFiltered(dirPath, excludeKeys)
-
-	coreUsers := make([]core.VFSRaceUser, len(users))
-	for i, u := range users {
-		coreUsers[i] = core.VFSRaceUser{
-			Name:       u.Name,
-			Group:      u.Group,
-			Files:      u.Files,
-			Bytes:      u.Bytes,
-			Speed:      u.Speed,
-			PeakSpeed:  u.PeakSpeed,
-			SlowSpeed:  u.SlowSpeed,
-			Percent:    u.Percent,
-			DurationMs: u.DurationMs,
-		}
-	}
-	coreGroups := make([]core.VFSRaceGroup, len(groups))
-	for i, g := range groups {
-		coreGroups[i] = core.VFSRaceGroup{
-			Name:    g.Name,
-			Files:   g.Files,
-			Bytes:   g.Bytes,
-			Speed:   g.Speed,
-			Percent: g.Percent,
-		}
-	}
-
-	return coreUsers, coreGroups, totalBytes, present, total
+	return convertRaceStats(users, groups, totalBytes, present, total)
 }
 
 func (b *Bridge) PluginGetVFSRaceStats(dirPath string) ([]plugin.RaceUser, []plugin.RaceGroup, int64, int, int) {
 	coreUsers, coreGroups, totalBytes, present, total := b.GetVFSRaceStats(dirPath)
+	users, groups := pluginRaceStatsFromCore(coreUsers, coreGroups)
+	return users, groups, totalBytes, present, total
+}
+
+func (b *Bridge) PluginGetVFSReleaseStats(dirPath string) ([]plugin.RaceUser, []plugin.RaceGroup, int64, int, int) {
+	coreUsers, coreGroups, totalBytes, present, total := b.GetVFSReleaseStats(dirPath)
+	users, groups := pluginRaceStatsFromCore(coreUsers, coreGroups)
+	return users, groups, totalBytes, present, total
+}
+
+func pluginRaceStatsFromCore(coreUsers []core.VFSRaceUser, coreGroups []core.VFSRaceGroup) ([]plugin.RaceUser, []plugin.RaceGroup) {
 	users := make([]plugin.RaceUser, 0, len(coreUsers))
 	for _, u := range coreUsers {
 		users = append(users, plugin.RaceUser{
@@ -1969,7 +1972,7 @@ func (b *Bridge) PluginGetVFSRaceStats(dirPath string) ([]plugin.RaceUser, []plu
 			Percent: g.Percent,
 		})
 	}
-	return users, groups, totalBytes, present, total
+	return users, groups
 }
 
 // GetRaceWallClockMilliseconds returns wall-clock race duration (first file

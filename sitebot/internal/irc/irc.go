@@ -290,13 +290,12 @@ func (b *Bot) SetTimeout(d time.Duration) error {
 func (b *Bot) sendTarget(target, msg string, notice bool) error {
 	if strings.HasPrefix(target, "#") {
 		if enc := b.channelKey(target); enc != nil {
-			msg = "+OK *" + enc.Encrypt(msg)
+			return b.sendEncryptedTarget(target, msg, notice, enc)
 		}
 		return b.sendTargetRaw(target, msg, notice)
 	}
 	if enc := b.negotiatedPrivateKeyForNick(target); enc != nil {
-		msg = "+OK *" + enc.Encrypt(msg)
-		return b.sendTargetRaw(target, msg, notice)
+		return b.sendEncryptedTarget(target, msg, notice, enc)
 	}
 	if b.autoExchangeEnabled() {
 		initMsg, queued := b.queuePrivateForExchange(target, msg, notice)
@@ -308,8 +307,7 @@ func (b *Bot) sendTarget(target, msg string, notice bool) error {
 		}
 	}
 	if enc := b.staticPrivateKey(); enc != nil {
-		msg = "+OK *" + enc.Encrypt(msg)
-		return b.sendTargetRaw(target, msg, notice)
+		return b.sendEncryptedTarget(target, msg, notice, enc)
 	}
 	return b.sendTargetRaw(target, msg, notice)
 }
@@ -320,7 +318,128 @@ func (b *Bot) sendTargetRaw(target, msg string, notice bool) error {
 		command = "NOTICE"
 	}
 	prefix := fmt.Sprintf("%s %s :", command, target)
-	return b.SendRaw(prefix + truncateIRCMessage(prefix, msg))
+	for _, chunk := range splitIRCMessage(prefix, msg) {
+		if err := b.SendRaw(prefix + chunk); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (b *Bot) sendEncryptedTarget(target, msg string, notice bool, enc *BlowfishEncryptor) error {
+	command := "PRIVMSG"
+	if notice {
+		command = "NOTICE"
+	}
+	prefix := fmt.Sprintf("%s %s :", command, target)
+	maxPlain := maxEncryptedPlainBytes(prefix)
+	for _, chunk := range splitTextByByteLimit(msg, maxPlain) {
+		encrypted := "+OK *" + enc.Encrypt(chunk)
+		if len(prefix)+len(encrypted) > maxIRCLineBytes {
+			encrypted = truncateIRCMessage(prefix, encrypted)
+		}
+		if err := b.SendRaw(prefix + encrypted); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func splitIRCMessage(prefix, msg string) []string {
+	return splitTextByByteLimit(msg, maxIRCLineBytes-len(prefix))
+}
+
+func splitTextByByteLimit(msg string, max int) []string {
+	if max <= 0 {
+		return []string{""}
+	}
+	if len(msg) <= max {
+		return []string{msg}
+	}
+	parts := make([]string, 0, (len(msg)/max)+1)
+	for len(msg) > 0 {
+		msg = strings.TrimLeft(msg, " \t")
+		if msg == "" {
+			break
+		}
+		if len(msg) <= max {
+			parts = append(parts, msg)
+			break
+		}
+		cut := lastWhitespaceCut(msg, max)
+		if cut <= 0 {
+			cut = safeUTF8Cut(msg, max)
+		}
+		chunk := strings.TrimRight(msg[:cut], " \t")
+		if chunk == "" {
+			cut = safeUTF8Cut(msg, max)
+			chunk = msg[:cut]
+		}
+		parts = append(parts, chunk)
+		msg = msg[cut:]
+	}
+	if len(parts) == 0 {
+		return []string{""}
+	}
+	return parts
+}
+
+func lastWhitespaceCut(s string, max int) int {
+	cut := -1
+	for i, r := range s {
+		if i > max {
+			break
+		}
+		if i > 0 && (r == ' ' || r == '\t') {
+			cut = i
+		}
+	}
+	return cut
+}
+
+func safeUTF8Cut(s string, max int) int {
+	if max >= len(s) {
+		return len(s)
+	}
+	cut := max
+	for cut > 0 && !utf8.ValidString(s[:cut]) {
+		cut--
+	}
+	if cut > 0 {
+		return cut
+	}
+	_, size := utf8.DecodeRuneInString(s)
+	if size > 0 {
+		return size
+	}
+	return 1
+}
+
+func maxEncryptedPlainBytes(prefix string) int {
+	maxCipher := maxIRCLineBytes - len(prefix) - len("+OK *")
+	if maxCipher <= 0 {
+		return 0
+	}
+	best := 1
+	for n := 1; n <= maxCipher; n++ {
+		if cbcBase64Len(n) <= maxCipher {
+			best = n
+			continue
+		}
+		if n > best+8 {
+			break
+		}
+	}
+	return best
+}
+
+func cbcBase64Len(plainLen int) int {
+	padded := plainLen
+	if rem := padded % 8; rem != 0 {
+		padded += 8 - rem
+	}
+	raw := 8 + padded
+	return ((raw + 2) / 3) * 4
 }
 
 func truncateIRCMessage(prefix, msg string) string {
@@ -429,8 +548,7 @@ func (b *Bot) flushQueuedPrivate(nick string) error {
 		if strings.TrimSpace(target) == "" {
 			target = nick
 		}
-		msg := "+OK *" + enc.Encrypt(item.Text)
-		if err := b.sendTargetRaw(target, msg, item.Notice); err != nil {
+		if err := b.sendEncryptedTarget(target, item.Text, item.Notice, enc); err != nil {
 			return err
 		}
 	}
