@@ -179,6 +179,49 @@ plugins:
 
 This keeps site-local plugin settings out of Git-tracked example files.
 
+## VFS Sync API
+
+External archive scripts can move/delete files behind GoFTPd, but the master
+cannot guess that safely until a remerge sees it. For that case, enable the
+small master-only VFS sync API and call it after your external script has
+already copied, verified, and deleted the physical data.
+
+```yaml
+api:
+  enabled: true
+  listen: "127.0.0.1:5580"
+  token: "change-this-long-random-token"
+```
+
+Keep it on `127.0.0.1` unless it is behind a private admin firewall. Send the
+token as `Authorization: Bearer <token>` or `X-GoFTPd-Token: <token>`.
+Changing `api.enabled` or `api.listen` needs a daemon restart.
+
+Move metadata after an external copy/verify/delete:
+
+```bash
+curl -sS -X POST http://127.0.0.1:5580/api/v1/vfs/move \
+  -H "Authorization: Bearer $GOFTPD_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"from":"/BLURAY/Release.Name-GRP","to":"/ARCHiVE/BLURAY/Release.Name-GRP","slave":"LOCAL"}'
+```
+
+Delete metadata after an external delete:
+
+```bash
+curl -sS -X POST http://127.0.0.1:5580/api/v1/vfs/delete \
+  -H "Authorization: Bearer $GOFTPD_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"path":"/REQUESTS/FILLED-Old.Release"}'
+```
+
+The API only updates VFS, race metadata, release state, and status markers. It
+does not copy files, verify files, delete files, or make a remote WebDAV path
+downloadable by itself. The destination must still be reachable through a
+normal slave root or `slave.mounted_roots` if users should download it.
+The optional `slave` field sets the owning slave name after a move; omit it
+when the path stays on the same slave.
+
 ## Slaves
 
 For a slave-only install, copy the minimal sample and run it from the same
@@ -297,6 +340,10 @@ the mounted roots. A root scan will not also descend into `/ARCHiVE` through the
 catch-all site root. Manual `SITE REMERGE <slave|*>` runs the configured
 `slaves[].remerge.jobs[]` for the selected slave(s), so mounted paths are scanned
 only when the matching config job says so. That avoids duplicate walks.
+To run only one configured job, use `SITE REMERGE <slave|*> <job>`. To limit
+that job to one subtree, add a path: `SITE REMERGE LOCAL mounted_roots
+/ARCHiVE/BLURAY`. The path must belong to that job; for example a
+`mounted_roots` job can be scoped under its configured `mount_paths`.
 
 Remerge throttling is configured on the master per slave, not inside the slave
 config. Keep the slave config focused on physical roots and connection details;
@@ -849,9 +896,11 @@ including affils, PRE settings, slave policies, lookup toggles, TLS enforcement
 flags, IP restrictions, limits, show_diz map, nuke style, and debug.
 
 `SITE RESCAN <path|path/*>` checks release files against SFV data. `SITE
-REMERGE <slave|*>` runs the configured `slaves[].remerge.jobs[]` for connected
-slave(s) and refreshes the master's VFS index. Its online/offline behavior is
-controlled by `master.manual_remerge_mode`.
+REMERGE <slave|*> [job] [path]` runs configured `slaves[].remerge.jobs[]` for
+connected slave(s) and refreshes the master's VFS index. Use the optional job
+and path to scan only one configured job/subtree, for example `SITE REMERGE
+LOCAL mounted_roots /ARCHiVE/BLURAY`. Its online/offline behavior is controlled
+by `master.manual_remerge_mode`.
 
 The sitebot also supports SIGHUP reload for channels, encryption keys, theme,
 sections, plugin config, and announce routing without dropping the IRC

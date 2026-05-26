@@ -119,8 +119,16 @@ func (b *Bridge) StartRemergeJobs(slaveName string) (int, []string) {
 	return b.sm.StartRemergeJobs(slaveName)
 }
 
+func (b *Bridge) StartRemergeJob(slaveName, jobName, overridePath string) (int, []string) {
+	return b.sm.StartRemergeJob(slaveName, jobName, overridePath)
+}
+
 func (b *Bridge) StartRemergeAllJobs() (int, []string) {
 	return b.sm.StartRemergeAllJobs()
+}
+
+func (b *Bridge) StartRemergeAllJob(jobName, overridePath string) (int, []string) {
+	return b.sm.StartRemergeAllJob(jobName, overridePath)
 }
 
 func (b *Bridge) StopRemerge(slaveName string) error {
@@ -770,6 +778,124 @@ func (b *Bridge) RenameFile(from, toDir, toName string) error {
 	b.sm.SyncStatusMarkersForPath(from, vfsFile != nil && vfsFile.IsDir)
 	b.sm.SyncStatusMarkersForPath(toPath, vfsFile != nil && vfsFile.IsDir)
 	return nil
+}
+
+// VFSMoveOnly updates the master's metadata after an external tool has already
+// moved a path and verified the bytes. It intentionally does not touch disk.
+func (b *Bridge) VFSMoveOnly(from, to, slaveName string) error {
+	if b == nil || b.sm == nil || b.sm.GetVFS() == nil {
+		return fmt.Errorf("master bridge unavailable")
+	}
+	from = cleanBridgeVFSPath(from)
+	to = cleanBridgeVFSPath(to)
+	if from == "/" || to == "/" {
+		return fmt.Errorf("refusing to move VFS root")
+	}
+	if strings.TrimSpace(from) == "" || strings.TrimSpace(to) == "" || from == to {
+		return fmt.Errorf("invalid VFS move %q -> %q", from, to)
+	}
+	vfs := b.sm.GetVFS()
+	file := vfs.GetFile(from)
+	if file == nil {
+		return fmt.Errorf("source path not found in VFS: %s", from)
+	}
+	if existing := vfs.GetFile(to); existing != nil {
+		return fmt.Errorf("destination already exists in VFS: %s", to)
+	}
+	slaveName = strings.TrimSpace(slaveName)
+	parentSlave := file.SlaveName
+	if slaveName != "" {
+		if slave := b.sm.GetSlave(slaveName); slave == nil {
+			return fmt.Errorf("unknown slave %q", slaveName)
+		}
+		parentSlave = slaveName
+	}
+	b.ensureVFSParents(to, parentSlave)
+	if slaveName != "" {
+		vfs.RelocateFile(from, to, slaveName)
+	} else {
+		vfs.RenameFile(from, to)
+	}
+	if b.raceDB != nil {
+		if err := b.raceDB.RenamePath(filepath.Clean(from), filepath.Clean(to), file.IsDir); err != nil {
+			log.Printf("[Bridge] Race DB VFS-only rename sync failed %s -> %s: %v", from, to, err)
+		}
+	}
+	b.invalidateReadFileCache(from)
+	b.invalidateReadFileCache(to)
+	b.sm.RenameReleaseState(from, to, file.IsDir)
+	b.sm.SyncStatusMarkersForPath(from, file.IsDir)
+	b.sm.SyncStatusMarkersForPath(to, file.IsDir)
+	return nil
+}
+
+// VFSDeleteOnly removes a path from master metadata after an external tool has
+// already deleted it from storage. It intentionally does not touch disk.
+func (b *Bridge) VFSDeleteOnly(filePath string) error {
+	if b == nil || b.sm == nil || b.sm.GetVFS() == nil {
+		return fmt.Errorf("master bridge unavailable")
+	}
+	filePath = cleanBridgeVFSPath(filePath)
+	if filePath == "/" {
+		return fmt.Errorf("refusing to delete VFS root")
+	}
+	file := b.sm.GetVFS().GetFile(filePath)
+	if file == nil {
+		return fmt.Errorf("path not found in VFS: %s", filePath)
+	}
+	b.sm.GetVFS().DeleteFile(filePath)
+	if b.raceDB != nil {
+		if err := b.raceDB.DeletePath(filepath.Clean(filePath), file.IsDir); err != nil {
+			log.Printf("[Bridge] Race DB VFS-only delete sync failed for %s: %v", filePath, err)
+		}
+	}
+	b.invalidateReadFileCache(filePath)
+	b.sm.InvalidateReleaseStateForPath(filePath, file.IsDir)
+	b.sm.SyncStatusMarkersForPath(filePath, file.IsDir)
+	return nil
+}
+
+func (b *Bridge) ensureVFSParents(filePath, slaveName string) {
+	if b == nil || b.sm == nil || b.sm.GetVFS() == nil {
+		return
+	}
+	parent := path.Dir(cleanBridgeVFSPath(filePath))
+	if parent == "." || parent == "/" {
+		return
+	}
+	parts := strings.Split(strings.Trim(parent, "/"), "/")
+	current := ""
+	now := time.Now().Unix()
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		current += "/" + part
+		if b.sm.GetVFS().GetFile(current) != nil {
+			continue
+		}
+		b.sm.GetVFS().AddFile(current, VFSFile{
+			Path:         current,
+			IsDir:        true,
+			Mode:         0755,
+			LastModified: now,
+			SlaveName:    slaveName,
+			Owner:        "GoFTPd",
+			Group:        "GoFTPd",
+			Seen:         true,
+		})
+	}
+}
+
+func cleanBridgeVFSPath(p string) string {
+	p = strings.TrimSpace(strings.ReplaceAll(p, "\\", "/"))
+	if p == "" {
+		return ""
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	return path.Clean(p)
 }
 
 func (b *Bridge) RelocatePath(from, toDir, toName string) error {

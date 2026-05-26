@@ -151,9 +151,16 @@ type MasterBridge interface {
 	// StartRemergeJobs starts all configured master-side remerge jobs for one slave.
 	StartRemergeJobs(slaveName string) (started int, errors []string)
 
+	// StartRemergeJob starts one configured remerge job, optionally scoped to a
+	// VFS subtree such as /ARCHiVE/BLURAY.
+	StartRemergeJob(slaveName, jobName, overridePath string) (started int, errors []string)
+
 	// StartRemergeAllJobs starts configured master-side remerge jobs for every
 	// online slave.
 	StartRemergeAllJobs() (started int, errors []string)
+
+	// StartRemergeAllJob starts one configured remerge job on every online slave.
+	StartRemergeAllJob(jobName, overridePath string) (started int, errors []string)
 
 	// StopRemerge asks a slave to abort its active background VFS refresh.
 	StopRemerge(slaveName string) error

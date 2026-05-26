@@ -40,6 +40,7 @@ type Config struct {
 	Master map[string]interface{} `yaml:"master"`
 	Slave  map[string]interface{} `yaml:"slave"`
 	Slaves []SlavePolicyConfig    `yaml:"slaves"` // per-slave routing/affinity rules (master mode)
+	API    APIConfig              `yaml:"api"`    // optional local HTTP API for external VFS sync calls
 
 	// Sections are virtual section directories the master should keep alive in
 	// VFS and create on matching writable slaves. Nested dirs such as
@@ -201,6 +202,21 @@ type SlaveRemergeJobConfig struct {
 	SkipBusySlave          bool     `yaml:"skip_busy_slave"`
 }
 
+type APIConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Listen  string `yaml:"listen"`
+	Token   string `yaml:"token"`
+}
+
+func (a *APIConfig) ApplyDefaults() {
+	if a == nil {
+		return
+	}
+	if strings.TrimSpace(a.Listen) == "" {
+		a.Listen = "127.0.0.1:5580"
+	}
+}
+
 func LoadConfig(filePath string) (*Config, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
@@ -232,6 +248,7 @@ func LoadConfig(filePath string) (*Config, error) {
 	if cfg.LogDeleteAfterDays <= 0 && cfg.LogKeepDays > 0 {
 		cfg.LogDeleteAfterDays = cfg.LogKeepDays
 	}
+	cfg.API.ApplyDefaults()
 	cfg.Zipscript.ApplyDefaults()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -280,6 +297,14 @@ func (c *Config) Validate() error {
 	}
 	if c.RequireTLSData && !c.TLSEnabled {
 		errs = append(errs, "require_tls_data needs tls_enabled: true")
+	}
+	if c.API.Enabled {
+		if strings.TrimSpace(c.API.Listen) == "" {
+			errs = append(errs, "api.listen must not be empty when api.enabled is true")
+		}
+		if strings.TrimSpace(c.API.Token) == "" {
+			errs = append(errs, "api.token must not be empty when api.enabled is true")
+		}
 	}
 
 	switch mode {
@@ -532,6 +557,7 @@ func (c *Config) Rehash() (string, error) {
 	// Slaves policy
 	c.Slaves = fresh.Slaves
 	c.Sections = fresh.Sections
+	c.API = fresh.API
 
 	// Security / TLS policy (policy toggles, not socket-level TLS itself)
 	c.RequireTLSControl = fresh.RequireTLSControl

@@ -1985,6 +1985,80 @@ func (sm *SlaveManager) StartRemergeJobs(name string) (int, []string) {
 	return len(jobs), nil
 }
 
+func (sm *SlaveManager) StartRemergeJob(name, jobName, overridePath string) (int, []string) {
+	rs := sm.GetSlave(name)
+	if rs == nil {
+		sm.publishRemergeStatus(RemergeStatus{
+			Action:  "skipped",
+			Status:  "skipped",
+			Slave:   name,
+			Job:     jobName,
+			Message: fmt.Sprintf("remerge skipped: unknown slave %s", name),
+		})
+		return 0, []string{fmt.Sprintf("unknown slave %s", name)}
+	}
+	if !rs.IsOnline() {
+		sm.publishRemergeStatus(RemergeStatus{
+			Action:  "skipped",
+			Status:  "skipped",
+			Slave:   rs.Name(),
+			Job:     jobName,
+			Message: fmt.Sprintf("remerge skipped for %s: slave is offline", rs.Name()),
+		})
+		return 0, []string{fmt.Sprintf("slave %s is offline", rs.Name())}
+	}
+	if rs.IsRemerging() {
+		sm.publishRemergeStatus(RemergeStatus{
+			Action:  "skipped",
+			Status:  "skipped",
+			Slave:   rs.Name(),
+			Job:     jobName,
+			Message: fmt.Sprintf("remerge skipped for %s job=%s: already remerging", rs.Name(), jobName),
+		})
+		return 0, []string{fmt.Sprintf("slave %s is already remerging", rs.Name())}
+	}
+	job, ok := sm.backgroundRemergeJobForSlave(rs.Name(), jobName)
+	if !ok {
+		sm.publishRemergeStatus(RemergeStatus{
+			Action:  "skipped",
+			Status:  "skipped",
+			Slave:   rs.Name(),
+			Job:     jobName,
+			Message: fmt.Sprintf("remerge skipped for %s: job %s is not configured", rs.Name(), jobName),
+		})
+		return 0, []string{fmt.Sprintf("slave %s has no remerge job %q", rs.Name(), jobName)}
+	}
+	if job.skipBusy && rs.ActiveTransfers() > 0 {
+		active := int(rs.ActiveTransfers())
+		sm.publishRemergeStatus(RemergeStatus{
+			Action:          "skipped",
+			Status:          "skipped",
+			Slave:           rs.Name(),
+			Job:             job.name,
+			ActiveTransfers: active,
+			Message:         fmt.Sprintf("remerge skipped for %s job=%s: %d active transfer(s)", rs.Name(), job.name, active),
+		})
+		return 0, []string{fmt.Sprintf("slave %s has %d active transfer(s)", rs.Name(), active)}
+	}
+	targets, err := sm.manualRemergeTargetsForJob(rs, job, overridePath)
+	if err != nil {
+		sm.publishRemergeStatus(RemergeStatus{
+			Action:  "skipped",
+			Status:  "skipped",
+			Slave:   rs.Name(),
+			Job:     job.name,
+			Message: fmt.Sprintf("remerge skipped for %s job=%s: %v", rs.Name(), job.name, err),
+		})
+		return 0, []string{err.Error()}
+	}
+	if len(targets) == 0 {
+		return 0, []string{fmt.Sprintf("slave %s job %s has no matching paths", rs.Name(), job.name)}
+	}
+	stagger := sm.backgroundRemergeSnapshot().stagger
+	go sm.runBackgroundRemergeJobTargets(job, targets, stagger)
+	return len(targets), nil
+}
+
 func (sm *SlaveManager) StartRemergeAllJobs() (int, []string) {
 	var errs []string
 	started := 0
@@ -2003,6 +2077,24 @@ func (sm *SlaveManager) StartRemergeAllJobs() (int, []string) {
 	return started, errs
 }
 
+func (sm *SlaveManager) StartRemergeAllJob(jobName, overridePath string) (int, []string) {
+	var errs []string
+	started := 0
+	slaves := sm.GetAllSlaves()
+	if len(slaves) == 0 {
+		return 0, []string{"no slaves connected"}
+	}
+	for _, rs := range slaves {
+		n, jobErrs := sm.StartRemergeJob(rs.Name(), jobName, overridePath)
+		if len(jobErrs) > 0 {
+			errs = append(errs, jobErrs...)
+			continue
+		}
+		started += n
+	}
+	return started, errs
+}
+
 func (sm *SlaveManager) backgroundRemergeJobsForSlave(slaveName string) []backgroundRemergeJob {
 	cfg := sm.backgroundRemergeSnapshot()
 	out := make([]backgroundRemergeJob, 0, len(cfg.jobs))
@@ -2012,6 +2104,19 @@ func (sm *SlaveManager) backgroundRemergeJobsForSlave(slaveName string) []backgr
 		}
 	}
 	return out
+}
+
+func (sm *SlaveManager) backgroundRemergeJobForSlave(slaveName, jobName string) (backgroundRemergeJob, bool) {
+	jobName = strings.TrimSpace(jobName)
+	if jobName == "" {
+		return backgroundRemergeJob{}, false
+	}
+	for _, job := range sm.backgroundRemergeJobsForSlave(slaveName) {
+		if strings.EqualFold(job.name, jobName) {
+			return job, true
+		}
+	}
+	return backgroundRemergeJob{}, false
 }
 
 func (sm *SlaveManager) StopRemerge(name string) error {
@@ -2562,6 +2667,14 @@ func (sm *SlaveManager) runBackgroundRemergeJob(job backgroundRemergeJob, stagge
 		})
 		return
 	}
+	sm.runBackgroundRemergeJobTargets(job, targets, stagger)
+}
+
+func (sm *SlaveManager) runBackgroundRemergeJobTargets(job backgroundRemergeJob, targets []backgroundRemergeTarget, stagger time.Duration) {
+	rs := sm.GetSlave(job.slaveName)
+	if rs == nil || !rs.IsOnline() {
+		return
+	}
 	for i, target := range targets {
 		if !sm.running.Load() {
 			return
@@ -2609,6 +2722,47 @@ func (sm *SlaveManager) runBackgroundRemergeJob(job backgroundRemergeJob, stagge
 type backgroundRemergeTarget struct {
 	basePath string
 	rootMode string
+}
+
+func (sm *SlaveManager) manualRemergeTargetsForJob(rs *RemoteSlave, job backgroundRemergeJob, overridePath string) ([]backgroundRemergeTarget, error) {
+	overridePath = strings.TrimSpace(overridePath)
+	if overridePath == "" {
+		return sm.expandBackgroundRemergeTargets(rs, job), nil
+	}
+	basePath := normalizeRemergeJobPath(overridePath)
+	rootMode := normalizeRemergeRootMode(job.rootMode)
+	if err := validateManualRemergePath(rs, job, basePath); err != nil {
+		return nil, err
+	}
+	return []backgroundRemergeTarget{{basePath: basePath, rootMode: rootMode}}, nil
+}
+
+func validateManualRemergePath(rs *RemoteSlave, job backgroundRemergeJob, basePath string) error {
+	basePath = normalizeRemergeJobPath(basePath)
+	rootMode := normalizeRemergeRootMode(job.rootMode)
+	if rootMode != "mounted" {
+		jobBase := normalizeRemergeJobPath(job.basePath)
+		if jobBase != "/" && basePath != jobBase && !strings.HasPrefix(basePath, jobBase+"/") {
+			return fmt.Errorf("path %s is outside job %s base path %s", basePath, job.name, jobBase)
+		}
+		return nil
+	}
+	allowed := job.mountPaths
+	if len(allowed) == 0 || containsWildcard(allowed) {
+		allowed = mountedRootPathsFromDiskStatus(rs.GetDiskStatus())
+	}
+	if len(allowed) == 0 && job.basePath != "/" {
+		allowed = []string{job.basePath}
+	}
+	for _, mountPath := range normalizeVFSPathList(allowed) {
+		if mountPath == "*" {
+			continue
+		}
+		if basePath == mountPath || strings.HasPrefix(basePath, mountPath+"/") {
+			return nil
+		}
+	}
+	return fmt.Errorf("path %s is outside mounted paths for job %s", basePath, job.name)
 }
 
 func (sm *SlaveManager) expandBackgroundRemergeTargets(rs *RemoteSlave, job backgroundRemergeJob) []backgroundRemergeTarget {
