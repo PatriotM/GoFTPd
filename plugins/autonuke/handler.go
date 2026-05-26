@@ -223,6 +223,9 @@ func (h *Handler) processRelease(rel releaseCandidate) {
 		h.clearAllWarnings(rel)
 		return
 	}
+	if h.handleBanned(rel) {
+		return
+	}
 	if h.handleEmpty(rel) {
 		return
 	}
@@ -230,9 +233,6 @@ func (h *Handler) processRelease(rel releaseCandidate) {
 		return
 	}
 	if h.handleHalfEmpty(rel) {
-		return
-	}
-	if h.handleBanned(rel) {
 		return
 	}
 	if h.handleAllowed(rel) {
@@ -803,7 +803,7 @@ func sectionFromPath(p string) string {
 
 func pathHasBase(target, base string) bool {
 	target = strings.ToLower(path.Clean(target))
-	base = strings.ToLower(path.Clean(base))
+	base = strings.ToLower(sectionPatternBase(base))
 	return target == base || strings.HasPrefix(target, base+"/")
 }
 
@@ -1298,7 +1298,7 @@ func patternRulesValue(raw map[string]interface{}, key string) []patternRule {
 			continue
 		}
 		rule := patternRule{
-			BasePath:    normalizeVirtualPath(stringValue(entry, "", "path", "base_path")),
+			BasePath:    sectionPatternBase(stringValue(entry, "", "path", "base_path")),
 			Patterns:    stringSliceValue(entry, "patterns"),
 			Multiplier:  intValue(entry, 0, "multiplier"),
 			Description: stringValue(entry, "", "description"),

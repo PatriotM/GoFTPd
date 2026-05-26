@@ -31,6 +31,50 @@ func TestFetchResponseReturnsBufferedEarlyResponse(t *testing.T) {
 	}
 }
 
+func TestTimedOutRemergeLateResponseClearsState(t *testing.T) {
+	rs := &RemoteSlave{
+		commandNotify:    make(chan struct{}, 1),
+		remergeQueue:     make(chan *protocol.AsyncResponseRemerge, 1),
+		remergeDrained:   make(chan struct{}, 1),
+		heartbeatTimeout: time.Second,
+	}
+	rs.setActiveRemerge("abc")
+	if !rs.markActiveRemergeTimedOut("abc") {
+		t.Fatalf("expected active remerge timeout marker")
+	}
+	if !rs.IsRemerging() {
+		t.Fatalf("expected slave to remain marked remerging after timeout")
+	}
+
+	rs.routeResponse("abc", &protocol.AsyncResponse{Index: "abc"})
+
+	if rs.IsRemerging() {
+		t.Fatalf("late response should clear timed-out remerge state")
+	}
+	if _, ok := rs.earlyResponses.Load("abc"); ok {
+		t.Fatalf("late timed-out remerge response should not stay buffered")
+	}
+}
+
+func TestEarlyActiveRemergeResponseStillBuffersBeforeWaiter(t *testing.T) {
+	rs := &RemoteSlave{
+		commandNotify:    make(chan struct{}, 1),
+		remergeQueue:     make(chan *protocol.AsyncResponseRemerge, 1),
+		remergeDrained:   make(chan struct{}, 1),
+		heartbeatTimeout: time.Second,
+	}
+	rs.setActiveRemerge("abc")
+
+	rs.routeResponse("abc", &protocol.AsyncResponse{Index: "abc"})
+
+	if _, ok := rs.earlyResponses.Load("abc"); !ok {
+		t.Fatalf("early response should be buffered until FetchResponse starts")
+	}
+	if !rs.IsRemerging() {
+		t.Fatalf("early response should not clear active remerge before waiter consumes it")
+	}
+}
+
 func TestWaitForRemergeDrainReturnsAfterQueueClears(t *testing.T) {
 	rs := &RemoteSlave{
 		remergeDrained: make(chan struct{}, 1),
