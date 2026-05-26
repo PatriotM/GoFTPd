@@ -297,7 +297,7 @@ func TestBannedRuleTakesPriorityOverIncomplete(t *testing.T) {
 
 	h.processRelease(rel)
 
-	if !strings.Contains(siteArgs, "NUKE "+rel.Path+" x3 -Auto- bad tag") {
+	if !strings.Contains(siteArgs, "NUKE "+rel.Path+" x3 -Auto- bad tag: banned word _NSW") {
 		t.Fatalf("expected bad-tag nuke to win, got SITE args %q", siteArgs)
 	}
 	data, err := os.ReadFile(filepath.Join(tmp, "history.jsonl"))
@@ -308,8 +308,58 @@ func TestBannedRuleTakesPriorityOverIncomplete(t *testing.T) {
 	if strings.Contains(text, "Incomplete") {
 		t.Fatalf("incomplete rule should not win over banned tag: %s", text)
 	}
-	if !strings.Contains(text, `"reason":"bad tag"`) {
+	if !strings.Contains(text, `"reason":"bad tag: banned word _NSW"`) {
 		t.Fatalf("history should record bad tag reason: %s", text)
+	}
+}
+
+func TestBannedRuleRunsBeforeCompleteMarkerSkip(t *testing.T) {
+	tmp := t.TempDir()
+	rel := releaseCandidate{
+		Path:    "/GAMES/Who_Needs_a_Hero_NSW-BREWS",
+		Name:    "Who_Needs_a_Hero_NSW-BREWS",
+		Section: "GAMES",
+		Owner:   "test0r",
+		ModTime: time.Now().Add(-2 * time.Hour).Unix(),
+	}
+
+	var siteArgs string
+	h := &Handler{
+		cfg: config{
+			StateDir:         tmp,
+			NukedPrefix:      "[NUKED]-",
+			ApprovalMarkers:  []string{".approved"},
+			CheckCompleteDir: true,
+			Empty:            timedRule{Enabled: false},
+			HalfEmpty:        timedPayloadRule{timedRule: timedRule{Enabled: false}},
+			Incomplete:       incompleteRule{timedRule: timedRule{Enabled: false}},
+			Banned: timedPatternRules{
+				Enabled:      true,
+				NukeAfterMin: 1,
+				DefaultMulti: 10,
+				Rules: []patternRule{
+					{BasePath: "/GAMES/*", Patterns: []string{"_NSW"}, Description: "Banned release naming"},
+				},
+			},
+		},
+		svc: &plugin.Services{Bridge: &testBridge{
+			entries: map[string][]plugin.FileEntry{
+				rel.Path: {
+					{Name: "complete", IsDir: true},
+				},
+			},
+		}},
+		siteRunner: func(args string) ([]string, error) {
+			siteArgs = args
+			return []string{"200 OK"}, nil
+		},
+	}
+
+	h.processRelease(rel)
+
+	want := "NUKE " + rel.Path + " x10 -Auto- Banned release naming: banned word _NSW"
+	if !strings.Contains(siteArgs, want) {
+		t.Fatalf("expected complete bad-tag release to be nuked with %q, got %q", want, siteArgs)
 	}
 }
 

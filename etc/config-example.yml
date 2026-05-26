@@ -34,6 +34,20 @@ pasv_max:     30000             #   -"- upper bound
 passthrough:  true              # true = client connects directly to slave (recommended)
                                 # false = master proxies all data (2x bandwidth cost)
 
+# =============================================================================
+#  Local VFS sync API - master-only, disabled by default.
+#
+#  Use this only when an external archiver already copied/verified/deleted data
+#  outside GoFTPd and then needs to tell the master to update VFS metadata.
+#  The API does not move bytes and does not scan disks.
+#
+#  Keep this bound to localhost or a private admin network and use a real token.
+# =============================================================================
+api:
+  enabled: false
+  listen: "127.0.0.1:5580"
+  token: ""                     # Required when enabled. Send as Authorization: Bearer <token>
+
 
 # =============================================================================
 #  Master block — used when mode: master

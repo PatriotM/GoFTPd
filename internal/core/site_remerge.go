@@ -6,9 +6,9 @@ import (
 )
 
 func (s *Session) HandleSiteRemerge(args []string) bool {
-	target, err := parseSiteRemergeArgs(args)
+	req, err := parseSiteRemergeArgs(args)
 	if err != nil {
-		fmt.Fprintf(s.Conn, "501 Usage: SITE REMERGE <slave|*> (%v)\r\n", err)
+		fmt.Fprintf(s.Conn, "501 Usage: SITE REMERGE <slave|*> [job] [path] (%v)\r\n", err)
 		return false
 	}
 	if s.Config.Mode != "master" || s.MasterManager == nil {
@@ -21,8 +21,14 @@ func (s *Session) HandleSiteRemerge(args []string) bool {
 		return false
 	}
 
-	if target == "*" {
-		started, errs := bridge.StartRemergeAllJobs()
+	if req.target == "*" {
+		var started int
+		var errs []string
+		if req.jobName != "" {
+			started, errs = bridge.StartRemergeAllJob(req.jobName, req.path)
+		} else {
+			started, errs = bridge.StartRemergeAllJobs()
+		}
 		if started == 0 && len(errs) > 0 {
 			fmt.Fprintf(s.Conn, "550 REMERGE failed: %s\r\n", strings.Join(errs, "; "))
 			return false
@@ -35,28 +41,56 @@ func (s *Session) HandleSiteRemerge(args []string) bool {
 		return false
 	}
 
-	started, errs := bridge.StartRemergeJobs(target)
+	var started int
+	var errs []string
+	if req.jobName != "" {
+		started, errs = bridge.StartRemergeJob(req.target, req.jobName, req.path)
+	} else {
+		started, errs = bridge.StartRemergeJobs(req.target)
+	}
 	if started == 0 && len(errs) > 0 {
 		fmt.Fprintf(s.Conn, "550 REMERGE failed: %s\r\n", strings.Join(errs, "; "))
 		return false
 	}
 	if len(errs) > 0 {
-		fmt.Fprintf(s.Conn, "200 REMERGE requested for %s (%d configured scan(s)); skipped: %s\r\n", target, started, strings.Join(errs, "; "))
+		fmt.Fprintf(s.Conn, "200 REMERGE requested for %s (%d configured scan(s)); skipped: %s\r\n", req.target, started, strings.Join(errs, "; "))
 		return false
 	}
-	fmt.Fprintf(s.Conn, "200 REMERGE requested for %s (%d configured scan(s)).\r\n", target, started)
+	fmt.Fprintf(s.Conn, "200 REMERGE requested for %s (%d configured scan(s)).\r\n", req.target, started)
 	return false
 }
 
-func parseSiteRemergeArgs(args []string) (target string, err error) {
-	if len(args) != 1 {
-		return "", fmt.Errorf("invalid argument count")
+type siteRemergeRequest struct {
+	target  string
+	jobName string
+	path    string
+}
+
+func parseSiteRemergeArgs(args []string) (siteRemergeRequest, error) {
+	if len(args) < 1 || len(args) > 3 {
+		return siteRemergeRequest{}, fmt.Errorf("invalid argument count")
 	}
-	target = strings.TrimSpace(args[0])
+	target := strings.TrimSpace(args[0])
 	if target == "" {
-		return "", fmt.Errorf("missing target")
+		return siteRemergeRequest{}, fmt.Errorf("missing target")
 	}
-	return target, nil
+	req := siteRemergeRequest{target: target}
+	if len(args) >= 2 {
+		req.jobName = strings.TrimSpace(args[1])
+		if req.jobName == "" {
+			return siteRemergeRequest{}, fmt.Errorf("missing job")
+		}
+	}
+	if len(args) == 3 {
+		req.path = strings.TrimSpace(args[2])
+		if req.path == "" {
+			return siteRemergeRequest{}, fmt.Errorf("missing path")
+		}
+		if !strings.HasPrefix(req.path, "/") {
+			return siteRemergeRequest{}, fmt.Errorf("path must be an absolute VFS path")
+		}
+	}
+	return req, nil
 }
 
 func (s *Session) HandleSiteRemergeStop(args []string) bool {

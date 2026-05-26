@@ -226,6 +226,10 @@ func (h *Handler) processRelease(rel releaseCandidate) {
 	if h.handleBanned(rel) {
 		return
 	}
+	if h.hasApprovalMarker(rel.Path) {
+		h.clearAllWarnings(rel)
+		return
+	}
 	if h.handleEmpty(rel) {
 		return
 	}
@@ -331,7 +335,7 @@ func (h *Handler) skipRelease(rel releaseCandidate) bool {
 			return true
 		}
 	}
-	return h.hasApprovalMarker(rel.Path)
+	return false
 }
 
 func (h *Handler) hasApprovalMarker(dirPath string) bool {
@@ -422,7 +426,7 @@ func (h *Handler) handleBanned(rel releaseCandidate) bool {
 		}
 		reason := fmt.Sprintf("%s not allowed", match)
 		if rule.Description != "" {
-			reason = rule.Description
+			reason = fmt.Sprintf("%s: banned word %s", rule.Description, match)
 		}
 		return h.applyPatternRule(rel, "banned", rules, rule.MultiplierOr(rules.DefaultMulti), reason, match)
 	}

@@ -485,6 +485,8 @@ func main() {
 		}()
 	}
 
+	apiServer := startVFSAPIServer(cfg, masterBridge)
+
 	// 9. Start FTP Listener
 	listenAddr := fmt.Sprintf(":%d", cfg.ListenPort)
 	ln, err := net.Listen("tcp", listenAddr)
@@ -523,6 +525,10 @@ func main() {
 			continue
 		}
 		log.Println("Shutting down...")
+		if apiServer != nil {
+			_ = apiServer.Close()
+		}
+		_ = ln.Close()
 		return
 	}
 }
