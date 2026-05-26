@@ -220,6 +220,29 @@ func TestWarnEmitsAutonukeWarnEvent(t *testing.T) {
 	}
 }
 
+func TestPatternRulePathNormalizesWildcardSectionBase(t *testing.T) {
+	rules := patternRulesValue(map[string]interface{}{
+		"rules": []interface{}{
+			map[string]interface{}{
+				"path":        "/GAMES/*",
+				"patterns":    []interface{}{"_NSW"},
+				"multiplier":  10,
+				"description": "Banned release naming",
+			},
+		},
+	}, "rules")
+
+	if len(rules) != 1 {
+		t.Fatalf("expected one rule, got %+v", rules)
+	}
+	if rules[0].BasePath != "/GAMES" {
+		t.Fatalf("BasePath = %q, want /GAMES", rules[0].BasePath)
+	}
+	if !pathHasBase("/GAMES/Who_Needs_a_Hero_NSW-BREWS", "/GAMES/*") {
+		t.Fatalf("wildcard rule path should match release under /GAMES")
+	}
+}
+
 func TestBannedRuleTakesPriorityOverIncomplete(t *testing.T) {
 	tmp := t.TempDir()
 	rel := releaseCandidate{
@@ -252,7 +275,7 @@ func TestBannedRuleTakesPriorityOverIncomplete(t *testing.T) {
 				NukeAfterMin: 1,
 				DefaultMulti: 3,
 				Rules: []patternRule{
-					{BasePath: "/GAMES", Patterns: []string{"_NSW"}, Description: "bad tag"},
+					{BasePath: "/GAMES/*", Patterns: []string{"_NSW"}, Description: "bad tag"},
 				},
 			},
 		},
