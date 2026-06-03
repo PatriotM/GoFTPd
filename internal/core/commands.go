@@ -493,6 +493,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			target = path.Join(s.CurrentDir, target)
 		}
 		targetPath := path.Clean(target)
+		Tracef("[RACETRACE] cwd-start user=%s from=%s target=%s", s.User.Name, s.CurrentDir, targetPath)
 		if s.Config.Mode == "master" && s.MasterManager != nil {
 			if bridge, ok := s.MasterManager.(MasterBridge); ok {
 				targetPath = path.Clean(bridge.ResolvePath(targetPath))
@@ -602,6 +603,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		}
 
 		s.showGlobalStats("250", false)
+		Tracef("[RACETRACE] cwd-ok user=%s dir=%s", s.User.Name, s.CurrentDir)
 		fmt.Fprintf(s.Conn, "250 Directory changed to %s\r\n", s.CurrentDir)
 
 	case "CDUP":
@@ -1089,6 +1091,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		if s.Config.Debug {
 			log.Printf("[MLSD] Client requesting machine list for %s", targetPath)
 		}
+		Tracef("[RACETRACE] mlsd-start user=%s dir=%s target=%s", s.User.Name, s.CurrentDir, targetPath)
 		fmt.Fprintf(s.Conn, "150 File status okay; about to open data connection.\r\n")
 
 		raw, err := s.getRawDataConn()
@@ -1212,8 +1215,10 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			}
 		}
 
+		rows := strings.Count(output.String(), "\n")
 		dataConn.Write([]byte(output.String()))
 		dataConn.Close()
+		Tracef("[RACETRACE] mlsd-ok user=%s target=%s rows=%d", s.User.Name, targetPath, rows)
 		fmt.Fprintf(s.Conn, "226 Directory listing complete.\r\n")
 		return false
 
@@ -1235,6 +1240,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			fmt.Fprintf(s.Conn, "550 %s: no such file or directory\r\n", targetPath)
 			return false
 		}
+		Tracef("[RACETRACE] nlst-start user=%s dir=%s target=%s", s.User.Name, s.CurrentDir, targetPath)
 		fmt.Fprintf(s.Conn, "150 Opening ASCII mode data connection.\r\n")
 
 		raw, err := s.getRawDataConn()
@@ -1300,8 +1306,10 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			}
 		}
 
+		rows := strings.Count(output.String(), "\n")
 		dataConn.Write([]byte(output.String()))
 		dataConn.Close()
+		Tracef("[RACETRACE] nlst-ok user=%s target=%s rows=%d", s.User.Name, targetPath, rows)
 
 		if s.Config.Mode == "master" && s.MasterManager != nil {
 			s.showGlobalStats("226", false)
@@ -1332,6 +1340,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			}
 			return false
 		}
+		Tracef("[RACETRACE] list-start user=%s dir=%s target=%s", s.User.Name, s.CurrentDir, targetPath)
 		fmt.Fprintf(s.Conn, "150 Opening ASCII mode data connection.\r\n")
 
 		raw, err := s.getRawDataConn()
@@ -1448,8 +1457,10 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			}
 		}
 
+		rows := strings.Count(output.String(), "\n")
 		dataConn.Write([]byte(output.String()))
 		dataConn.Close()
+		Tracef("[RACETRACE] list-ok user=%s target=%s rows=%d", s.User.Name, targetPath, rows)
 
 		// Only show stats in master mode so we don't crash standalone
 		if s.Config.Mode == "master" && s.MasterManager != nil {
@@ -1499,6 +1510,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		}
 		uploadDir = path.Dir(uploadPath)
 		fileName = path.Base(uploadPath)
+		Tracef("[RACETRACE] stor-start user=%s dir=%s path=%s file=%s rest=%d tls=%t pret=%s", s.User.Name, s.CurrentDir, uploadPath, fileName, restOffset, s.DataTLS, s.PretCmd)
 		getMasterUploadEntries := func(bridge MasterBridge) []MasterFileEntry {
 			if !masterUploadEntriesLoaded {
 				masterUploadEntries = bridge.ListDir(uploadDir)
@@ -1636,6 +1648,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					if s.Config != nil && s.Config.Debug {
 						log.Printf("[Passthrough] PORT upload failed for user %s path %s: %s", s.User.Name, filePath, formatTransferFailureLog(err))
 					}
+					Tracef("[RACETRACE] stor-fail mode=port-passthrough user=%s path=%s err=%v", s.User.Name, filePath, err)
 					maybeHandleSlowTransfer(s, "upload", filePath, transferSlaveName, transferSlaveIdx, err)
 					writeTransferFailure(s.Conn, "Upload", err)
 					return false
@@ -1667,6 +1680,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				if xferMs > 0 {
 					speedMB = (float64(transferredBytes) / 1024.0 / 1024.0) / (float64(xferMs) / 1000.0)
 				}
+				Tracef("[RACETRACE] stor-ok mode=port-passthrough user=%s path=%s size=%d checksum=%08X xfer_ms=%d speed_mb=%.2f", s.User.Name, filePath, fileSize, checksum, xferMs, speedMB)
 				fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
 				queueMasterUploadPostHooks(s, bridge, uploadDir, mediaInfoDir, filePath, fileName, checksum, transferredBytes, fileSize, speedMB, xferMs, existingNames)
 				return false
@@ -1709,6 +1723,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						if s.Config != nil && s.Config.Debug {
 							log.Printf("[Passthrough] Upload failed for user %s path %s: %s", s.User.Name, filePath, formatTransferFailureLog(err))
 						}
+						Tracef("[RACETRACE] stor-fail mode=passthrough user=%s path=%s slave=%s err=%v", s.User.Name, filePath, slaveName, err)
 						maybeHandleSlowTransfer(s, "upload", filePath, slaveName, s.PassthruXferIdx, err)
 						writeTransferFailure(s.Conn, "Upload", err)
 						return false
@@ -1731,6 +1746,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 
 					if err != nil {
 						log.Printf("[MASTER] Upload failed: %v", err)
+						Tracef("[RACETRACE] stor-fail mode=master-bridge user=%s path=%s err=%v", s.User.Name, filePath, err)
 						maybeHandleSlowTransfer(s, "upload", filePath, "", 0, err)
 						writeTransferFailure(s.Conn, "Upload", err)
 						return false
@@ -1763,6 +1779,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				if xferMs > 0 {
 					speedMB = (float64(transferredBytes) / 1024.0 / 1024.0) / (float64(xferMs) / 1000.0)
 				}
+				Tracef("[RACETRACE] stor-ok mode=master user=%s path=%s size=%d checksum=%08X xfer_ms=%d speed_mb=%.2f", s.User.Name, filePath, fileSize, checksum, xferMs, speedMB)
 				fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
 				queueMasterUploadPostHooks(s, bridge, uploadDir, mediaInfoDir, filePath, fileName, checksum, transferredBytes, fileSize, speedMB, xferMs, existingNames)
 			} else {
@@ -1859,6 +1876,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			if restOffset == 0 {
 				_ = os.Remove(localPath)
 			}
+			Tracef("[RACETRACE] stor-fail mode=local user=%s path=%s err=%v", s.User.Name, uploadPath, err)
 			writeTransferFailure(s.Conn, "Upload", err)
 			return false
 		}
@@ -1910,6 +1928,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			s.User.UpdateStatsWithCredits(transferredBytes, true, !isSpeedtest)
 		}
 		speedMB := transferSpeedMB(transferredBytes, xferMs)
+		Tracef("[RACETRACE] stor-ok mode=local user=%s path=%s size=%d checksum=%08X xfer_ms=%d speed_mb=%.2f", s.User.Name, uploadPath, fileSize, checksum, xferMs, speedMB)
 		fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
 		go func(uploadPath, fileName, localPath string, transferredBytes int64, speedMB float64) {
 			s.emitEvent(EventUpload, uploadPath, fileName, transferredBytes, speedMB, nil)
@@ -1950,6 +1969,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				filePath = bridge.ResolvePath(filePath)
 			}
 		}
+		Tracef("[RACETRACE] retr-start user=%s dir=%s path=%s arg=%s rest=%d tls=%t pret=%s", s.User.Name, s.CurrentDir, filePath, args[0], s.RestOffset, s.DataTLS, s.PretCmd)
 		aclPath := path.Join(s.Config.ACLBasePath, filePath)
 		if !s.ACLEngine.CanPerform(s.User, "DOWNLOAD", aclPath) {
 			fmt.Fprintf(s.Conn, "550 Access Denied.\r\n")
@@ -2028,6 +2048,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						if s.Config != nil && s.Config.Debug {
 							log.Printf("[Passthrough] PORT download failed for user %s path %s: %s", s.User.Name, filePath, formatTransferFailureLog(err))
 						}
+						Tracef("[RACETRACE] retr-fail mode=port-passthrough user=%s path=%s err=%v", s.User.Name, filePath, err)
 						maybeHandleSlowTransfer(s, "download", filePath, transferSlaveName, transferSlaveIdx, err)
 						writeTransferFailure(s.Conn, "Download", err)
 						return false
@@ -2037,6 +2058,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						handleMasterDownloadSFVChecksum(s, bridge, filePath, transferChecksum)
 					}
 					fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
+					Tracef("[RACETRACE] retr-ok mode=port-passthrough user=%s path=%s size=%d xfer_ms=%d", s.User.Name, filePath, remainingSize, xferMs)
 					if remainingSize > 0 {
 						s.User.UpdateStatsWithCredits(remainingSize, false, !isSpeedtest)
 					}
@@ -2064,6 +2086,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						if s.Config != nil && s.Config.Debug {
 							log.Printf("[Passthrough] Download failed for user %s path %s: %s", s.User.Name, filePath, formatTransferFailureLog(err))
 						}
+						Tracef("[RACETRACE] retr-fail mode=passthrough user=%s path=%s slave=%s err=%v", s.User.Name, filePath, slaveName, err)
 						maybeHandleSlowTransfer(s, "download", filePath, slaveName, s.PassthruXferIdx, err)
 						writeTransferFailure(s.Conn, "Download", err)
 					} else {
@@ -2071,6 +2094,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 							handleMasterDownloadSFVChecksum(s, bridge, filePath, transferChecksum)
 						}
 						fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
+						Tracef("[RACETRACE] retr-ok mode=passthrough user=%s path=%s size=%d xfer_ms=%d", s.User.Name, filePath, remainingSize, xferMs)
 						if remainingSize > 0 {
 							s.User.UpdateStatsWithCredits(remainingSize, false, !isSpeedtest)
 						}
@@ -2099,6 +2123,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					s.PretArg = ""
 					if err != nil {
 						log.Printf("[MASTER] Download failed: %v", err)
+						Tracef("[RACETRACE] retr-fail mode=master-bridge user=%s path=%s err=%v", s.User.Name, filePath, err)
 						maybeHandleSlowTransfer(s, "download", filePath, "", 0, err)
 						writeTransferFailure(s.Conn, "Download", err)
 					} else {
@@ -2106,6 +2131,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 							handleMasterDownloadSFVChecksum(s, bridge, filePath, transferChecksum)
 						}
 						fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
+						Tracef("[RACETRACE] retr-ok mode=master user=%s path=%s size=%d xfer_ms=%d", s.User.Name, filePath, remainingSize, xferMs)
 						if remainingSize > 0 {
 							s.User.UpdateStatsWithCredits(remainingSize, false, !isSpeedtest)
 						}
