@@ -64,6 +64,12 @@ func main() {
 	} else {
 		core.InstallConsoleLogger(cfg.Debug)
 	}
+	if cfg.TraceLogKeepDays <= 0 {
+		cfg.TraceLogKeepDays = 1
+	}
+	if err := core.InstallTraceLogger(cfg.TraceLogFile, cfg.TraceLogKeepDays); err != nil {
+		log.Printf("[TRACE] logger init failed: %v", err)
+	}
 	core.PrintStartupBanner(cfg.Version, "GoFTPd daemon")
 
 	// SLAVE MODE: No FTP server, just connect to master and serve files

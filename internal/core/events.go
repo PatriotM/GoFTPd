@@ -399,6 +399,7 @@ func emitRaceEnd(s *Session, dirPath string, users []VFSRaceUser, groups []VFSRa
 		if s.Config != nil && s.Config.Debug {
 			log.Printf("[RACE] duplicate complete suppressed for %s", dirPath)
 		}
+		Tracef("[RACETRACE] race-complete-suppressed dir=%s total_bytes=%d total_files=%d", dirPath, totalBytes, total)
 		return
 	}
 
@@ -444,6 +445,8 @@ func emitRaceEnd(s *Session, dirPath string, users []VFSRaceUser, groups []VFSRa
 		"u_count":    fmt.Sprintf("%d", len(users)),
 		"g_count":    fmt.Sprintf("%d", len(groups)),
 	}
+	Tracef("[RACETRACE] emit-race-complete dir=%s rel=%s racers=%d groups=%d total_bytes=%d total_files=%d duration_ms=%d avg_speed_mb=%.2f",
+		dirPath, rel, len(users), len(groups), totalBytes, total, raceDurationMs, avgMB)
 	if subdir := zipscript.ReleaseSubdirLabel(s.Config.Zipscript, dirPath); subdir != "" {
 		common["release_subdir"] = subdir
 		common["release_name"] = path.Base(path.Dir(dirPath))

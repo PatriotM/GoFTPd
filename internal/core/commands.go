@@ -190,6 +190,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				}
 				if err != nil {
 					log.Printf("[CPSV] Passthrough slave listen failed for user %s path %s: %v", s.User.Name, targetPath, err)
+					Tracef("[RACETRACE] cpsv-listen-failed user=%s pret=%s target=%s current_dir=%s err=%v", s.User.Name, s.PretCmd, targetPath, s.CurrentDir, err)
 					fmt.Fprintf(s.Conn, "450 No available slave for upcoming transfer.\r\n")
 					return false
 				}
@@ -897,6 +898,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					}
 					if err != nil {
 						log.Printf("[PASV] Passthrough slave listen failed: %v", err)
+						Tracef("[RACETRACE] pasv-listen-failed user=%s pret=%s target=%s current_dir=%s err=%v", s.User.Name, s.PretCmd, targetPath, s.CurrentDir, err)
 						fmt.Fprintf(s.Conn, "450 No available slave for upcoming transfer.\r\n")
 						return false
 					}
