@@ -493,7 +493,6 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			target = path.Join(s.CurrentDir, target)
 		}
 		targetPath := path.Clean(target)
-		Tracef("[RACETRACE] cwd-start user=%s from=%s target=%s", s.User.Name, s.CurrentDir, targetPath)
 		if s.Config.Mode == "master" && s.MasterManager != nil {
 			if bridge, ok := s.MasterManager.(MasterBridge); ok {
 				targetPath = path.Clean(bridge.ResolvePath(targetPath))
@@ -603,7 +602,6 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		}
 
 		s.showGlobalStats("250", false)
-		Tracef("[RACETRACE] cwd-ok user=%s dir=%s", s.User.Name, s.CurrentDir)
 		fmt.Fprintf(s.Conn, "250 Directory changed to %s\r\n", s.CurrentDir)
 
 	case "CDUP":
