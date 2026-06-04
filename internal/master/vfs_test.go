@@ -705,8 +705,8 @@ func TestVFSUpdateFileVerificationRefreshesRaceTruth(t *testing.T) {
 	}
 
 	usersBefore, _, totalBytesBefore, presentBefore, totalBefore := vfs.GetRaceStats("/X265/release")
-	if presentBefore != 1 || totalBefore != 1 || totalBytesBefore != 100 {
-		t.Fatalf("expected unknown-CRC file to count for visible completeness only, got present=%d total=%d bytes=%d", presentBefore, totalBefore, totalBytesBefore)
+	if presentBefore != 0 || totalBefore != 1 || totalBytesBefore != 0 {
+		t.Fatalf("expected unknown-CRC file to stay out of race completion, got present=%d total=%d bytes=%d", presentBefore, totalBefore, totalBytesBefore)
 	}
 	if len(usersBefore) != 0 {
 		t.Fatalf("expected unknown-CRC file to stay out of verified race stats, got %+v", usersBefore)
