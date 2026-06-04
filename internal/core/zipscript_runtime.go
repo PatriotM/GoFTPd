@@ -1017,6 +1017,7 @@ func buildReleaseUploadPipelineState(s *Session, bridge MasterBridge, in release
 		if sfvInfo, err := bridge.GetSFVInfo(in.FilePath); err == nil {
 			log.Printf("[MASTER-ZS] Parsed SFV %s: %d entries", in.FileName, len(sfvInfo.Entries))
 			bridge.CacheSFV(in.UploadDir, in.FileName, sfvInfo)
+			verifyExistingPayloadsAfterSFVUpload(s.Config, bridge, in.UploadDir)
 		}
 	}
 	state.SFVEntries = bridge.GetSFVData(in.UploadDir)
@@ -1055,6 +1056,43 @@ func buildReleaseUploadPipelineState(s *Session, bridge MasterBridge, in release
 	state.RaceUsers, state.RaceGroups, state.RaceTotalBytes, state.RaceTotalFiles, state.RaceDurationMs, state.RaceComplete = computeReleaseRaceSnapshot(s, bridge, in, state.EventData)
 	state.ShouldAnnounceNR = shouldAnnounceNoRace(s.Config, in.UploadDir, append([]string(nil), in.ExistingNames...), in.FileName)
 	return state
+}
+
+func verifyExistingPayloadsAfterSFVUpload(cfg *Config, bridge MasterBridge, dirPath string) {
+	if cfg == nil || bridge == nil || !zipscript.ShouldDeleteBadCRCForDir(cfg.Zipscript, dirPath) {
+		return
+	}
+	sfvEntries := bridge.GetSFVData(dirPath)
+	if sfvEntries == nil {
+		return
+	}
+	for _, entry := range bridge.ListDir(dirPath) {
+		if entry.IsDir || entry.IsSymlink || strings.HasSuffix(strings.ToLower(entry.Name), ".sfv") {
+			continue
+		}
+		expectedCRC, exists := zipscript.CachedExpectedCRC(sfvEntries, entry.Name)
+		if !exists {
+			continue
+		}
+		filePath := path.Join(dirPath, entry.Name)
+		checksum, ok := bridge.GetKnownChecksum(filePath)
+		if !ok || checksum == 0 {
+			continue
+		}
+		if checksum == expectedCRC {
+			clearMasterSFVMissingMarker(bridge, dirPath, entry.Name)
+			continue
+		}
+		if err := bridge.DeleteFile(filePath); err != nil && !zipscript.IsNotFoundDeleteError(err) {
+			log.Printf("[MASTER-ZS] CRC mismatch after SFV for %s: got %08X, expected %08X - delete failed: %v",
+				entry.Name, checksum, expectedCRC, err)
+			continue
+		}
+		_ = bridge.MarkFileMissing(filePath)
+		createMasterSFVMissingMarker(cfg, bridge, dirPath, entry.Name)
+		log.Printf("[MASTER-ZS] CRC mismatch after SFV for %s: got %08X, expected %08X - deleted",
+			entry.Name, checksum, expectedCRC)
+	}
 }
 
 func computeReleaseRaceSnapshot(s *Session, bridge MasterBridge, in releaseUploadPipelineInput, data map[string]string) ([]VFSRaceUser, []VFSRaceGroup, int64, int, int64, bool) {

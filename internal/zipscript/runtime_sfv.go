@@ -1,6 +1,9 @@
 package zipscript
 
-import "path"
+import (
+	"path"
+	"strings"
+)
 
 type SFVRuntimeBridge interface {
 	GetSFVData(dirPath string) map[string]uint32
@@ -32,7 +35,7 @@ func ShouldTreatDownloadAsMissing(cfg Config, bridge SFVRuntimeBridge, filePath 
 			}
 		}
 		if ShouldDeleteBadCRCForDir(cfg, dirPath) {
-			if err := bridge.DeleteFile(filePath); err != nil && debugLog != nil {
+			if err := bridge.DeleteFile(filePath); err != nil && debugLog != nil && !IsNotFoundDeleteError(err) {
 				debugLog("[MASTER-ZS] cached bad CRC delete failed for %s: %v", filePath, err)
 			}
 			_ = bridge.MarkFileMissing(filePath)
@@ -41,4 +44,12 @@ func ShouldTreatDownloadAsMissing(cfg Config, bridge SFVRuntimeBridge, filePath 
 	}
 
 	return false
+}
+
+func IsNotFoundDeleteError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "not found") || strings.Contains(msg, "no such file or directory")
 }
