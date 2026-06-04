@@ -15,7 +15,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -1678,9 +1677,13 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				if xferMs > 0 {
 					speedMB = (float64(transferredBytes) / 1024.0 / 1024.0) / (float64(xferMs) / 1000.0)
 				}
-				Tracef("[RACETRACE] stor-ok mode=port-passthrough user=%s path=%s size=%d checksum=%08X xfer_ms=%d speed_mb=%.2f", s.User.Name, filePath, fileSize, checksum, xferMs, speedMB)
+				postOK := runMasterUploadPostHooks(s, bridge, uploadDir, mediaInfoDir, filePath, fileName, checksum, transferredBytes, fileSize, speedMB, xferMs, existingNames)
+				Tracef("[RACETRACE] stor-ok mode=port-passthrough user=%s path=%s size=%d checksum=%08X xfer_ms=%d speed_mb=%.2f post_ok=%t", s.User.Name, filePath, fileSize, checksum, xferMs, speedMB, postOK)
+				if !postOK {
+					fmt.Fprintf(s.Conn, "226 Transfer complete; zipscript removed file.\r\n")
+					return false
+				}
 				fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
-				queueMasterUploadPostHooks(s, bridge, uploadDir, mediaInfoDir, filePath, fileName, checksum, transferredBytes, fileSize, speedMB, xferMs, existingNames)
 				return false
 			}
 		}
@@ -1777,9 +1780,13 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				if xferMs > 0 {
 					speedMB = (float64(transferredBytes) / 1024.0 / 1024.0) / (float64(xferMs) / 1000.0)
 				}
-				Tracef("[RACETRACE] stor-ok mode=master user=%s path=%s size=%d checksum=%08X xfer_ms=%d speed_mb=%.2f", s.User.Name, filePath, fileSize, checksum, xferMs, speedMB)
+				postOK := runMasterUploadPostHooks(s, bridge, uploadDir, mediaInfoDir, filePath, fileName, checksum, transferredBytes, fileSize, speedMB, xferMs, existingNames)
+				Tracef("[RACETRACE] stor-ok mode=master user=%s path=%s size=%d checksum=%08X xfer_ms=%d speed_mb=%.2f post_ok=%t", s.User.Name, filePath, fileSize, checksum, xferMs, speedMB, postOK)
+				if !postOK {
+					fmt.Fprintf(s.Conn, "226 Transfer complete; zipscript removed file.\r\n")
+					return false
+				}
 				fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
-				queueMasterUploadPostHooks(s, bridge, uploadDir, mediaInfoDir, filePath, fileName, checksum, transferredBytes, fileSize, speedMB, xferMs, existingNames)
 			} else {
 				fmt.Fprintf(s.Conn, "550 Master not initialized\r\n")
 				if raw != nil {
@@ -2529,66 +2536,6 @@ func emitRaceEndAfter(s *Session, dirPath string, users []VFSRaceUser, groups []
 		time.Sleep(delay)
 	}
 	emitRaceEnd(s, dirPath, users, groups, totalBytes, total, raceDurationMs, xferMs)
-}
-
-type releasePostHookQueue struct {
-	tasks chan func()
-}
-
-var (
-	releasePostHookQueuesMu sync.Mutex
-	releasePostHookQueues   = map[string]*releasePostHookQueue{}
-)
-
-func enqueueReleasePostHook(dirPath string, task func()) {
-	if task == nil {
-		return
-	}
-	key := path.Clean("/" + dirPath)
-	if key == "." || key == "" {
-		key = "/"
-	}
-
-	releasePostHookQueuesMu.Lock()
-	q := releasePostHookQueues[key]
-	if q == nil {
-		q = &releasePostHookQueue{tasks: make(chan func(), 128)}
-		releasePostHookQueues[key] = q
-		go runReleasePostHookQueue(key, q)
-	}
-	releasePostHookQueuesMu.Unlock()
-
-	q.tasks <- task
-}
-
-func runReleasePostHookQueue(key string, q *releasePostHookQueue) {
-	idle := time.NewTimer(30 * time.Second)
-	defer idle.Stop()
-
-	for {
-		select {
-		case task := <-q.tasks:
-			if !idle.Stop() {
-				select {
-				case <-idle.C:
-				default:
-				}
-			}
-			if task != nil {
-				task()
-			}
-			idle.Reset(30 * time.Second)
-		case <-idle.C:
-			releasePostHookQueuesMu.Lock()
-			if releasePostHookQueues[key] == q && len(q.tasks) == 0 {
-				delete(releasePostHookQueues, key)
-				releasePostHookQueuesMu.Unlock()
-				return
-			}
-			releasePostHookQueuesMu.Unlock()
-			idle.Reset(30 * time.Second)
-		}
-	}
 }
 
 func existingFileNamesForXDupe(entries []MasterFileEntry) []string {
