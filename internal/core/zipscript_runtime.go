@@ -957,18 +957,17 @@ func ensureDirPath(bridge MasterBridge, dirPath string) error {
 	return ensureDirPathOwned(bridge, dirPath, "GoFTPd", "GoFTPd")
 }
 
-func runReleaseUploadPipeline(s *Session, bridge MasterBridge, in releaseUploadPipelineInput) bool {
+func runReleaseUploadPipeline(s *Session, bridge MasterBridge, in releaseUploadPipelineInput) {
 	if s == nil || s.Config == nil || bridge == nil {
-		return false
+		return
 	}
 	if !finalizeReleaseUpload(s, bridge, in) {
-		return false
+		return
 	}
 
 	state := buildReleaseUploadPipelineState(s, bridge, in)
 	emitReleaseUploadMetadata(s, bridge, in, state)
 	emitReleaseUploadEventAndRace(s, bridge, in, state)
-	return true
 }
 
 func finalizeReleaseUpload(s *Session, bridge MasterBridge, in releaseUploadPipelineInput) bool {
@@ -1175,9 +1174,9 @@ func emitReleaseUploadEventAndRace(s *Session, bridge MasterBridge, in releaseUp
 	}
 }
 
-func runMasterUploadPostHooks(s *Session, bridge MasterBridge, uploadDir, mediaInfoDir, filePath, fileName string, checksum uint32, transferredBytes, fileSize int64, speedMB float64, xferMs int64, existingNames []string) bool {
+func queueMasterUploadPostHooks(s *Session, bridge MasterBridge, uploadDir, mediaInfoDir, filePath, fileName string, checksum uint32, transferredBytes, fileSize int64, speedMB float64, xferMs int64, existingNames []string) {
 	if s == nil || s.Config == nil || bridge == nil {
-		return false
+		return
 	}
 	input := releaseUploadPipelineInput{
 		UploadDir:        uploadDir,
@@ -1192,7 +1191,9 @@ func runMasterUploadPostHooks(s *Session, bridge MasterBridge, uploadDir, mediaI
 		CompletedAtMs:    time.Now().UnixMilli(),
 		ExistingNames:    append([]string(nil), existingNames...),
 	}
-	return runReleaseUploadPipeline(s, bridge, input)
+	enqueueReleasePostHook(uploadDir, func() {
+		runReleaseUploadPipeline(s, bridge, input)
+	})
 }
 
 func zipscriptExistingNames(bridge MasterBridge, dirPath string) []string {
