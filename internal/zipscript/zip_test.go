@@ -33,9 +33,9 @@ func TestZipDirCompleteFollowsDIZCountStyle(t *testing.T) {
 		{
 			name: "exact expected count",
 			entries: []ZipEntryInfo{
-				{Name: "a.zip", Size: 5000},
-				{Name: "b.zip", Size: 3200},
-				{Name: "c.zip", Size: 2800},
+				{Name: "a.zip", Size: 5000, XferTime: 1000},
+				{Name: "b.zip", Size: 3200, XferTime: 1000},
+				{Name: "c.zip", Size: 2800, XferTime: 1000},
 			},
 			expected: 3,
 			want:     true,
@@ -43,10 +43,10 @@ func TestZipDirCompleteFollowsDIZCountStyle(t *testing.T) {
 		{
 			name: "more zip files than expected still complete",
 			entries: []ZipEntryInfo{
-				{Name: "a.zip", Size: 5000},
-				{Name: "b.zip", Size: 3200},
-				{Name: "c.zip", Size: 2800},
-				{Name: "d.zip", Size: 1200},
+				{Name: "a.zip", Size: 5000, XferTime: 1000},
+				{Name: "b.zip", Size: 3200, XferTime: 1000},
+				{Name: "c.zip", Size: 2800, XferTime: 1000},
+				{Name: "d.zip", Size: 1200, XferTime: 1000},
 			},
 			expected: 3,
 			want:     true,
@@ -54,8 +54,18 @@ func TestZipDirCompleteFollowsDIZCountStyle(t *testing.T) {
 		{
 			name: "missing a zip file",
 			entries: []ZipEntryInfo{
-				{Name: "a.zip", Size: 5000},
+				{Name: "a.zip", Size: 5000, XferTime: 1000},
+				{Name: "b.zip", Size: 5000, XferTime: 1000},
+			},
+			expected: 3,
+			want:     false,
+		},
+		{
+			name: "uploading placeholders do not count",
+			entries: []ZipEntryInfo{
+				{Name: "a.zip", Size: 5000, XferTime: 1000},
 				{Name: "b.zip", Size: 5000},
+				{Name: "c.zip", Size: 5000, XferTime: 1000},
 			},
 			expected: 3,
 			want:     false,

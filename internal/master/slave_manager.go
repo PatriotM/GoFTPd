@@ -219,6 +219,22 @@ func (sm *SlaveManager) SetDiskStatusHook(fn func(name string, status protocol.D
 	sm.diskStatusHook = fn
 }
 
+func (sm *SlaveManager) updateUploadProgress(path string, status protocol.TransferStatus) {
+	if sm == nil || sm.vfs == nil || strings.TrimSpace(path) == "" || status.Transferred < 0 {
+		return
+	}
+	size := status.Transferred
+	if status.Finished && status.FileSize > 0 {
+		size = status.FileSize
+	}
+	if size <= 0 {
+		return
+	}
+	if sm.vfs.UpdateUploadProgress(path, size, time.Now().Unix()) {
+		core.Tracef("[RACETRACE] upload-progress path=%s size=%d finished=%t", path, size, status.Finished)
+	}
+}
+
 func (sm *SlaveManager) SetRemergeStatusHook(fn func(RemergeStatus)) {
 	sm.remergeHook = fn
 }

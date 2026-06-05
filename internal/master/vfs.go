@@ -211,6 +211,42 @@ func (vfs *VirtualFileSystem) UpdateFileVerification(path string, checksum uint3
 	return true
 }
 
+// UpdateUploadProgress refreshes the visible size for an in-flight upload
+// without marking it as race-complete. DrFTPD updates the VFS file size while a
+// STOR is running, then writes checksum/xfertime only after the transfer ends.
+func (vfs *VirtualFileSystem) UpdateUploadProgress(path string, size int64, modTime int64) bool {
+	if size < 0 {
+		return false
+	}
+	vfs.mu.Lock()
+	defer vfs.mu.Unlock()
+
+	path = cleanVFSPath(path)
+	file := vfs.files[path]
+	if file == nil || file.IsDir {
+		return false
+	}
+	if file.XferTime > 0 || file.Checksum != 0 {
+		return false
+	}
+	if size < file.Size {
+		return false
+	}
+	changed := false
+	if file.Size != size {
+		file.Size = size
+		changed = true
+	}
+	if modTime > 0 && file.LastModified != modTime {
+		file.LastModified = modTime
+		changed = true
+	}
+	if changed {
+		vfs.markPersistDirtyLocked()
+	}
+	return changed
+}
+
 // ScrubReleaseRaceMetadata neutralizes a release tree after it moves out of a
 // private race area. Ownership is rewritten for listings, while transfer times
 // are cleared so CWD/STOR race stats no longer expose the original racers.
@@ -712,6 +748,9 @@ func (vfs *VirtualFileSystem) GetReleaseStatus(dirPath string) (core.ReleaseStat
 			}
 			name := strings.TrimSpace(filepath.Base(child.Path))
 			if strings.HasPrefix(name, ".") || !zipscript.IsZipPayloadName(name) {
+				continue
+			}
+			if child.Size <= 0 || child.XferTime <= 0 {
 				continue
 			}
 			status.Present++
@@ -1815,12 +1854,11 @@ func (vfs *VirtualFileSystem) computeZipRaceStateFilteredLocked(dirPath string, 
 		if excludeKeys[raceFileKey(name)] {
 			continue
 		}
-		cache.Present++
-		cache.TotalBytes += f.Size
-
-		if f.XferTime <= 0 {
+		if f.Size <= 0 || f.XferTime <= 0 {
 			continue
 		}
+		cache.Present++
+		cache.TotalBytes += f.Size
 		owner := f.Owner
 		if owner == "" {
 			owner = "unknown"
@@ -1951,6 +1989,9 @@ func (vfs *VirtualFileSystem) zipPayloadCountLocked(dirPath string) int {
 		}
 		name := strings.TrimSpace(filepath.Base(childPath))
 		if strings.HasPrefix(name, ".") || !zipscript.IsZipPayloadName(name) {
+			continue
+		}
+		if f.Size <= 0 || f.XferTime <= 0 {
 			continue
 		}
 		total++

@@ -37,6 +37,9 @@ func ZipDirPayloadCount(entries []ZipEntryInfo) int {
 		if e.IsDir || e.IsSymlink || strings.HasPrefix(strings.TrimSpace(e.Name), ".") || !IsZipPayloadName(e.Name) {
 			continue
 		}
+		if e.Size <= 0 || e.XferTime <= 0 {
+			continue
+		}
 		total++
 	}
 	return total
