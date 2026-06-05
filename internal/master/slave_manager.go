@@ -2475,22 +2475,7 @@ func (sm *SlaveManager) SelectSlaveForDownload(path string) *RemoteSlave {
 		core.Tracef("[RACETRACE] select-download path=%s result=ok slave=%s size=%d is_dir=%t", path, file.SlaveName, file.Size, file.IsDir)
 		return rs
 	}
-	if rs == nil {
-		core.Tracef("[RACETRACE] select-download path=%s result=slave_missing slave=%s size=%d is_dir=%t", path, file.SlaveName, file.Size, file.IsDir)
-		return nil
-	}
-	core.Tracef("[RACETRACE] select-download path=%s result=slave_unavailable slave=%s size=%d is_dir=%t online=%t available=%t remerging=%t remerge_paused=%t remerge_queue=%d active=%d",
-		path,
-		file.SlaveName,
-		file.Size,
-		file.IsDir,
-		rs.IsOnline(),
-		rs.IsAvailable(),
-		rs.IsRemerging(),
-		rs.remergePaused.Load(),
-		rs.remergeQueueDepth.Load(),
-		rs.ActiveTransfers(),
-	)
+	core.Tracef("[RACETRACE] select-download path=%s result=slave_unavailable slave=%s size=%d is_dir=%t", path, file.SlaveName, file.Size, file.IsDir)
 
 	return nil
 }

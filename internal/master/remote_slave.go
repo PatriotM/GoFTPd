@@ -8,7 +8,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"goftpd/internal/core"
 	"goftpd/internal/protocol"
 )
 
@@ -91,32 +90,6 @@ func (rs *RemoteSlave) Name() string      { return rs.name }
 func (rs *RemoteSlave) IsOnline() bool    { return rs.online.Load() }
 func (rs *RemoteSlave) IsAvailable() bool { return rs.available.Load() }
 func (rs *RemoteSlave) IsRemerging() bool { return rs.remerging.Load() }
-
-func (rs *RemoteSlave) availabilityState() string {
-	nowMs := time.Now().UnixMilli()
-	lastRespMs := rs.lastResponseReceived.Load()
-	lastCmdMs := rs.lastCommandSent.Load()
-	lastRespAgeMs := int64(0)
-	lastCmdAgeMs := int64(0)
-	if lastRespMs > 0 {
-		lastRespAgeMs = nowMs - lastRespMs
-	}
-	if lastCmdMs > 0 {
-		lastCmdAgeMs = nowMs - lastCmdMs
-	}
-	return fmt.Sprintf(
-		"online=%t available=%t remerging=%t remerge_paused=%t remerge_queue=%d active=%d last_resp_ms=%d last_cmd_ms=%d heartbeat_timeout_ms=%d",
-		rs.IsOnline(),
-		rs.IsAvailable(),
-		rs.IsRemerging(),
-		rs.remergePaused.Load(),
-		rs.remergeQueueDepth.Load(),
-		rs.ActiveTransfers(),
-		lastRespAgeMs,
-		lastCmdAgeMs,
-		rs.heartbeatTimeout.Milliseconds(),
-	)
-}
 
 func (rs *RemoteSlave) setActiveRemerge(index string) {
 	rs.remergeStateMu.Lock()
@@ -519,7 +492,6 @@ func (rs *RemoteSlave) SetOffline(reason string) {
 
 	log.Printf("[Master] Slave %s going offline: %s", rs.name, reason)
 	rs.available.Store(false)
-	core.Tracef("[RACETRACE] slave-state slave=%s transition=offline reason=%s %s", rs.name, reason, rs.availabilityState())
 	rs.clearActiveRemerge("")
 	rs.remergeQueueDepth.Store(0)
 	if rs.conn != nil {
@@ -543,14 +515,7 @@ func (rs *RemoteSlave) SetOffline(reason string) {
 }
 
 func (rs *RemoteSlave) SetAvailable(avail bool) {
-	prev := rs.available.Swap(avail)
-	if prev != avail {
-		state := "unavailable"
-		if avail {
-			state = "available"
-		}
-		core.Tracef("[RACETRACE] slave-state slave=%s transition=%s %s", rs.name, state, rs.availabilityState())
-	}
+	rs.available.Store(avail)
 }
 
 // AddTransfer stores a RemoteTransfer on this slave
