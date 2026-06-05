@@ -1083,31 +1083,15 @@ func verifyExistingPayloadsAfterSFVUpload(cfg *Config, bridge MasterBridge, dirP
 			clearMasterSFVMissingMarker(bridge, dirPath, entry.Name)
 			continue
 		}
-		actualChecksum, err := bridge.ChecksumFile(filePath)
-		if err != nil {
-			if zipscript.IsNotFoundDeleteError(err) {
-				_ = bridge.MarkFileMissing(filePath)
-				createMasterSFVMissingMarker(cfg, bridge, dirPath, entry.Name)
-			} else {
-				log.Printf("[MASTER-ZS] CRC mismatch after SFV for %s: cached %08X expected %08X - live checksum failed: %v",
-					entry.Name, checksum, expectedCRC, err)
-			}
-			continue
-		}
-		if actualChecksum == expectedCRC {
-			_ = bridge.SyncPresentFile(filePath, actualChecksum)
-			clearMasterSFVMissingMarker(bridge, dirPath, entry.Name)
-			continue
-		}
 		if err := bridge.DeleteFile(filePath); err != nil && !zipscript.IsNotFoundDeleteError(err) {
 			log.Printf("[MASTER-ZS] CRC mismatch after SFV for %s: got %08X, expected %08X - delete failed: %v",
-				entry.Name, actualChecksum, expectedCRC, err)
+				entry.Name, checksum, expectedCRC, err)
 			continue
 		}
 		_ = bridge.MarkFileMissing(filePath)
 		createMasterSFVMissingMarker(cfg, bridge, dirPath, entry.Name)
 		log.Printf("[MASTER-ZS] CRC mismatch after SFV for %s: got %08X, expected %08X - deleted",
-			entry.Name, actualChecksum, expectedCRC)
+			entry.Name, checksum, expectedCRC)
 	}
 }
 
