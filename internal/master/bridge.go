@@ -504,10 +504,8 @@ func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group s
 		slave = b.sm.SelectSlaveForUpload(filePath)
 	}
 	if slave == nil {
-		core.Tracef("[RACETRACE] bridge-upload-select path=%s owner=%s group=%s position=%d result=no-slave", filePath, owner, group, position)
 		return 0, 0, fmt.Errorf("no available slave")
 	}
-	core.Tracef("[RACETRACE] bridge-upload-select path=%s owner=%s group=%s position=%d slave=%s", filePath, owner, group, position, slave.Name())
 
 	slave.IncActiveTransfers()
 	defer slave.DecActiveTransfers()
@@ -515,13 +513,11 @@ func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group s
 	// Tell slave to listen
 	listenIdx, err := IssueListen(slave, false, false)
 	if err != nil {
-		core.Tracef("[RACETRACE] bridge-upload-fail path=%s stage=listen-issue slave=%s err=%v", filePath, slave.Name(), err)
 		return 0, 0, fmt.Errorf("issue listen to %s: %w", slave.Name(), err)
 	}
 
 	resp, err := slave.FetchResponse(listenIdx, 60*time.Second)
 	if err != nil {
-		core.Tracef("[RACETRACE] bridge-upload-fail path=%s stage=listen-wait slave=%s err=%v", filePath, slave.Name(), err)
 		return 0, 0, fmt.Errorf("slave %s listen failed: %w", slave.Name(), err)
 	}
 
@@ -536,7 +532,6 @@ func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group s
 	// Connect to slave's data port
 	slaveConn, err := net.DialTimeout("tcp", slaveAddr, 10*time.Second)
 	if err != nil {
-		core.Tracef("[RACETRACE] bridge-upload-fail path=%s stage=dial-data slave=%s addr=%s err=%v", filePath, slave.Name(), slaveAddr, err)
 		return 0, 0, fmt.Errorf("connect to slave data port: %w", err)
 	}
 	configureBridgeDataSocket(slaveConn)
@@ -547,7 +542,6 @@ func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group s
 		transferResp.Info.TransferIndex, minSpeed, maxSpeed, graceSeconds)
 	if err != nil {
 		slaveConn.Close()
-		core.Tracef("[RACETRACE] bridge-upload-fail path=%s stage=issue-receive slave=%s err=%v", filePath, slave.Name(), err)
 		return 0, 0, fmt.Errorf("issue receive: %w", err)
 	}
 
@@ -555,7 +549,6 @@ func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group s
 	_, err = slave.FetchResponse(recvIdx, 60*time.Second)
 	if err != nil {
 		slaveConn.Close()
-		core.Tracef("[RACETRACE] bridge-upload-fail path=%s stage=receive-ack slave=%s err=%v", filePath, slave.Name(), err)
 		return 0, 0, fmt.Errorf("receive ack: %w", err)
 	}
 
@@ -599,7 +592,6 @@ func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group s
 	}
 
 	log.Printf("[Bridge] Uploaded %s to slave %s (%d bytes, %dms, CRC=%08X, offset=%d)", filePath, slave.Name(), finalSize, xferTime, checksum, position)
-	core.Tracef("[RACETRACE] bridge-upload-ok path=%s slave=%s size=%d elapsed_ms=%d checksum=%08X offset=%d", filePath, slave.Name(), finalSize, xferTime, checksum, position)
 
 	// Add file to VFS with transfer timing and checksum
 	b.sm.GetVFS().AddFile(filePath, VFSFile{
@@ -649,10 +641,8 @@ func (b *Bridge) recordUploadMetadata(filePath, owner, group string, size int64,
 func (b *Bridge) DownloadFile(filePath string, clientData net.Conn, username, primaryGroup string, position int64, transferType byte) (uint32, error) {
 	slave := b.sm.SelectSlaveForDownload(filePath)
 	if slave == nil {
-		core.Tracef("[RACETRACE] bridge-download-select path=%s user=%s group=%s position=%d result=no-slave", filePath, username, primaryGroup, position)
 		return 0, fmt.Errorf("file not found on any available slave: %s", filePath)
 	}
-	core.Tracef("[RACETRACE] bridge-download-select path=%s user=%s group=%s position=%d slave=%s", filePath, username, primaryGroup, position, slave.Name())
 
 	slave.IncActiveTransfers()
 	defer slave.DecActiveTransfers()
@@ -660,13 +650,11 @@ func (b *Bridge) DownloadFile(filePath string, clientData net.Conn, username, pr
 	// Tell slave to listen
 	listenIdx, err := IssueListen(slave, false, false)
 	if err != nil {
-		core.Tracef("[RACETRACE] bridge-download-fail path=%s stage=listen-issue slave=%s err=%v", filePath, slave.Name(), err)
 		return 0, fmt.Errorf("issue listen to %s: %w", slave.Name(), err)
 	}
 
 	resp, err := slave.FetchResponse(listenIdx, 60*time.Second)
 	if err != nil {
-		core.Tracef("[RACETRACE] bridge-download-fail path=%s stage=listen-wait slave=%s err=%v", filePath, slave.Name(), err)
 		return 0, fmt.Errorf("slave %s listen failed: %w", slave.Name(), err)
 	}
 
@@ -680,7 +668,6 @@ func (b *Bridge) DownloadFile(filePath string, clientData net.Conn, username, pr
 
 	slaveConn, err := net.DialTimeout("tcp", slaveAddr, 10*time.Second)
 	if err != nil {
-		core.Tracef("[RACETRACE] bridge-download-fail path=%s stage=dial-data slave=%s addr=%s err=%v", filePath, slave.Name(), slaveAddr, err)
 		return 0, fmt.Errorf("connect to slave data port: %w", err)
 	}
 	configureBridgeDataSocket(slaveConn)
@@ -691,7 +678,6 @@ func (b *Bridge) DownloadFile(filePath string, clientData net.Conn, username, pr
 		transferResp.Info.TransferIndex, minSpeed, maxSpeed, graceSeconds)
 	if err != nil {
 		slaveConn.Close()
-		core.Tracef("[RACETRACE] bridge-download-fail path=%s stage=issue-send slave=%s err=%v", filePath, slave.Name(), err)
 		return 0, fmt.Errorf("issue send: %w", err)
 	}
 
@@ -699,7 +685,6 @@ func (b *Bridge) DownloadFile(filePath string, clientData net.Conn, username, pr
 	if err != nil {
 		slaveConn.Close()
 		b.reconcileUnavailableDownloadState(filePath, slave)
-		core.Tracef("[RACETRACE] bridge-download-fail path=%s stage=send-ack slave=%s err=%v", filePath, slave.Name(), err)
 		return 0, fmt.Errorf("send ack: %w", err)
 	}
 
@@ -722,7 +707,6 @@ func (b *Bridge) DownloadFile(filePath string, clientData net.Conn, username, pr
 	}
 
 	log.Printf("[Bridge] Downloaded %s from slave %s (%d bytes, offset=%d)", filePath, slave.Name(), written, position)
-	core.Tracef("[RACETRACE] bridge-download-ok path=%s slave=%s bytes=%d offset=%d", filePath, slave.Name(), written, position)
 	if position > 0 {
 		return 0, nil
 	}
