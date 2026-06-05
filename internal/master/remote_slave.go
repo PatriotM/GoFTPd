@@ -342,9 +342,6 @@ func (rs *RemoteSlave) Run(masterSlaveManager *SlaveManager) {
 			if val, ok := rs.transfers.Load(resp.Status.TransferIndex); ok {
 				rt := val.(*RemoteTransfer)
 				rt.UpdateStatus(resp.Status)
-				if rt.GetDirection() == 'R' {
-					masterSlaveManager.updateUploadProgress(rt.GetPath(), resp.Status)
-				}
 				if resp.Status.Finished {
 					rs.completedTransfers.Store(resp.Status.TransferIndex, resp.Status)
 					rs.transfers.Delete(resp.Status.TransferIndex)
@@ -568,13 +565,6 @@ func (rs *RemoteSlave) GetTransfer(idx int32) (*RemoteTransfer, bool) {
 		return nil, false
 	}
 	return val.(*RemoteTransfer), true
-}
-
-func (rs *RemoteSlave) AttachTransferPath(idx int32, path string, direction byte) {
-	if rt, ok := rs.GetTransfer(idx); ok && rt != nil {
-		rt.SetPath(path)
-		rt.SetDirection(direction)
-	}
 }
 
 func (rs *RemoteSlave) WaitTransferStatus(idx int32, timeout time.Duration) (protocol.TransferStatus, error) {

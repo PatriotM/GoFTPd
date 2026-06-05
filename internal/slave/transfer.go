@@ -103,19 +103,6 @@ func (t *Transfer) Path() string {
 	return t.path
 }
 
-func (t *Transfer) isPreparedPassiveListener() bool {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.listener != nil &&
-		t.conn == nil &&
-		t.activeAddress == "" &&
-		t.path == "" &&
-		t.direction == TransferUnknown &&
-		t.started.IsZero() &&
-		t.finished.IsZero() &&
-		t.abortReason == ""
-}
-
 func (t *Transfer) SnapshotLiveStat() protocol.TransferLiveStat {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -503,14 +490,12 @@ func (t *Transfer) connectActive() error {
 func (t *Transfer) Abort(reason string) {
 	t.mu.Lock()
 	t.abortReason = reason
-	conn := t.conn
-	listener := t.listener
 	t.mu.Unlock()
-	if conn != nil {
-		conn.Close()
+	if t.conn != nil {
+		t.conn.Close()
 	}
-	if listener != nil {
-		listener.Close()
+	if t.listener != nil {
+		t.listener.Close()
 	}
 }
 

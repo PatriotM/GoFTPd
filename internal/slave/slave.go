@@ -1048,11 +1048,7 @@ func (s *Slave) handleAbort(ac *protocol.AsyncCommand) interface{} {
 
 	if val, ok := s.transfers.Load(transferIdx); ok {
 		t := val.(*Transfer)
-		removeAfterAbort := t.isPreparedPassiveListener()
 		t.Abort(reason)
-		if removeAfterAbort {
-			s.removeTransfer(transferIdx)
-		}
 	}
 
 	return &protocol.AsyncResponse{Index: ac.Index}

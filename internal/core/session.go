@@ -77,16 +77,16 @@ type Session struct {
 	RestOffset      int64       // REST offset applied to the next STOR/RETR
 	XDupeMode       int         // SITE XDUPE mode for duplicate listings on STOR
 
-	stateMu               sync.RWMutex
-	lastDataConnActive    bool
+	stateMu           sync.RWMutex
+	lastDataConnActive bool
 	nextDataTLSClientMode bool
-	LastCommandAt         time.Time
-	TransferDirection     string
-	TransferPath          string
-	TransferBytes         int64
-	TransferStartedAt     time.Time
-	TransferSlaveName     string
-	TransferSlaveIdx      int32
+	LastCommandAt     time.Time
+	TransferDirection string
+	TransferPath      string
+	TransferBytes     int64
+	TransferStartedAt time.Time
+	TransferSlaveName string
+	TransferSlaveIdx  int32
 }
 
 func (s *Session) currentTransferTypeByte() byte {
@@ -137,7 +137,6 @@ func HandleSession(conn net.Conn, tlsConfig *tls.Config, cfg *Config, aclEngine 
 	session.ID = registerSession(session)
 	defer unregisterSession(session.ID)
 	defer session.Conn.Close()
-	defer session.abortCurrentTransfer("session closed")
 
 	// Initial Banner
 	fmt.Fprintf(session.Conn, "220-%s GoFTPd v%s\r\n220 Ready.\r\n",

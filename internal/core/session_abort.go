@@ -19,25 +19,11 @@ func (s *Session) abortCurrentTransfer(reason string) bool {
 	slaveName := s.TransferSlaveName
 	slaveIdx := s.TransferSlaveIdx
 	hasTransfer := strings.TrimSpace(s.TransferDirection) != "" && strings.TrimSpace(s.TransferPath) != ""
-	preparedSlaveName := ""
-	preparedSlaveIdx := s.PassthruXferIdx
-	if preparedSlaveIdx != 0 {
-		if name, ok := s.PassthruSlave.(string); ok {
-			preparedSlaveName = strings.TrimSpace(name)
-		}
-	}
 	s.stateMu.RUnlock()
 
-	if aborter, ok := s.MasterManager.(transferAborter); ok {
-		if preparedSlaveName != "" && preparedSlaveIdx != 0 {
-			if aborter.AbortTransfer(preparedSlaveName, preparedSlaveIdx, reason) {
-				aborted = true
-			}
-		}
-		if hasTransfer && strings.TrimSpace(slaveName) != "" && slaveIdx != 0 && (slaveName != preparedSlaveName || slaveIdx != preparedSlaveIdx) {
-			if aborter.AbortTransfer(slaveName, slaveIdx, reason) {
-				aborted = true
-			}
+	if hasTransfer {
+		if aborter, ok := s.MasterManager.(transferAborter); ok && strings.TrimSpace(slaveName) != "" && slaveIdx != 0 {
+			aborted = aborter.AbortTransfer(slaveName, slaveIdx, reason)
 		}
 	}
 

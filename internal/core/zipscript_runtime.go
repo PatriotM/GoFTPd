@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"goftpd/internal/zipscript"
@@ -111,41 +110,6 @@ type releaseUploadPipelineInput struct {
 	ExistingNames    []string
 }
 
-type uploadPostHookResult struct {
-	OK       bool
-	Message  string
-	Comments []string
-}
-
-func uploadPostHookOK() uploadPostHookResult {
-	return uploadPostHookResult{
-		OK:      true,
-		Message: "Transfer complete.",
-	}
-}
-
-func uploadPostHookDeleted(message string, comments ...string) uploadPostHookResult {
-	if strings.TrimSpace(message) == "" {
-		message = "Transfer complete."
-	}
-	return uploadPostHookResult{
-		OK:       false,
-		Message:  message,
-		Comments: comments,
-	}
-}
-
-func writeUploadPostHookResponse(w io.Writer, result uploadPostHookResult) {
-	message := result.Message
-	if strings.TrimSpace(message) == "" {
-		message = "Transfer complete."
-	}
-	for _, comment := range result.Comments {
-		fmt.Fprintf(w, "226- %s\r\n", comment)
-	}
-	fmt.Fprintf(w, "226 %s\r\n", message)
-}
-
 type releaseUploadPipelineState struct {
 	SFVUpload        bool
 	SFVEntries       map[string]uint32
@@ -194,11 +158,11 @@ func zipDirRaceStats(bridge MasterBridge, dirPath string, entries []MasterFileEn
 		if e.IsDir || e.IsSymlink || strings.HasPrefix(strings.TrimSpace(e.Name), ".") || !zipscript.IsZipPayloadName(e.Name) {
 			continue
 		}
-		if e.Size <= 0 || e.XferTime <= 0 {
-			continue
-		}
 		total++
 		totalBytes += e.Size
+		if e.XferTime <= 0 {
+			continue
+		}
 		owner := e.Owner
 		if owner == "" {
 			owner = "unknown"
@@ -423,7 +387,6 @@ func handleMasterDownloadSFVChecksum(s *Session, bridge MasterBridge, filePath s
 	if s == nil || s.Config == nil || bridge == nil || transferChecksum == 0 {
 		return
 	}
-	fmt.Fprintf(s.Conn, "226- Checksum from transfer: %08X\r\n", transferChecksum)
 	dirPath := path.Dir(filePath)
 	fileName := path.Base(filePath)
 	expectedCRC, ok := zipscript.CachedExpectedCRC(bridge.GetSFVData(dirPath), fileName)
@@ -432,7 +395,6 @@ func handleMasterDownloadSFVChecksum(s *Session, bridge MasterBridge, filePath s
 	}
 	_ = bridge.SyncPresentFile(filePath, transferChecksum)
 	if transferChecksum == expectedCRC {
-		fmt.Fprintf(s.Conn, "226- checksum from transfer matched checksum in .sfv\r\n")
 		clearMasterSFVMissingMarker(bridge, dirPath, fileName)
 		bridge.SyncStatusMarkersForPath(filePath, false)
 		return
@@ -1016,117 +978,46 @@ func ensureDirPath(bridge MasterBridge, dirPath string) error {
 	return ensureDirPathOwned(bridge, dirPath, "GoFTPd", "GoFTPd")
 }
 
-type releasePostHookQueue struct {
-	tasks chan func()
-}
-
-var (
-	releasePostHookQueuesMu sync.Mutex
-	releasePostHookQueues   = map[string]*releasePostHookQueue{}
-)
-
-func enqueueReleasePostHook(dirPath string, task func()) {
-	if task == nil {
-		return
-	}
-	key := path.Clean("/" + dirPath)
-	if key == "." || key == "" {
-		key = "/"
-	}
-
-	releasePostHookQueuesMu.Lock()
-	q := releasePostHookQueues[key]
-	if q == nil {
-		q = &releasePostHookQueue{tasks: make(chan func(), 128)}
-		releasePostHookQueues[key] = q
-		go runReleasePostHookQueue(key, q)
-	}
-	releasePostHookQueuesMu.Unlock()
-
-	q.tasks <- task
-}
-
-func runReleasePostHookQueue(key string, q *releasePostHookQueue) {
-	idle := time.NewTimer(30 * time.Second)
-	defer idle.Stop()
-
-	for {
-		select {
-		case task := <-q.tasks:
-			if !idle.Stop() {
-				select {
-				case <-idle.C:
-				default:
-				}
-			}
-			if task != nil {
-				task()
-			}
-			idle.Reset(30 * time.Second)
-		case <-idle.C:
-			releasePostHookQueuesMu.Lock()
-			if releasePostHookQueues[key] == q && len(q.tasks) == 0 {
-				delete(releasePostHookQueues, key)
-				releasePostHookQueuesMu.Unlock()
-				return
-			}
-			releasePostHookQueuesMu.Unlock()
-			idle.Reset(30 * time.Second)
-		}
-	}
-}
-
-func runReleaseUploadPipeline(s *Session, bridge MasterBridge, in releaseUploadPipelineInput) {
+func runReleaseUploadPipeline(s *Session, bridge MasterBridge, in releaseUploadPipelineInput) bool {
 	if s == nil || s.Config == nil || bridge == nil {
-		return
+		return false
+	}
+	if !finalizeReleaseUpload(s, bridge, in) {
+		return false
 	}
 
 	state := buildReleaseUploadPipelineState(s, bridge, in)
 	emitReleaseUploadMetadata(s, bridge, in, state)
 	emitReleaseUploadEventAndRace(s, bridge, in, state)
+	return true
 }
 
-func finalizeReleaseUpload(s *Session, bridge MasterBridge, in releaseUploadPipelineInput) uploadPostHookResult {
+func finalizeReleaseUpload(s *Session, bridge MasterBridge, in releaseUploadPipelineInput) bool {
 	if s == nil || s.Config == nil || bridge == nil {
-		return uploadPostHookDeleted("Transfer complete.")
-	}
-
-	if in.FileSize == 0 {
-		if err := bridge.DeleteFile(in.FilePath); err != nil && s.Config.Debug && !zipscript.IsNotFoundDeleteError(err) {
-			log.Printf("[MASTER-ZS] 0-byte delete failed for %s: %v", in.FilePath, err)
-		}
-		_ = bridge.MarkFileMissing(in.FilePath)
-		if _, expected := zipscript.CachedExpectedCRC(bridge.GetSFVData(in.UploadDir), in.FileName); expected {
-			createMasterSFVMissingMarker(s.Config, bridge, in.UploadDir, in.FileName)
-		}
-		log.Printf("[MASTER-ZS] 0-byte file %s - deleted", in.FilePath)
-		return uploadPostHookDeleted("Transfer complete.")
-	}
-
-	if !strings.HasSuffix(strings.ToLower(in.FileName), ".sfv") {
-		sfvEntries := bridge.GetSFVData(in.UploadDir)
-		if sfvEntries != nil {
-			if expectedCRC, exists := zipscript.CachedExpectedCRC(sfvEntries, in.FileName); exists {
-				if expectedCRC == in.Checksum {
-					clearMasterSFVMissingMarker(bridge, in.UploadDir, in.FileName)
-				} else if in.Checksum != 0 && zipscript.ShouldDeleteBadCRCForDir(s.Config.Zipscript, in.UploadDir) {
-					bridge.DeleteFile(in.FilePath)
-					_ = bridge.MarkFileMissing(in.FilePath)
-					createMasterSFVMissingMarker(s.Config, bridge, in.UploadDir, in.FileName)
-					log.Printf("[MASTER-ZS] CRC mismatch for %s: got %08X, expected %08X - deleted",
-						in.FileName, in.Checksum, expectedCRC)
-					return uploadPostHookDeleted("Checksum mismatch, deleting file",
-						fmt.Sprintf("checksum mismatch: SLAVE: %08X SFV: %08X", in.Checksum, expectedCRC),
-						" deleting file")
-				}
-			}
-		}
+		return false
 	}
 
 	if badZip, err := zipscript.CheckUploadedZipIntegrity(zipBridge(bridge), s.Config.Zipscript, in.UploadDir, in.FilePath, in.FileName); err != nil && s.Config.Debug {
 		log.Printf("[MASTER-ZS] zip integrity check skipped for %s: %v", in.FilePath, err)
 	} else if badZip {
-		return uploadPostHookDeleted("Transfer complete.", "Zip integrity check failed, deleting file")
+		return false
+	}
+
+	if in.Checksum > 0 && zipscript.ShouldDeleteBadCRCForDir(s.Config.Zipscript, in.UploadDir) && !strings.HasSuffix(strings.ToLower(in.FileName), ".sfv") {
+		sfvEntries := bridge.GetSFVData(in.UploadDir)
+		if sfvEntries != nil {
+			if expectedCRC, exists := zipscript.CachedExpectedCRC(sfvEntries, in.FileName); exists {
+				if expectedCRC != in.Checksum {
+					bridge.DeleteFile(in.FilePath)
+					_ = bridge.MarkFileMissing(in.FilePath)
+					createMasterSFVMissingMarker(s.Config, bridge, in.UploadDir, in.FileName)
+					log.Printf("[MASTER-ZS] CRC mismatch for %s: got %08X, expected %08X - deleted",
+						in.FileName, in.Checksum, expectedCRC)
+					return false
+				}
+				clearMasterSFVMissingMarker(bridge, in.UploadDir, in.FileName)
+			}
+		}
 	}
 
 	if s.User != nil && in.TransferredBytes > 0 {
@@ -1134,7 +1025,7 @@ func finalizeReleaseUpload(s *Session, bridge MasterBridge, in releaseUploadPipe
 		s.User.UpdateStatsWithCredits(in.TransferredBytes, true, !isSpeedtest)
 	}
 
-	return uploadPostHookOK()
+	return true
 }
 
 func buildReleaseUploadPipelineState(s *Session, bridge MasterBridge, in releaseUploadPipelineInput) releaseUploadPipelineState {
@@ -1147,6 +1038,7 @@ func buildReleaseUploadPipelineState(s *Session, bridge MasterBridge, in release
 		if sfvInfo, err := bridge.GetSFVInfo(in.FilePath); err == nil {
 			log.Printf("[MASTER-ZS] Parsed SFV %s: %d entries", in.FileName, len(sfvInfo.Entries))
 			bridge.CacheSFV(in.UploadDir, in.FileName, sfvInfo)
+			verifyExistingPayloadsAfterSFVUpload(s.Config, bridge, in.UploadDir)
 		}
 	}
 	state.SFVEntries = bridge.GetSFVData(in.UploadDir)
@@ -1185,6 +1077,59 @@ func buildReleaseUploadPipelineState(s *Session, bridge MasterBridge, in release
 	state.RaceUsers, state.RaceGroups, state.RaceTotalBytes, state.RaceTotalFiles, state.RaceDurationMs, state.RaceComplete = computeReleaseRaceSnapshot(s, bridge, in, state.EventData)
 	state.ShouldAnnounceNR = shouldAnnounceNoRace(s.Config, in.UploadDir, append([]string(nil), in.ExistingNames...), in.FileName)
 	return state
+}
+
+func verifyExistingPayloadsAfterSFVUpload(cfg *Config, bridge MasterBridge, dirPath string) {
+	if cfg == nil || bridge == nil || !zipscript.ShouldDeleteBadCRCForDir(cfg.Zipscript, dirPath) {
+		return
+	}
+	sfvEntries := bridge.GetSFVData(dirPath)
+	if sfvEntries == nil {
+		return
+	}
+	for _, entry := range bridge.ListDir(dirPath) {
+		if entry.IsDir || entry.IsSymlink || strings.HasSuffix(strings.ToLower(entry.Name), ".sfv") {
+			continue
+		}
+		expectedCRC, exists := zipscript.CachedExpectedCRC(sfvEntries, entry.Name)
+		if !exists {
+			continue
+		}
+		filePath := path.Join(dirPath, entry.Name)
+		checksum, ok := bridge.GetKnownChecksum(filePath)
+		if !ok || checksum == 0 {
+			continue
+		}
+		if checksum == expectedCRC {
+			clearMasterSFVMissingMarker(bridge, dirPath, entry.Name)
+			continue
+		}
+		actualChecksum, err := bridge.ChecksumFile(filePath)
+		if err != nil {
+			if zipscript.IsNotFoundDeleteError(err) {
+				_ = bridge.MarkFileMissing(filePath)
+				createMasterSFVMissingMarker(cfg, bridge, dirPath, entry.Name)
+			} else {
+				log.Printf("[MASTER-ZS] CRC mismatch after SFV for %s: cached %08X expected %08X - live checksum failed: %v",
+					entry.Name, checksum, expectedCRC, err)
+			}
+			continue
+		}
+		if actualChecksum == expectedCRC {
+			_ = bridge.SyncPresentFile(filePath, actualChecksum)
+			clearMasterSFVMissingMarker(bridge, dirPath, entry.Name)
+			continue
+		}
+		if err := bridge.DeleteFile(filePath); err != nil && !zipscript.IsNotFoundDeleteError(err) {
+			log.Printf("[MASTER-ZS] CRC mismatch after SFV for %s: got %08X, expected %08X - delete failed: %v",
+				entry.Name, actualChecksum, expectedCRC, err)
+			continue
+		}
+		_ = bridge.MarkFileMissing(filePath)
+		createMasterSFVMissingMarker(cfg, bridge, dirPath, entry.Name)
+		log.Printf("[MASTER-ZS] CRC mismatch after SFV for %s: got %08X, expected %08X - deleted",
+			entry.Name, actualChecksum, expectedCRC)
+	}
 }
 
 func computeReleaseRaceSnapshot(s *Session, bridge MasterBridge, in releaseUploadPipelineInput, data map[string]string) ([]VFSRaceUser, []VFSRaceGroup, int64, int, int64, bool) {
@@ -1267,9 +1212,9 @@ func emitReleaseUploadEventAndRace(s *Session, bridge MasterBridge, in releaseUp
 	}
 }
 
-func runMasterUploadPostHooks(s *Session, bridge MasterBridge, uploadDir, mediaInfoDir, filePath, fileName string, checksum uint32, transferredBytes, fileSize int64, speedMB float64, xferMs int64, existingNames []string) uploadPostHookResult {
+func runMasterUploadPostHooks(s *Session, bridge MasterBridge, uploadDir, mediaInfoDir, filePath, fileName string, checksum uint32, transferredBytes, fileSize int64, speedMB float64, xferMs int64, existingNames []string) bool {
 	if s == nil || s.Config == nil || bridge == nil {
-		return uploadPostHookDeleted("Transfer complete.")
+		return false
 	}
 	input := releaseUploadPipelineInput{
 		UploadDir:        uploadDir,
@@ -1284,14 +1229,7 @@ func runMasterUploadPostHooks(s *Session, bridge MasterBridge, uploadDir, mediaI
 		CompletedAtMs:    time.Now().UnixMilli(),
 		ExistingNames:    append([]string(nil), existingNames...),
 	}
-	result := finalizeReleaseUpload(s, bridge, input)
-	if !result.OK {
-		return result
-	}
-	enqueueReleasePostHook(uploadDir, func() {
-		runReleaseUploadPipeline(s, bridge, input)
-	})
-	return result
+	return runReleaseUploadPipeline(s, bridge, input)
 }
 
 func zipscriptExistingNames(bridge MasterBridge, dirPath string) []string {

@@ -539,7 +539,6 @@ func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group s
 	if !ok {
 		return 0, 0, fmt.Errorf("unexpected response from slave")
 	}
-	slave.AttachTransferPath(transferResp.Info.TransferIndex, filePath, 'R')
 
 	slaveAddr := net.JoinHostPort(slave.GetPASVIP(), strconv.Itoa(transferResp.Info.Port))
 	log.Printf("[Bridge] Connecting to slave %s at %s for upload of %s", slave.Name(), slaveAddr, filePath)
@@ -2440,8 +2439,6 @@ func (b *Bridge) SlaveReceivePassthrough(filePath string, transferIdx int32, sla
 	slave.IncActiveTransfers()
 	defer slave.DecActiveTransfers()
 
-	slave.AttachTransferPath(transferIdx, filePath, 'R')
-
 	minSpeed, maxSpeed, graceSeconds := b.transferSpeedLimits(owner, group, filePath, "upload")
 	recvIdx, err := IssueReceive(slave, filePath, transferType, position, "master", transferIdx, minSpeed, maxSpeed, graceSeconds)
 	if err != nil {
@@ -2585,7 +2582,6 @@ func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group strin
 	if onReady != nil {
 		onReady(slave.Name(), transferResp.Info.TransferIndex)
 	}
-	slave.AttachTransferPath(transferResp.Info.TransferIndex, filePath, 'R')
 
 	// Tell slave to receive the file on this connection
 	minSpeed, maxSpeed, graceSeconds := b.transferSpeedLimits(owner, group, filePath, "upload")

@@ -1657,6 +1657,12 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					writeTransferFailure(s.Conn, "Upload", err)
 					return false
 				}
+				if fileSize == 0 && zipscript.ShouldDeleteZeroByteForDir(s.Config.Zipscript, uploadDir) {
+					bridge.DeleteFile(filePath)
+					log.Printf("[MASTER-ZS] Deleted 0-byte file: %s", filePath)
+					fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
+					return false
+				}
 				if !strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
 					sfvEntries := bridge.GetSFVData(uploadDir)
 					if expectedCRC, exists := zipscript.CachedExpectedCRC(sfvEntries, fileName); exists {
@@ -1676,10 +1682,10 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				if xferMs > 0 {
 					speedMB = (float64(transferredBytes) / 1024.0 / 1024.0) / (float64(xferMs) / 1000.0)
 				}
-				postResult := runMasterUploadPostHooks(s, bridge, uploadDir, mediaInfoDir, filePath, fileName, checksum, transferredBytes, fileSize, speedMB, xferMs, existingNames)
-				Tracef("[RACETRACE] stor-ok mode=port-passthrough user=%s path=%s size=%d checksum=%08X xfer_ms=%d speed_mb=%.2f post_ok=%t", s.User.Name, filePath, fileSize, checksum, xferMs, speedMB, postResult.OK)
-				if !postResult.OK {
-					writeUploadPostHookResponse(s.Conn, postResult)
+				postOK := runMasterUploadPostHooks(s, bridge, uploadDir, mediaInfoDir, filePath, fileName, checksum, transferredBytes, fileSize, speedMB, xferMs, existingNames)
+				Tracef("[RACETRACE] stor-ok mode=port-passthrough user=%s path=%s size=%d checksum=%08X xfer_ms=%d speed_mb=%.2f post_ok=%t", s.User.Name, filePath, fileSize, checksum, xferMs, speedMB, postOK)
+				if !postOK {
+					fmt.Fprintf(s.Conn, "226 Transfer complete; zipscript removed file.\r\n")
 					return false
 				}
 				fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
@@ -1758,6 +1764,12 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						return false
 					}
 				}
+				if fileSize == 0 && zipscript.ShouldDeleteZeroByteForDir(s.Config.Zipscript, uploadDir) {
+					bridge.DeleteFile(filePath)
+					log.Printf("[MASTER-ZS] Deleted 0-byte file: %s", filePath)
+					fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
+					return false
+				}
 				if !strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
 					sfvEntries := bridge.GetSFVData(uploadDir)
 					if expectedCRC, exists := zipscript.CachedExpectedCRC(sfvEntries, fileName); exists {
@@ -1777,10 +1789,10 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				if xferMs > 0 {
 					speedMB = (float64(transferredBytes) / 1024.0 / 1024.0) / (float64(xferMs) / 1000.0)
 				}
-				postResult := runMasterUploadPostHooks(s, bridge, uploadDir, mediaInfoDir, filePath, fileName, checksum, transferredBytes, fileSize, speedMB, xferMs, existingNames)
-				Tracef("[RACETRACE] stor-ok mode=master user=%s path=%s size=%d checksum=%08X xfer_ms=%d speed_mb=%.2f post_ok=%t", s.User.Name, filePath, fileSize, checksum, xferMs, speedMB, postResult.OK)
-				if !postResult.OK {
-					writeUploadPostHookResponse(s.Conn, postResult)
+				postOK := runMasterUploadPostHooks(s, bridge, uploadDir, mediaInfoDir, filePath, fileName, checksum, transferredBytes, fileSize, speedMB, xferMs, existingNames)
+				Tracef("[RACETRACE] stor-ok mode=master user=%s path=%s size=%d checksum=%08X xfer_ms=%d speed_mb=%.2f post_ok=%t", s.User.Name, filePath, fileSize, checksum, xferMs, speedMB, postOK)
+				if !postOK {
+					fmt.Fprintf(s.Conn, "226 Transfer complete; zipscript removed file.\r\n")
 					return false
 				}
 				fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
@@ -1897,48 +1909,38 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		if restOffset > 0 {
 			fileSize += restOffset
 		}
-		localDir := filepath.Dir(localPath)
-		var sfvEntries map[string]uint32
-		if fileSize == 0 {
+		if fileSize == 0 && zipscript.ShouldDeleteZeroByteForDir(s.Config.Zipscript, uploadDir) {
 			_ = os.Remove(localPath)
-			if _, expected := zipscript.CachedExpectedCRC(zipscript.LocalSFVEntriesForDir(localDir), fileName); expected {
-				zipscript.CreateLocalSFVMissingMarker(s.Config.Zipscript, localDir, fileName)
-			}
-			writeUploadPostHookResponse(s.Conn, uploadPostHookDeleted("Transfer complete."))
+			fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
 			return false
-		}
-		if !strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
-			sfvEntries = zipscript.LocalSFVEntriesForDir(localDir)
-			if expectedCRC, ok := zipscript.CachedExpectedCRC(sfvEntries, fileName); ok {
-				if checksum == expectedCRC {
-					zipscript.ClearLocalSFVMissingMarker(localDir, fileName)
-				} else if zipscript.ShouldDeleteBadCRCForDir(s.Config.Zipscript, uploadDir) {
-					_ = os.Remove(localPath)
-					zipscript.CreateLocalSFVMissingMarker(s.Config.Zipscript, localDir, fileName)
-					writeUploadPostHookResponse(s.Conn, uploadPostHookDeleted("Checksum mismatch, deleting file",
-						fmt.Sprintf("checksum mismatch: SLAVE: %08X SFV: %08X", checksum, expectedCRC),
-						" deleting file"))
-					return false
-				}
-			}
 		}
 		if badZip, err := zipscript.LocalCheckUploadedZipIntegrity(s.Config.Zipscript, uploadDir, localPath, fileName); err != nil && s.Config.Debug {
 			log.Printf("[LOCAL-ZS] zip integrity check skipped for %s: %v", uploadPath, err)
 		} else if badZip {
-			writeUploadPostHookResponse(s.Conn, uploadPostHookDeleted("Transfer complete.", "Zip integrity check failed, deleting file"))
+			fmt.Fprintf(s.Conn, "226 Zip integrity check failed, deleting file\r\n")
 			return false
 		}
-		if !strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
-			if sfvEntries == nil {
-				sfvEntries = zipscript.LocalSFVEntriesForDir(localDir)
+		if checksum > 0 && zipscript.ShouldDeleteBadCRCForDir(s.Config.Zipscript, uploadDir) && !strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
+			if expectedCRC, ok := zipscript.LocalExpectedCRCForFile(localPath); ok && expectedCRC != checksum {
+				_ = os.Remove(localPath)
+				zipscript.CreateLocalSFVMissingMarker(s.Config.Zipscript, filepath.Dir(localPath), fileName)
+				fmt.Fprintf(s.Conn, "226- checksum mismatch: SLAVE: %08X SFV: %08X\r\n", checksum, expectedCRC)
+				fmt.Fprintf(s.Conn, "226 Checksum mismatch, deleting file\r\n")
+				return false
 			}
+		}
+		if !strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
+			sfvEntries := zipscript.LocalSFVEntriesForDir(filepath.Dir(localPath))
 			if expectedCRC, ok := zipscript.CachedExpectedCRC(sfvEntries, fileName); ok {
 				zipscript.WriteUploadSFVStatus(s.Conn, checksum, expectedCRC, true, fileSize)
+				if checksum == expectedCRC && checksum != 0 {
+					zipscript.ClearLocalSFVMissingMarker(filepath.Dir(localPath), fileName)
+				}
 			} else {
 				zipscript.WriteUploadNoSFVEntryStatus(s.Conn, sfvEntries, fileName)
 			}
 		} else {
-			zipscript.SyncLocalSFVMissingMarkers(s.Config.Zipscript, localDir)
+			zipscript.SyncLocalSFVMissingMarkers(s.Config.Zipscript, filepath.Dir(localPath))
 		}
 
 		isSpeedtest := isSpeedtestPath(uploadPath)

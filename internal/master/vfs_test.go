@@ -1106,8 +1106,8 @@ func TestVFSGetReleaseStatusForZipUsesCachedExpectedParts(t *testing.T) {
 	vfs := NewVirtualFileSystem()
 	vfs.AddFile("/0DAY/release", VFSFile{IsDir: true, Seen: true})
 	vfs.AddFile("/0DAY/release/file_id.diz", VFSFile{Seen: true, Checksum: 321})
-	vfs.AddFile("/0DAY/release/a.zip", VFSFile{Seen: true, Size: 100, XferTime: 1000})
-	vfs.AddFile("/0DAY/release/b.z01", VFSFile{Seen: true, Size: 100, XferTime: 1000})
+	vfs.AddFile("/0DAY/release/a.zip", VFSFile{Seen: true, Size: 100})
+	vfs.AddFile("/0DAY/release/b.z01", VFSFile{Seen: true, Size: 100})
 	vfs.CacheZipExpectedParts("/0DAY/release", 3, 321)
 
 	status, ok := vfs.GetReleaseStatus("/0DAY/release")
@@ -1119,23 +1119,6 @@ func TestVFSGetReleaseStatusForZipUsesCachedExpectedParts(t *testing.T) {
 	}
 	if status.Present != 2 || status.Total != 3 {
 		t.Fatalf("expected zip present/total 2/3, got %d/%d", status.Present, status.Total)
-	}
-}
-
-func TestVFSGetReleaseStatusForZipIgnoresUploadPlaceholders(t *testing.T) {
-	vfs := NewVirtualFileSystem()
-	vfs.AddFile("/0DAY/release", VFSFile{IsDir: true, Seen: true})
-	vfs.AddFile("/0DAY/release/file_id.diz", VFSFile{Seen: true, Checksum: 321})
-	vfs.AddFile("/0DAY/release/a.zip", VFSFile{Seen: true, Size: 100, XferTime: 1000})
-	vfs.AddFile("/0DAY/release/b.z01", VFSFile{Seen: true, Size: 100})
-	vfs.CacheZipExpectedParts("/0DAY/release", 2, 321)
-
-	status, ok := vfs.GetReleaseStatus("/0DAY/release")
-	if !ok {
-		t.Fatalf("expected release status to be available")
-	}
-	if status.Present != 1 || status.Total != 2 {
-		t.Fatalf("expected zip placeholder to stay missing, got %d/%d", status.Present, status.Total)
 	}
 }
 
@@ -1171,44 +1154,6 @@ func TestVFSGetZipRaceStatsCountsZipPayloads(t *testing.T) {
 	}
 	if len(groups) != 1 || groups[0].Name != "iND" || groups[0].Files != 2 || groups[0].Bytes != 300 {
 		t.Fatalf("unexpected zip group stats: %#v", groups)
-	}
-}
-
-func TestVFSUpdateUploadProgressDoesNotCompleteRaceFile(t *testing.T) {
-	vfs := NewVirtualFileSystem()
-	vfs.AddFile("/X265/release", VFSFile{IsDir: true, Seen: true})
-	vfs.SetSFVData("/X265/release", "release.sfv", map[string]uint32{"file.r00": 0x12345678})
-	vfs.AddFile("/X265/release/file.r00", VFSFile{
-		Seen:      true,
-		Size:      0,
-		SlaveName: "LOCAL",
-		Owner:     "racer",
-		Group:     "iND",
-	})
-
-	if !vfs.UpdateUploadProgress("/X265/release/file.r00", 1024, 100) {
-		t.Fatalf("expected upload progress to update placeholder")
-	}
-	if status, ok := vfs.GetReleaseStatus("/X265/release"); !ok || status.Present != 0 {
-		t.Fatalf("expected progress-only file to stay incomplete, status=%#v ok=%t", status, ok)
-	}
-
-	vfs.AddFile("/X265/release/file.r00", VFSFile{
-		Seen:         true,
-		Size:         2048,
-		SlaveName:    "LOCAL",
-		Owner:        "racer",
-		Group:        "iND",
-		XferTime:     500,
-		Checksum:     0x12345678,
-		LastModified: 101,
-	})
-	if vfs.UpdateUploadProgress("/X265/release/file.r00", 4096, 102) {
-		t.Fatalf("expected completed upload metadata to reject progress overwrite")
-	}
-	file := vfs.GetFile("/X265/release/file.r00")
-	if file == nil || file.Size != 2048 || file.XferTime != 500 || file.Checksum != 0x12345678 {
-		t.Fatalf("completed file metadata was overwritten: %#v", file)
 	}
 }
 
