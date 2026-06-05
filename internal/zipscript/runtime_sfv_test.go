@@ -8,11 +8,14 @@ import (
 type fakeSFVRuntimeBridge struct {
 	sfvEntries map[string]uint32
 	checksums  map[string]uint32
+	liveCRC    uint32
+	liveErr    error
 	files      map[string]bool
 	deleteErr  error
 	writes     []string
 	deletes    []string
 	missing    []string
+	synced     []string
 }
 
 func (b *fakeSFVRuntimeBridge) GetSFVData(dirPath string) map[string]uint32 {
@@ -22,6 +25,13 @@ func (b *fakeSFVRuntimeBridge) GetSFVData(dirPath string) map[string]uint32 {
 func (b *fakeSFVRuntimeBridge) GetKnownChecksum(filePath string) (uint32, bool) {
 	checksum, ok := b.checksums[filePath]
 	return checksum, ok
+}
+
+func (b *fakeSFVRuntimeBridge) ChecksumFile(filePath string) (uint32, error) {
+	if b.liveErr != nil {
+		return 0, b.liveErr
+	}
+	return b.liveCRC, nil
 }
 
 func (b *fakeSFVRuntimeBridge) DeleteFile(filePath string) error {
@@ -35,6 +45,12 @@ func (b *fakeSFVRuntimeBridge) DeleteFile(filePath string) error {
 
 func (b *fakeSFVRuntimeBridge) MarkFileMissing(filePath string) error {
 	b.missing = append(b.missing, filePath)
+	return nil
+}
+
+func (b *fakeSFVRuntimeBridge) SyncPresentFile(filePath string, checksum uint32) error {
+	b.synced = append(b.synced, filePath)
+	b.checksums[filePath] = checksum
 	return nil
 }
 
@@ -64,6 +80,7 @@ func TestShouldTreatDownloadAsMissingCreatesMarkerWithoutDeleting(t *testing.T) 
 	bridge := &fakeSFVRuntimeBridge{
 		sfvEntries: map[string]uint32{"file.r00": 0x12345678},
 		checksums:  map[string]uint32{"/X265/release/file.r00": 0x87654321},
+		liveCRC:    0x87654321,
 		files:      map[string]bool{"/X265/release/file.r00": true},
 	}
 
@@ -95,7 +112,7 @@ func TestShouldTreatDownloadAsMissingIgnoresAlreadyDeletedBadFile(t *testing.T) 
 		sfvEntries: map[string]uint32{"file.r00": 0x12345678},
 		checksums:  map[string]uint32{"/X265/release/file.r00": 0x87654321},
 		files:      map[string]bool{"/X265/release/file.r00": true},
-		deleteErr:  errors.New("remove /site/file.r00: no such file or directory"),
+		liveErr:    errors.New("stat /site/file.r00: no such file or directory"),
 	}
 	var logs []string
 
@@ -112,5 +129,42 @@ func TestShouldTreatDownloadAsMissingIgnoresAlreadyDeletedBadFile(t *testing.T) 
 	}
 	if len(bridge.missing) != 1 || bridge.missing[0] != "/X265/release/file.r00" {
 		t.Fatalf("expected MarkFileMissing despite missing disk file, got %#v", bridge.missing)
+	}
+}
+
+func TestShouldTreatDownloadAsMissingRefreshesStaleCachedChecksum(t *testing.T) {
+	cfg := Config{
+		Enabled: true,
+		Sections: SectionsConfig{
+			SFV: []string{"/X265/*"},
+		},
+		List: ListConfig{
+			MissingFiles: boolPtr(true),
+		},
+		SFV: SFVConfig{
+			DeleteBadCRC: true,
+		},
+	}
+	bridge := &fakeSFVRuntimeBridge{
+		sfvEntries: map[string]uint32{"file.r00": 0x12345678},
+		checksums:  map[string]uint32{"/X265/release/file.r00": 0x87654321},
+		liveCRC:    0x12345678,
+		files: map[string]bool{
+			"/X265/release/file.r00":         true,
+			"/X265/release/file.r00-MISSING": true,
+		},
+	}
+
+	if ShouldTreatDownloadAsMissing(cfg, bridge, "/X265/release/file.r00", nil) {
+		t.Fatalf("expected actual matching disk checksum to clear stale missing state")
+	}
+	if len(bridge.synced) != 1 || bridge.synced[0] != "/X265/release/file.r00" {
+		t.Fatalf("expected SyncPresentFile for stale checksum, got %#v", bridge.synced)
+	}
+	if len(bridge.deletes) != 1 || bridge.deletes[0] != "/X265/release/file.r00-MISSING" {
+		t.Fatalf("expected stale missing marker to be deleted, got %#v", bridge.deletes)
+	}
+	if len(bridge.missing) != 0 {
+		t.Fatalf("did not expect MarkFileMissing for matching disk checksum, got %#v", bridge.missing)
 	}
 }
