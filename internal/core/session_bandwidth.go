@@ -2,13 +2,8 @@ package core
 
 import (
 	"net"
-	"path"
-	"strings"
-	"sync"
 	"time"
 )
-
-var activeUploadReservations sync.Map
 
 func (s *Session) touchActivity() {
 	if s == nil {
@@ -21,25 +16,6 @@ func (s *Session) touchActivity() {
 
 func (s *Session) beginTransfer(direction, targetPath string) {
 	s.beginTransferOnSlave(direction, targetPath, "", 0)
-}
-
-func (s *Session) tryBeginUploadTransfer(targetPath string) bool {
-	return s.tryBeginUploadTransferOnSlave(targetPath, "", 0)
-}
-
-func (s *Session) tryBeginUploadTransferOnSlave(targetPath, slaveName string, slaveIdx int32) bool {
-	if s == nil {
-		return false
-	}
-	cleanPath := cleanTransferPath(targetPath)
-	if cleanPath == "" {
-		return false
-	}
-	if !reserveUploadPath(cleanPath, s.ID) {
-		return false
-	}
-	s.beginTransferOnSlave("upload", cleanPath, slaveName, slaveIdx)
-	return true
 }
 
 func (s *Session) beginTransferOnSlave(direction, targetPath, slaveName string, slaveIdx int32) {
@@ -80,8 +56,6 @@ func (s *Session) endTransfer() {
 		return
 	}
 	s.stateMu.Lock()
-	direction := s.TransferDirection
-	targetPath := s.TransferPath
 	s.TransferDirection = ""
 	s.TransferPath = ""
 	s.TransferBytes = 0
@@ -89,9 +63,6 @@ func (s *Session) endTransfer() {
 	s.TransferSlaveName = ""
 	s.TransferSlaveIdx = 0
 	s.stateMu.Unlock()
-	if strings.EqualFold(direction, "upload") {
-		releaseUploadPath(targetPath, s.ID)
-	}
 }
 
 func (s *Session) currentTransferSpeedBytes() float64 {
@@ -137,45 +108,4 @@ func trackTransferConn(s *Session, conn net.Conn, direction string) net.Conn {
 		return conn
 	}
 	return &bandwidthTrackingConn{Conn: conn, session: s, direction: direction}
-}
-
-func cleanTransferPath(targetPath string) string {
-	targetPath = strings.TrimSpace(targetPath)
-	if targetPath == "" {
-		return ""
-	}
-	return path.Clean(targetPath)
-}
-
-func reserveUploadPath(targetPath string, sessionID uint64) bool {
-	cleanPath := cleanTransferPath(targetPath)
-	if cleanPath == "" {
-		return false
-	}
-	_, loaded := activeUploadReservations.LoadOrStore(cleanPath, sessionID)
-	return !loaded
-}
-
-func releaseUploadPath(targetPath string, sessionID uint64) {
-	cleanPath := cleanTransferPath(targetPath)
-	if cleanPath == "" {
-		return
-	}
-	value, ok := activeUploadReservations.Load(cleanPath)
-	if !ok {
-		return
-	}
-	if ownerID, ok := value.(uint64); ok && ownerID != sessionID {
-		return
-	}
-	activeUploadReservations.Delete(cleanPath)
-}
-
-func uploadPathReserved(targetPath string) bool {
-	cleanPath := cleanTransferPath(targetPath)
-	if cleanPath == "" {
-		return false
-	}
-	_, ok := activeUploadReservations.Load(cleanPath)
-	return ok
 }

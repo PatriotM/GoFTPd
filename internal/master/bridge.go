@@ -508,16 +508,6 @@ func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group s
 		return 0, 0, fmt.Errorf("no available slave")
 	}
 	core.Tracef("[RACETRACE] bridge-upload-select path=%s owner=%s group=%s position=%d slave=%s", filePath, owner, group, position, slave.Name())
-	placeholder, err := b.addUploadPlaceholder(filePath, slave.Name(), owner, group, position)
-	if err != nil {
-		return 0, 0, err
-	}
-	committed := false
-	defer func() {
-		if placeholder && !committed {
-			b.removeUploadPlaceholder(filePath)
-		}
-	}()
 
 	slave.IncActiveTransfers()
 	defer slave.DecActiveTransfers()
@@ -625,7 +615,6 @@ func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group s
 	})
 	b.recordUploadMetadata(filePath, owner, group, finalSize, xferTime, checksum)
 	b.sm.SyncStatusMarkersForPath(filePath, false)
-	committed = true
 
 	return finalSize, checksum, nil
 }
@@ -923,48 +912,6 @@ func cleanBridgeVFSPath(p string) string {
 		p = "/" + p
 	}
 	return path.Clean(p)
-}
-
-func (b *Bridge) addUploadPlaceholder(filePath, slaveName, owner, group string, position int64) (bool, error) {
-	if b == nil || b.sm == nil || b.sm.GetVFS() == nil || position > 0 {
-		return false, nil
-	}
-	cleanPath := cleanBridgeVFSPath(filePath)
-	if cleanPath == "" || cleanPath == "/" {
-		return false, fmt.Errorf("invalid upload path: %s", filePath)
-	}
-	if b.sm.GetVFS().FileExists(cleanPath) {
-		return false, fmt.Errorf("File %s exists", filePath)
-	}
-	b.sm.GetVFS().AddFile(cleanPath, VFSFile{
-		Path:         cleanPath,
-		Size:         0,
-		IsDir:        false,
-		LastModified: time.Now().Unix(),
-		SlaveName:    slaveName,
-		Owner:        owner,
-		Group:        group,
-		Seen:         true,
-	})
-	b.invalidateReadFileCache(cleanPath)
-	b.sm.InvalidateReleaseStateForPath(cleanPath, false)
-	core.Tracef("[RACETRACE] upload-placeholder path=%s slave=%s owner=%s group=%s", cleanPath, slaveName, owner, group)
-	return true, nil
-}
-
-func (b *Bridge) removeUploadPlaceholder(filePath string) {
-	if b == nil || b.sm == nil || b.sm.GetVFS() == nil {
-		return
-	}
-	cleanPath := cleanBridgeVFSPath(filePath)
-	file := b.sm.GetVFS().GetFile(cleanPath)
-	if file == nil || file.IsDir || file.Size != 0 || file.XferTime != 0 || file.Checksum != 0 {
-		return
-	}
-	if err := b.VFSDeleteOnly(cleanPath); err != nil && !strings.Contains(strings.ToLower(err.Error()), "not found") {
-		log.Printf("[Bridge] upload placeholder cleanup failed for %s: %v", cleanPath, err)
-	}
-	core.Tracef("[RACETRACE] upload-placeholder-remove path=%s", cleanPath)
 }
 
 func (b *Bridge) RelocatePath(from, toDir, toName string) error {
@@ -2425,16 +2372,6 @@ func (b *Bridge) SlaveReceivePassthrough(filePath string, transferIdx int32, sla
 	if slave == nil {
 		return 0, 0, 0, fmt.Errorf("slave %s not found", slaveName)
 	}
-	placeholder, err := b.addUploadPlaceholder(filePath, slaveName, owner, group, position)
-	if err != nil {
-		return 0, 0, 0, err
-	}
-	committed := false
-	defer func() {
-		if placeholder && !committed {
-			b.removeUploadPlaceholder(filePath)
-		}
-	}()
 
 	slave.IncActiveTransfers()
 	defer slave.DecActiveTransfers()
@@ -2483,7 +2420,6 @@ func (b *Bridge) SlaveReceivePassthrough(filePath string, transferIdx int32, sla
 	})
 	b.recordUploadMetadata(filePath, owner, group, finalSize, status.Elapsed, finalChecksum)
 	b.sm.SyncStatusMarkersForPath(filePath, false)
-	committed = true
 
 	log.Printf("[Passthrough] Upload %s on %s (%d bytes, %dms, CRC=%08X)",
 		filePath, slaveName, finalSize, status.Elapsed, finalChecksum)
@@ -2541,16 +2477,6 @@ func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group strin
 	if slave == nil {
 		return 0, 0, 0, fmt.Errorf("no available slave")
 	}
-	placeholder, err := b.addUploadPlaceholder(filePath, slave.Name(), owner, group, position)
-	if err != nil {
-		return 0, 0, 0, err
-	}
-	committed := false
-	defer func() {
-		if placeholder && !committed {
-			b.removeUploadPlaceholder(filePath)
-		}
-	}()
 
 	slave.IncActiveTransfers()
 	defer slave.DecActiveTransfers()
@@ -2628,7 +2554,6 @@ func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group strin
 	})
 	b.recordUploadMetadata(filePath, owner, group, finalSize, status.Elapsed, finalChecksum)
 	b.sm.SyncStatusMarkersForPath(filePath, false)
-	committed = true
 
 	log.Printf("[Passthrough-PORT] Upload %s on %s (%d bytes, %dms, CRC=%08X)",
 		filePath, slave.Name(), finalSize, status.Elapsed, finalChecksum)

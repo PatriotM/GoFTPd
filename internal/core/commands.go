@@ -1530,10 +1530,6 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					fmt.Fprintf(s.Conn, "550 Upload prepare failed: %v\r\n", err)
 					return false
 				}
-				if activeUploadForPathWithBridge(bridge, uploadPath) {
-					fmt.Fprintf(s.Conn, "553 %s: file already exists\r\n", fileName)
-					return false
-				}
 				fileExists = bridge.FileExists(uploadPath)
 				if s.Config.XdupeEnabled {
 					xdupeNames = existingFileNamesForXDupe(getMasterUploadEntries(bridge))
@@ -1628,12 +1624,9 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				s.ActiveAddr = ""
 
 				log.Printf("[Passthrough] PORT STOR %s → slave connects to %s", filePath, portAddr)
-				if !s.tryBeginUploadTransfer(filePath) {
-					fmt.Fprintf(s.Conn, "553 %s: file already exists\r\n", fileName)
-					return false
-				}
-				defer s.endTransfer()
 				fmt.Fprintf(s.Conn, "150 Opening %s mode data connection.\r\n", transferTypeReplyName(s.TransferType))
+				s.beginTransfer("upload", filePath)
+				defer s.endTransfer()
 				var transferSlaveName string
 				var transferSlaveIdx int32
 				onTransferReady := func(slaveName string, transferIdx int32) {
@@ -1657,6 +1650,8 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					writeTransferFailure(s.Conn, "Upload", err)
 					return false
 				}
+				s.endTransfer()
+
 				if fileSize == 0 && zipscript.ShouldDeleteZeroByteForDir(s.Config.Zipscript, uploadDir) {
 					bridge.DeleteFile(filePath)
 					log.Printf("[MASTER-ZS] Deleted 0-byte file: %s", filePath)
@@ -1712,13 +1707,10 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 
 				if s.PassthruSlave != nil && s.Config.Passthrough {
 					slaveName := s.PassthruSlave.(string)
-					if !s.tryBeginUploadTransferOnSlave(filePath, slaveName, s.PassthruXferIdx) {
-						fmt.Fprintf(s.Conn, "553 %s: file already exists\r\n", fileName)
-						return false
-					}
-					defer s.endTransfer()
 					fmt.Fprintf(s.Conn, "150 Opening %s mode data connection.\r\n", transferTypeReplyName(s.TransferType))
 					log.Printf("[Passthrough] STOR %s via slave %s (xferIdx=%d)", filePath, slaveName, s.PassthruXferIdx)
+					s.beginTransferOnSlave("upload", filePath, slaveName, s.PassthruXferIdx)
+					defer s.endTransfer()
 
 					fileSize, checksum, xferMs, err = bridge.SlaveReceivePassthrough(filePath, s.PassthruXferIdx, slaveName, s.User.Name, s.User.PrimaryGroup, restOffset, s.currentTransferTypeByte())
 					s.PassthruSlave = nil
@@ -1738,17 +1730,14 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						return false
 					}
 				} else {
-					if !s.tryBeginUploadTransfer(filePath) {
-						fmt.Fprintf(s.Conn, "553 %s: file already exists\r\n", fileName)
-						return false
-					}
-					defer s.endTransfer()
 					fmt.Fprintf(s.Conn, "150 Opening %s mode data connection.\r\n", transferTypeReplyName(s.TransferType))
 					dataConn, err := s.upgradeDataTLS(raw, tlsConfig)
 					if err != nil {
 						raw.Close()
 						return false
 					}
+					s.beginTransfer("upload", filePath)
+					defer s.endTransfer()
 					dataConn = trackTransferConn(s, dataConn, "upload")
 
 					start := time.Now()
@@ -1764,6 +1753,8 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 						return false
 					}
 				}
+				s.endTransfer()
+
 				if fileSize == 0 && zipscript.ShouldDeleteZeroByteForDir(s.Config.Zipscript, uploadDir) {
 					bridge.DeleteFile(filePath)
 					log.Printf("[MASTER-ZS] Deleted 0-byte file: %s", filePath)
@@ -1853,21 +1844,11 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		if restOffset > 0 {
 			flags |= os.O_APPEND
 		} else {
-			flags |= os.O_EXCL
+			flags |= os.O_TRUNC
 		}
-		if !s.tryBeginUploadTransfer(uploadPath) {
-			dataConn.Close()
-			fmt.Fprintf(s.Conn, "553 %s: file already exists\r\n", fileName)
-			return false
-		}
-		defer s.endTransfer()
 		file, err := os.OpenFile(localPath, flags, 0644)
 		if err != nil {
 			dataConn.Close()
-			if os.IsExist(err) {
-				fmt.Fprintf(s.Conn, "553 %s: file already exists\r\n", fileName)
-				return false
-			}
 			writeTransferFailure(s.Conn, "Upload", err)
 			return false
 		}
@@ -1880,6 +1861,8 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			}
 		}
 
+		s.beginTransfer("upload", uploadPath)
+		defer s.endTransfer()
 		dataConn = trackTransferConn(s, dataConn, "upload")
 
 		start := time.Now()
@@ -1902,6 +1885,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			writeTransferFailure(s.Conn, "Upload", err)
 			return false
 		}
+		s.endTransfer()
 		if checksumHash != nil {
 			checksum = checksumHash.Sum32()
 		}
@@ -2717,9 +2701,6 @@ func raceCRCKey(name string) string {
 
 func activeUploadForPath(filePath string) bool {
 	cleanPath := path.Clean(filePath)
-	if uploadPathReserved(cleanPath) {
-		return true
-	}
 	for _, snap := range listActiveSessions() {
 		if snap.TransferDirection != "upload" {
 			continue

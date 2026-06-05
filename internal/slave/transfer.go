@@ -173,12 +173,9 @@ func (t *Transfer) ReceiveFile(path string, position int64, expectedPeer string)
 			return t.errorStatus(fmt.Sprintf("resume seek failed: %v", err))
 		}
 	} else {
-		file, err = os.OpenFile(fullPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+		file, err = os.Create(fullPath)
 	}
 	if err != nil {
-		if os.IsExist(err) {
-			return t.errorStatus(fmt.Sprintf("File %s exists", path))
-		}
 		return t.errorStatus(fmt.Sprintf("create failed: %v", err))
 	}
 	defer file.Close()

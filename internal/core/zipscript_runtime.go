@@ -431,20 +431,11 @@ func raceStatsForDir(bridge MasterBridge, cfg *Config, dirPath string) (users []
 	type freshRaceStatsBridge interface {
 		GetVFSRaceStatsFresh(dirPath string) (users []VFSRaceUser, groups []VFSRaceGroup, totalBytes int64, present int, total int)
 	}
-	type releaseStatsBridge interface {
-		GetVFSReleaseStats(dirPath string) (users []VFSRaceUser, groups []VFSRaceGroup, totalBytes int64, present int, total int)
-	}
 
 	if bridge == nil || cfg == nil {
 		return nil, nil, 0, 0, 0
 	}
 	if useZipRaceMode(bridge, cfg, dirPath, "") {
-		if releaseBridge, ok := bridge.(releaseStatsBridge); ok {
-			users, groups, totalBytes, present, total = releaseBridge.GetVFSReleaseStats(dirPath)
-			if HasRaceStats(users, groups, totalBytes, present, total) || total > 0 {
-				return users, groups, totalBytes, present, total
-			}
-		}
 		entries := bridge.ListDir(dirPath)
 		status, ok := releaseStatusForDir(bridge, dirPath)
 		expected := 0
@@ -474,9 +465,6 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 	type freshRaceStatsBridge interface {
 		GetVFSRaceStatsFresh(dirPath string) (users []VFSRaceUser, groups []VFSRaceGroup, totalBytes int64, present int, total int)
 	}
-	type releaseStatsBridge interface {
-		GetVFSReleaseStats(dirPath string) (users []VFSRaceUser, groups []VFSRaceGroup, totalBytes int64, present int, total int)
-	}
 
 	sfvEntries := bridge.GetSFVData(dirPath)
 	usesZip := useZipRaceMode(bridge, cfg, dirPath, fileName)
@@ -488,24 +476,17 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 		data["file_mbytes"] = mbString(fileSize)
 	}
 	if usesZip {
+		entries := bridge.ListDir(dirPath)
+		status, ok := releaseStatusForDir(bridge, dirPath)
 		expected := 0
 		presentCount := 0
-		var users []VFSRaceUser
-		var groups []VFSRaceGroup
-		var totalBytes int64
-		if releaseBridge, ok := bridge.(releaseStatsBridge); ok {
-			users, groups, totalBytes, presentCount, expected = releaseBridge.GetVFSReleaseStats(dirPath)
+		if ok && status.Kind == "zip" {
+			presentCount, expected = zipRaceCountsFromStatus(status)
 		} else {
-			entries := bridge.ListDir(dirPath)
-			status, ok := releaseStatusForDir(bridge, dirPath)
-			if ok && status.Kind == "zip" {
-				presentCount, expected = zipRaceCountsFromStatus(status)
-			} else {
-				expected = zipscript.ZipExpectedPartsFromDIZ(zipBridge(bridge), dirPath, true)
-				presentCount = zipscript.ZipDirPayloadCount(zipBridge(bridge).ListZipDirEntries(dirPath))
-			}
-			users, totalBytes, _ = zipDirRaceStats(bridge, dirPath, entries, expected)
+			expected = zipscript.ZipExpectedPartsFromDIZ(zipBridge(bridge), dirPath, true)
+			presentCount = zipscript.ZipDirPayloadCount(zipBridge(bridge).ListZipDirEntries(dirPath))
 		}
+		users, totalBytes, _ := zipDirRaceStats(bridge, dirPath, entries, expected)
 		raceComplete := expected > 0 && presentCount >= expected
 		zipscript.CacheZipReleaseProgress(zipBridge(bridge), dirPath, presentCount, expected)
 		if presentCount > 0 {
@@ -521,9 +502,7 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 			if expected > 0 {
 				totalFiles = expected
 			}
-			if groups == nil {
-				groups = raceGroupsFromUsers(users, totalFiles)
-			}
+			groups := raceGroupsFromUsers(users, totalFiles)
 			data["relname"] = path.Base(dirPath)
 			if expected > 0 {
 				data["t_files"] = fmt.Sprintf("%d", expected)

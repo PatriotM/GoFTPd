@@ -42,11 +42,6 @@ func registerSession(s *Session) uint64 {
 }
 
 func unregisterSession(id uint64) {
-	if value, ok := activeSessions.Load(id); ok {
-		if s, ok := value.(*Session); ok && s != nil {
-			s.endTransfer()
-		}
-	}
 	activeSessions.Delete(id)
 }
 
