@@ -74,3 +74,42 @@ func TestCountTransfersForUserCountsByDirection(t *testing.T) {
 		t.Fatalf("countTransfersForUser(other) = %d, want 0", got)
 	}
 }
+
+func TestUploadTransferReservesPath(t *testing.T) {
+	firstServer, firstClient := net.Pipe()
+	defer firstClient.Close()
+	secondServer, secondClient := net.Pipe()
+	defer secondClient.Close()
+
+	first := &Session{
+		Conn:     firstServer,
+		IsLogged: true,
+		User:     &user.User{Name: "first"},
+	}
+	first.ID = registerSession(first)
+	defer unregisterSession(first.ID)
+
+	second := &Session{
+		Conn:     secondServer,
+		IsLogged: true,
+		User:     &user.User{Name: "second"},
+	}
+	second.ID = registerSession(second)
+	defer unregisterSession(second.ID)
+
+	if !first.tryBeginUploadTransfer("/X265/Release-GRP/file.r00") {
+		t.Fatalf("expected first upload reservation to succeed")
+	}
+	if !activeUploadForPath("/X265/Release-GRP/file.r00") {
+		t.Fatalf("expected active upload lookup to see reserved path")
+	}
+	if second.tryBeginUploadTransfer("/X265/Release-GRP/file.r00") {
+		t.Fatalf("expected second upload reservation for same path to fail")
+	}
+
+	first.endTransfer()
+
+	if !second.tryBeginUploadTransfer("/X265/Release-GRP/file.r00") {
+		t.Fatalf("expected reservation to be reusable after first upload ends")
+	}
+}

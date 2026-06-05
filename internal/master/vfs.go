@@ -684,7 +684,7 @@ func (vfs *VirtualFileSystem) GetReleaseStatus(dirPath string) (core.ReleaseStat
 				missingFiles = append(missingFiles, sfvFile)
 				continue
 			}
-			if expectedCRC != 0 && f.Checksum != 0 && f.Checksum != expectedCRC {
+			if f.Checksum != expectedCRC {
 				missingFiles = append(missingFiles, sfvFile)
 				continue
 			}
@@ -766,7 +766,7 @@ func (vfs *VirtualFileSystem) getVerifiedSFVPresentFilesLocked(dirPath string, e
 		if f == nil {
 			continue
 		}
-		if expectedCRC != 0 && f.Checksum != expectedCRC {
+		if f.Checksum != expectedCRC {
 			continue
 		}
 		verified[key] = true
@@ -1686,8 +1686,7 @@ func (vfs *VirtualFileSystem) computeRaceStateFilteredLocked(dirPath string, exc
 		if f == nil {
 			continue
 		}
-		checksumVerified := expectedCRC == 0 || (f.Checksum != 0 && f.Checksum == expectedCRC)
-		if !checksumVerified {
+		if f.Checksum != expectedCRC {
 			continue
 		}
 		cache.Present++
