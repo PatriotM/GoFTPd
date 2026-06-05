@@ -1122,20 +1122,6 @@ func emitReleaseUploadEventAndRace(s *Session, bridge MasterBridge, in releaseUp
 	if s.User != nil {
 		userName = s.User.Name
 	}
-	Tracef("[RACETRACE] upload-race-snapshot dir=%s file=%s user=%s race_complete=%t sfv_upload=%t total_files=%d total_bytes=%d duration_ms=%d present=%s total=%s file_exists=%t file_size=%d",
-		in.UploadDir,
-		in.FileName,
-		userName,
-		state.RaceComplete,
-		state.SFVUpload,
-		state.RaceTotalFiles,
-		state.RaceTotalBytes,
-		state.RaceDurationMs,
-		strings.TrimSpace(state.EventData["t_present"]),
-		strings.TrimSpace(state.EventData["t_files"]),
-		bridge.FileExists(in.FilePath),
-		bridge.GetFileSize(in.FilePath),
-	)
 	enrichUploadRaceUserData(state.EventData, state.RaceUsers, userName)
 	s.emitEvent(EventUpload, in.FilePath, in.FileName, in.TransferredBytes, in.SpeedMB, state.EventData)
 
@@ -1161,15 +1147,6 @@ func emitReleaseUploadEventAndRace(s *Session, bridge MasterBridge, in releaseUp
 		if state.AudioFields == nil {
 			emitOrPrimeReleaseAudioInfo(s, bridge, in.UploadDir)
 		}
-		Tracef("[RACETRACE] queue-race-complete dir=%s file=%s present=%s total=%s total_bytes=%d duration_ms=%d trigger_file=%s",
-			in.UploadDir,
-			in.FileName,
-			strings.TrimSpace(state.EventData["t_present"]),
-			strings.TrimSpace(state.EventData["t_files"]),
-			state.RaceTotalBytes,
-			state.RaceDurationMs,
-			in.FilePath,
-		)
 		emitRaceEndAfter(s, in.UploadDir, state.RaceUsers, state.RaceGroups, state.RaceTotalBytes, state.RaceTotalFiles, state.RaceDurationMs, in.XferMs, zipscript.MediaInfoGraceDelayForDir(s.Config.Zipscript, in.UploadDir, in.FileName))
 	}
 }

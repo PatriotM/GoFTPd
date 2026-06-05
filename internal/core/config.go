@@ -157,8 +157,6 @@ type Config struct {
 	LogKeepDays        int    `yaml:"log_keep_days"`
 	LogDeleteAfterDays int    `yaml:"log_delete_after_days"`
 	LogConsole         bool   `yaml:"log_console"`
-	TraceLogFile       string `yaml:"trace_log_file"`
-	TraceLogKeepDays   int    `yaml:"trace_log_keep_days"`
 
 	// TLS/Security Policy
 	RequireTLSControl bool                `yaml:"require_tls_control"` // Force TLS on control channel
@@ -578,8 +576,6 @@ func (c *Config) Rehash() (string, error) {
 	c.LogKeepDays = fresh.LogKeepDays
 	c.LogDeleteAfterDays = fresh.LogDeleteAfterDays
 	c.LogConsole = fresh.LogConsole
-	c.TraceLogFile = fresh.TraceLogFile
-	c.TraceLogKeepDays = fresh.TraceLogKeepDays
 
 	rehashHook := c.RehashHook
 	c.rehashMu.Unlock()

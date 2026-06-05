@@ -11,11 +11,6 @@ import (
 	"time"
 )
 
-var (
-	traceLoggerMu sync.RWMutex
-	traceLogger   *log.Logger
-)
-
 // rotatingLog is an io.Writer that writes to a file and rotates it daily.
 // The active file is always `<basePath>` (e.g. logs/goftpd.log). At midnight
 // (local time), the previous day's file is renamed to `<basePath>.YYYY-MM-DD`
@@ -250,33 +245,4 @@ func InstallConsoleLogger(debug bool) {
 		return
 	}
 	log.SetOutput(filteredConsoleWriter{target: os.Stderr})
-}
-
-func InstallTraceLogger(logFilePath string, deleteAfterDays int) error {
-	if strings.TrimSpace(logFilePath) == "" {
-		traceLoggerMu.Lock()
-		traceLogger = nil
-		traceLoggerMu.Unlock()
-		return nil
-	}
-	r, err := newRotatingLog(logFilePath, deleteAfterDays)
-	if err != nil {
-		return err
-	}
-	logger := log.New(r, "", log.LstdFlags)
-	traceLoggerMu.Lock()
-	traceLogger = logger
-	traceLoggerMu.Unlock()
-	Tracef("[TRACE] enabled: %s (delete after %d days)", logFilePath, deleteAfterDays)
-	return nil
-}
-
-func Tracef(format string, args ...any) {
-	traceLoggerMu.RLock()
-	l := traceLogger
-	traceLoggerMu.RUnlock()
-	if l == nil {
-		return
-	}
-	l.Printf(format, args...)
 }

@@ -2466,16 +2466,13 @@ func slavePolicyAccepts(policy SlaveRoutePolicy, section, uploadPath string) boo
 func (sm *SlaveManager) SelectSlaveForDownload(path string) *RemoteSlave {
 	file := sm.vfs.GetFile(path)
 	if file == nil {
-		core.Tracef("[RACETRACE] select-download path=%s result=missing_vfs_entry", path)
 		return nil
 	}
 
 	rs := sm.GetSlave(file.SlaveName)
 	if rs != nil && rs.IsAvailable() {
-		core.Tracef("[RACETRACE] select-download path=%s result=ok slave=%s size=%d is_dir=%t", path, file.SlaveName, file.Size, file.IsDir)
 		return rs
 	}
-	core.Tracef("[RACETRACE] select-download path=%s result=slave_unavailable slave=%s size=%d is_dir=%t", path, file.SlaveName, file.Size, file.IsDir)
 
 	return nil
 }
