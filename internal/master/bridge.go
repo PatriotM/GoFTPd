@@ -143,6 +143,10 @@ func (b *Bridge) GetLiveTransferStats() []core.LiveTransferStat {
 	return b.getLiveTransferStats(true)
 }
 
+func (b *Bridge) GetLiveTransferStatsFresh() []core.LiveTransferStat {
+	return b.getLiveTransferStats(false)
+}
+
 func (b *Bridge) getLiveTransferStats(useCache bool) []core.LiveTransferStat {
 	if b == nil {
 		return nil
