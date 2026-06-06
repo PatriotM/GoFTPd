@@ -1646,13 +1646,8 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
 					return false
 				}
-				if !strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
-					sfvEntries := bridge.GetSFVData(uploadDir)
-					if expectedCRC, exists := zipscript.CachedExpectedCRC(sfvEntries, fileName); exists {
-						zipscript.WriteUploadSFVStatus(s.Conn, checksum, expectedCRC, true, fileSize)
-					} else {
-						zipscript.WriteUploadNoSFVEntryStatus(s.Conn, sfvEntries, fileName)
-					}
+				if handleMasterUploadSFVStatusAndCleanup(s, bridge, uploadDir, filePath, fileName, checksum, fileSize) {
+					return false
 				}
 
 				mediaInfoDir := storReleaseMediaDir(uploadDir, filePath)
@@ -1742,13 +1737,8 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
 					return false
 				}
-				if !strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
-					sfvEntries := bridge.GetSFVData(uploadDir)
-					if expectedCRC, exists := zipscript.CachedExpectedCRC(sfvEntries, fileName); exists {
-						zipscript.WriteUploadSFVStatus(s.Conn, checksum, expectedCRC, true, fileSize)
-					} else {
-						zipscript.WriteUploadNoSFVEntryStatus(s.Conn, sfvEntries, fileName)
-					}
+				if handleMasterUploadSFVStatusAndCleanup(s, bridge, uploadDir, filePath, fileName, checksum, fileSize) {
+					return false
 				}
 
 				mediaInfoDir := storReleaseMediaDir(uploadDir, filePath)

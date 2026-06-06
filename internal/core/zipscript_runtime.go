@@ -383,6 +383,40 @@ func createMasterSFVMissingMarker(cfg *Config, bridge MasterBridge, dirPath, fil
 	}
 }
 
+func handleMasterUploadSFVStatusAndCleanup(s *Session, bridge MasterBridge, uploadDir, filePath, fileName string, checksum uint32, fileSize int64) bool {
+	if s == nil || s.Config == nil || bridge == nil || strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
+		return false
+	}
+
+	sfvEntries := bridge.GetSFVData(uploadDir)
+	expectedCRC, exists := zipscript.CachedExpectedCRC(sfvEntries, fileName)
+	if !exists {
+		zipscript.WriteUploadNoSFVEntryStatus(s.Conn, sfvEntries, fileName)
+		return false
+	}
+
+	zipscript.WriteUploadSFVStatus(s.Conn, checksum, expectedCRC, true, fileSize)
+	if checksum == expectedCRC && checksum != 0 {
+		clearMasterSFVMissingMarker(bridge, uploadDir, fileName)
+		return false
+	}
+
+	if checksum == 0 || expectedCRC == 0 || !zipscript.ShouldDeleteBadCRCForDir(s.Config.Zipscript, uploadDir) {
+		return false
+	}
+
+	if err := bridge.DeleteFile(filePath); err != nil && s.Config.Debug && !zipscript.IsNotFoundDeleteError(err) {
+		log.Printf("[MASTER-ZS] CRC mismatch delete failed for %s: %v", filePath, err)
+	}
+	_ = bridge.MarkFileMissing(filePath)
+	createMasterSFVMissingMarker(s.Config, bridge, uploadDir, fileName)
+	log.Printf("[MASTER-ZS] CRC mismatch for %s: got %08X, expected %08X - deleted before final 226",
+		fileName, checksum, expectedCRC)
+	fmt.Fprintf(s.Conn, "226- checksum mismatch: SLAVE: %08X SFV: %08X\r\n", checksum, expectedCRC)
+	fmt.Fprintf(s.Conn, "226 Checksum mismatch, deleting file\r\n")
+	return true
+}
+
 func handleMasterDownloadSFVChecksum(s *Session, bridge MasterBridge, filePath string, transferChecksum uint32) {
 	if s == nil || s.Config == nil || bridge == nil || transferChecksum == 0 {
 		return
