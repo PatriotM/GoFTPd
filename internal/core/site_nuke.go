@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path"
@@ -450,27 +451,45 @@ func (s *Session) masterBridge() (MasterBridge, bool) {
 }
 
 func (s *Session) resolveSiteDir(bridge MasterBridge, target string, wantNuked bool) (string, bool) {
+	return resolveSiteDirPath(s.Conn, s.CurrentDir, target, wantNuked, bridge.FileExists, bridge.SearchDirs)
+}
+
+func resolveSiteDirPath(w io.Writer, currentDir, target string, wantNuked bool, fileExists func(string) bool, searchDirs func(string, int) []VFSSearchResult) (string, bool) {
 	target = strings.TrimSpace(target)
 	if target == "" {
-		fmt.Fprintf(s.Conn, "550 Missing directory.\r\n")
+		writeSiteDirResolveError(w, "550 Missing directory.\r\n")
 		return "", false
 	}
+	absoluteTarget := strings.HasPrefix(target, "/")
 	candidate := target
-	if !strings.HasPrefix(candidate, "/") {
-		candidate = path.Join(s.CurrentDir, candidate)
+	if !absoluteTarget {
+		candidate = path.Join(currentDir, candidate)
 	}
 	candidate = path.Clean(candidate)
-	if bridge.FileExists(candidate) {
-		if s.dirNukeStateOK(candidate, wantNuked) {
+	if fileExists != nil && fileExists(candidate) {
+		if dirNukeStateOK(candidate, wantNuked) {
 			return candidate, true
 		}
+		if wantNuked {
+			writeSiteDirResolveError(w, "550 Directory is not nuked: %s\r\n", candidate)
+		} else {
+			writeSiteDirResolveError(w, "550 Directory is already nuked: %s\r\n", candidate)
+		}
+		return "", false
+	}
+	if absoluteTarget {
+		writeSiteDirResolveError(w, "550 Directory not found: %s\r\n", candidate)
+		return "", false
 	}
 
 	query := strings.TrimPrefix(path.Base(target), "[NUKED]-")
-	results := bridge.SearchDirs(query, siteSearchLimit)
+	var results []VFSSearchResult
+	if searchDirs != nil {
+		results = searchDirs(query, siteSearchLimit)
+	}
 	matches := make([]VFSSearchResult, 0, len(results))
 	for _, result := range results {
-		if !s.dirNukeStateOK(result.Path, wantNuked) {
+		if !dirNukeStateOK(result.Path, wantNuked) {
 			continue
 		}
 		base := path.Base(result.Path)
@@ -483,22 +502,33 @@ func (s *Session) resolveSiteDir(bridge MasterBridge, target string, wantNuked b
 		return path.Clean(matches[0].Path), true
 	}
 	if len(matches) == 0 {
-		fmt.Fprintf(s.Conn, "550 Directory not found. Try SITE SEARCH %s\r\n", query)
+		writeSiteDirResolveError(w, "550 Directory not found. Try SITE SEARCH %s\r\n", query)
 		return "", false
 	}
-	fmt.Fprintf(s.Conn, "550- Multiple matches for %s; use the full path:\r\n", query)
+	writeSiteDirResolveError(w, "550- Multiple matches for %s; use the full path:\r\n", query)
 	for i, match := range matches {
 		if i >= 10 {
-			fmt.Fprintf(s.Conn, "550- ... and %d more\r\n", len(matches)-i)
+			writeSiteDirResolveError(w, "550- ... and %d more\r\n", len(matches)-i)
 			break
 		}
-		fmt.Fprintf(s.Conn, "550- %s\r\n", match.Path)
+		writeSiteDirResolveError(w, "550- %s\r\n", match.Path)
 	}
-	fmt.Fprintf(s.Conn, "550 Ambiguous directory.\r\n")
+	writeSiteDirResolveError(w, "550 Ambiguous directory.\r\n")
 	return "", false
 }
 
 func (s *Session) dirNukeStateOK(dirPath string, wantNuked bool) bool {
+	return dirNukeStateOK(dirPath, wantNuked)
+}
+
+func dirNukeStateOK(dirPath string, wantNuked bool) bool {
 	isNuked := strings.HasPrefix(path.Base(dirPath), "[NUKED]-")
 	return isNuked == wantNuked
+}
+
+func writeSiteDirResolveError(w io.Writer, format string, args ...interface{}) {
+	if w == nil {
+		return
+	}
+	fmt.Fprintf(w, format, args...)
 }
