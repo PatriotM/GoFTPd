@@ -220,6 +220,71 @@ func TestWarnEmitsAutonukeWarnEvent(t *testing.T) {
 	}
 }
 
+func TestIncompleteWarningPersistsAcrossScans(t *testing.T) {
+	tmp := t.TempDir()
+	rel := releaseCandidate{
+		Path:    "/TV-1080P/Example.Release-GRP",
+		Name:    "Example.Release-GRP",
+		Section: "TV-1080P",
+		Owner:   "unknown",
+		ModTime: time.Now().Add(-2 * time.Hour).Unix(),
+	}
+
+	warnEvents := 0
+	h := &Handler{
+		cfg: config{
+			StateDir:         tmp,
+			NukedPrefix:      "[NUKED]-",
+			ApprovalMarkers:  []string{".approved"},
+			CheckCompleteDir: true,
+			Empty:            timedRule{Enabled: false},
+			HalfEmpty:        timedPayloadRule{timedRule: timedRule{Enabled: false}},
+			Incomplete: incompleteRule{
+				timedRule: timedRule{
+					Enabled:         true,
+					WarnEnabled:     true,
+					WarnAfterMin:    30,
+					NukeAfterMin:    240,
+					WarnTag:         "ANUKEINC",
+					WarnDescription: "Incomplete",
+					Reason:          "Incomplete",
+				},
+			},
+		},
+		svc: &plugin.Services{
+			Bridge: &testBridge{
+				entries: map[string][]plugin.FileEntry{
+					rel.Path: {
+						{Name: "present.mkv", IsDir: false},
+						{Name: "example.sfv", IsDir: false},
+					},
+				},
+				sfvData: map[string]map[string]uint32{
+					rel.Path: {
+						"present.mkv": 0,
+						"missing.r00": 0,
+					},
+				},
+			},
+			EmitEvent: func(eventType, path, filename, section string, size int64, speed float64, data map[string]string) {
+				if eventType == string(core.EventAutonukeWarn) {
+					warnEvents++
+				}
+			},
+		},
+	}
+
+	h.processRelease(rel)
+	h.processRelease(rel)
+
+	if warnEvents != 1 {
+		t.Fatalf("warn events = %d, want 1", warnEvents)
+	}
+	if _, err := os.Stat(h.warningFile(rel, "incomplete")); err != nil {
+		t.Fatalf("warning file missing after repeated scan: %v", err)
+	}
+}
+
 func TestPatternRulePathNormalizesWildcardSectionBase(t *testing.T) {
 	rules := patternRulesValue(map[string]interface{}{
 		"rules": []interface{}{

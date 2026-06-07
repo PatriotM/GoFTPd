@@ -383,6 +383,40 @@ func createMasterSFVMissingMarker(cfg *Config, bridge MasterBridge, dirPath, fil
 	}
 }
 
+func handleMasterUploadSFVStatusAndCleanup(s *Session, bridge MasterBridge, uploadDir, filePath, fileName string, checksum uint32, fileSize int64) bool {
+	if s == nil || s.Config == nil || bridge == nil || strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
+		return false
+	}
+
+	sfvEntries := bridge.GetSFVData(uploadDir)
+	expectedCRC, exists := zipscript.CachedExpectedCRC(sfvEntries, fileName)
+	if !exists {
+		zipscript.WriteUploadNoSFVEntryStatus(s.Conn, sfvEntries, fileName)
+		return false
+	}
+
+	zipscript.WriteUploadSFVStatus(s.Conn, checksum, expectedCRC, true, fileSize)
+	if checksum == expectedCRC && checksum != 0 {
+		clearMasterSFVMissingMarker(bridge, uploadDir, fileName)
+		return false
+	}
+
+	if checksum == 0 || expectedCRC == 0 || !zipscript.ShouldDeleteBadCRCForDir(s.Config.Zipscript, uploadDir) {
+		return false
+	}
+
+	if err := bridge.DeleteFile(filePath); err != nil && s.Config.Debug && !zipscript.IsNotFoundDeleteError(err) {
+		log.Printf("[MASTER-ZS] CRC mismatch delete failed for %s: %v", filePath, err)
+	}
+	_ = bridge.MarkFileMissing(filePath)
+	createMasterSFVMissingMarker(s.Config, bridge, uploadDir, fileName)
+	log.Printf("[MASTER-ZS] CRC mismatch for %s: got %08X, expected %08X - deleted before final 226",
+		fileName, checksum, expectedCRC)
+	fmt.Fprintf(s.Conn, "226- checksum mismatch: SLAVE: %08X SFV: %08X\r\n", checksum, expectedCRC)
+	fmt.Fprintf(s.Conn, "226 Checksum mismatch, deleting file\r\n")
+	return true
+}
+
 func handleMasterDownloadSFVChecksum(s *Session, bridge MasterBridge, filePath string, transferChecksum uint32) {
 	if s == nil || s.Config == nil || bridge == nil || transferChecksum == 0 {
 		return
@@ -1016,6 +1050,7 @@ func buildReleaseUploadPipelineState(s *Session, bridge MasterBridge, in release
 		if sfvInfo, err := bridge.GetSFVInfo(in.FilePath); err == nil {
 			log.Printf("[MASTER-ZS] Parsed SFV %s: %d entries", in.FileName, len(sfvInfo.Entries))
 			bridge.CacheSFV(in.UploadDir, in.FileName, sfvInfo)
+			verifyExistingPayloadsAfterSFVUpload(s.Config, bridge, in.UploadDir)
 		}
 	}
 	state.SFVEntries = bridge.GetSFVData(in.UploadDir)
@@ -1054,6 +1089,43 @@ func buildReleaseUploadPipelineState(s *Session, bridge MasterBridge, in release
 	state.RaceUsers, state.RaceGroups, state.RaceTotalBytes, state.RaceTotalFiles, state.RaceDurationMs, state.RaceComplete = computeReleaseRaceSnapshot(s, bridge, in, state.EventData)
 	state.ShouldAnnounceNR = shouldAnnounceNoRace(s.Config, in.UploadDir, append([]string(nil), in.ExistingNames...), in.FileName)
 	return state
+}
+
+func verifyExistingPayloadsAfterSFVUpload(cfg *Config, bridge MasterBridge, dirPath string) {
+	if cfg == nil || bridge == nil || !zipscript.ShouldDeleteBadCRCForDir(cfg.Zipscript, dirPath) {
+		return
+	}
+	sfvEntries := bridge.GetSFVData(dirPath)
+	if sfvEntries == nil {
+		return
+	}
+	for _, entry := range bridge.ListDir(dirPath) {
+		if entry.IsDir || entry.IsSymlink || strings.HasSuffix(strings.ToLower(entry.Name), ".sfv") {
+			continue
+		}
+		expectedCRC, exists := zipscript.CachedExpectedCRC(sfvEntries, entry.Name)
+		if !exists {
+			continue
+		}
+		filePath := path.Join(dirPath, entry.Name)
+		checksum, ok := bridge.GetKnownChecksum(filePath)
+		if !ok || checksum == 0 {
+			continue
+		}
+		if checksum == expectedCRC {
+			clearMasterSFVMissingMarker(bridge, dirPath, entry.Name)
+			continue
+		}
+		if err := bridge.DeleteFile(filePath); err != nil && !zipscript.IsNotFoundDeleteError(err) {
+			log.Printf("[MASTER-ZS] CRC mismatch after SFV for %s: got %08X, expected %08X - delete failed: %v",
+				entry.Name, checksum, expectedCRC, err)
+			continue
+		}
+		_ = bridge.MarkFileMissing(filePath)
+		createMasterSFVMissingMarker(cfg, bridge, dirPath, entry.Name)
+		log.Printf("[MASTER-ZS] CRC mismatch after SFV for %s: got %08X, expected %08X - deleted",
+			entry.Name, checksum, expectedCRC)
+	}
 }
 
 func computeReleaseRaceSnapshot(s *Session, bridge MasterBridge, in releaseUploadPipelineInput, data map[string]string) ([]VFSRaceUser, []VFSRaceGroup, int64, int, int64, bool) {

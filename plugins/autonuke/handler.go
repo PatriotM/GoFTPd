@@ -466,6 +466,7 @@ func (h *Handler) applyTimedRule(rel releaseCandidate, key string, rule timedRul
 	}
 	if rule.WarnEnabled && age >= rule.WarnAfterMin && rule.WarnAfterMin > 0 {
 		h.warn(rel, key, rule.WarnTag, rule.WarnDescription, rule.WarnAfterMin, rule.NukeAfterMin, detail)
+		return true
 	} else {
 		h.clearWarning(rel, key)
 	}
@@ -480,6 +481,7 @@ func (h *Handler) applyPatternRule(rel releaseCandidate, key string, rules timed
 	}
 	if rules.WarnEnabled && age >= rules.WarnAfterMin && rules.WarnAfterMin > 0 {
 		h.warn(rel, key, rules.WarnTag, rules.WarnDescription, rules.WarnAfterMin, rules.NukeAfterMin, detail)
+		return true
 	} else {
 		h.clearWarning(rel, key)
 	}

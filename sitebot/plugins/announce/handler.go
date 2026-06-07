@@ -626,6 +626,39 @@ func colorizeNukees(raw string) string {
 	return strings.Join(out, "\x0301, \x03")
 }
 
+func friendlyAutonukeLabel(tag, reason string) string {
+	switch strings.ToUpper(strings.TrimSpace(tag)) {
+	case "ANUKEINC":
+		return "AUTONUKE INCOMPLETE"
+	case "ANUKEEMPTY":
+		return "AUTONUKE EMPTY"
+	case "ANUKEHALF":
+		return "AUTONUKE HALF-EMPTY"
+	case "ANUKEBAN":
+		return "AUTONUKE BANNED"
+	}
+	if reason = strings.TrimSpace(reason); reason != "" {
+		return "AUTONUKE " + strings.ToUpper(reason)
+	}
+	return "AUTONUKE"
+}
+
+func humanizeAutonukeMessage(message, tag, reason string) string {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return ""
+	}
+	rawTag := strings.TrimSpace(tag)
+	if rawTag == "" {
+		return message
+	}
+	prefix := rawTag + ":"
+	if !strings.HasPrefix(message, prefix) {
+		return message
+	}
+	return friendlyAutonukeLabel(tag, reason) + ":" + strings.TrimPrefix(message, prefix)
+}
+
 func configInt(raw interface{}, fallback int) int {
 	switch v := raw.(type) {
 	case int:
@@ -960,6 +993,7 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 				message += " [" + detail + "]"
 			}
 		}
+		message = humanizeAutonukeMessage(message, vars["tag"], vars["reason"])
 		vars["message"] = message
 		outs = append(outs, plugin.Output{Type: "AUTONUKEWARN", Text: p.render("AUTONUKEWARN", vars, "WARN: "+message)})
 	case event.EventAutonukeDelete:

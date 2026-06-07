@@ -74,3 +74,27 @@ func TestCountTransfersForUserCountsByDirection(t *testing.T) {
 		t.Fatalf("countTransfersForUser(other) = %d, want 0", got)
 	}
 }
+
+func TestReserveUploadPathBlocksDuplicateUntilRelease(t *testing.T) {
+	filePath := "/UPLOAD/release/file.r00"
+	releaseUploadPath(filePath)
+
+	if !reserveUploadPath(filePath) {
+		t.Fatalf("first reservation should succeed")
+	}
+	if !activeUploadForPath(filePath) {
+		t.Fatalf("reserved upload path should be treated as active")
+	}
+	if reserveUploadPath(filePath) {
+		t.Fatalf("second reservation should be blocked")
+	}
+
+	releaseUploadPath(filePath)
+	if activeUploadForPath(filePath) {
+		t.Fatalf("released upload path should not be treated as active")
+	}
+	if !reserveUploadPath(filePath) {
+		t.Fatalf("reservation should succeed again after release")
+	}
+	releaseUploadPath(filePath)
+}

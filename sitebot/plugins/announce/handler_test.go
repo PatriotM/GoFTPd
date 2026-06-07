@@ -66,6 +66,8 @@ func TestAutonukeWarnAnnounceUsesMessage(t *testing.T) {
 		Path:    "/0DAY/Example.Release-GRP",
 		Data: map[string]string{
 			"relname": "Example.Release-GRP",
+			"tag":     "ANUKEINC",
+			"reason":  "Incomplete",
 			"message": "ANUKEINC: [0DAY] Example.Release-GRP owner=test0r warned after 30 seconds, nukes after 60 seconds",
 		},
 	})
@@ -78,7 +80,7 @@ func TestAutonukeWarnAnnounceUsesMessage(t *testing.T) {
 	if outs[0].Type != "AUTONUKEWARN" {
 		t.Fatalf("output type = %q, want AUTONUKEWARN", outs[0].Type)
 	}
-	if !strings.Contains(outs[0].Text, "ANUKEINC: [0DAY] Example.Release-GRP") {
+	if !strings.Contains(outs[0].Text, "AUTONUKE INCOMPLETE: [0DAY] Example.Release-GRP") {
 		t.Fatalf("warning output missing message: %q", outs[0].Text)
 	}
 }

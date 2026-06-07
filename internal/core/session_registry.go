@@ -2,6 +2,7 @@ package core
 
 import (
 	"net"
+	"path"
 	"sort"
 	"strings"
 	"sync"
@@ -31,8 +32,9 @@ type sessionSnapshot struct {
 }
 
 var (
-	nextSessionID  atomic.Uint64
-	activeSessions sync.Map
+	nextSessionID            atomic.Uint64
+	activeSessions           sync.Map
+	activeUploadReservations sync.Map
 )
 
 func registerSession(s *Session) uint64 {
@@ -43,6 +45,32 @@ func registerSession(s *Session) uint64 {
 
 func unregisterSession(id uint64) {
 	activeSessions.Delete(id)
+}
+
+func reserveUploadPath(filePath string) bool {
+	cleanPath := path.Clean(filePath)
+	if cleanPath == "." || cleanPath == "/" {
+		return false
+	}
+	_, loaded := activeUploadReservations.LoadOrStore(cleanPath, struct{}{})
+	return !loaded
+}
+
+func releaseUploadPath(filePath string) {
+	cleanPath := path.Clean(filePath)
+	if cleanPath == "." || cleanPath == "/" {
+		return
+	}
+	activeUploadReservations.Delete(cleanPath)
+}
+
+func uploadPathReserved(filePath string) bool {
+	cleanPath := path.Clean(filePath)
+	if cleanPath == "." || cleanPath == "/" {
+		return false
+	}
+	_, ok := activeUploadReservations.Load(cleanPath)
+	return ok
 }
 
 func listActiveSessions() []sessionSnapshot {
