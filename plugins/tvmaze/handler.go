@@ -202,6 +202,11 @@ type tvmEpisode struct {
 	Summary string `json:"summary"`
 }
 
+type tvmSearchResult struct {
+	Score float64 `json:"score"`
+	Show  tvmShow `json:"show"`
+}
+
 func (h *Handler) doLookup(j job) {
 	title, season, episode := parseTVName(j.relname)
 	if title == "" {
@@ -210,30 +215,18 @@ func (h *Handler) doLookup(j job) {
 	}
 	log.Printf("[TVMAZE] lookup %s (title=%q season=%d episode=%d)", j.relname, title, season, episode)
 
-	q := url.QueryEscape(title)
-	searchURL := fmt.Sprintf("https://api.tvmaze.com/singlesearch/shows?q=%s&embed=episodes", q)
-	resp, err := h.client.Get(searchURL)
+	show, err := h.lookupShow(title)
 	if err != nil {
 		log.Printf("[TVMAZE] search %q failed: %v", title, err)
 		return
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		log.Printf("[TVMAZE] search %q got HTTP %d", title, resp.StatusCode)
-		return
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return
-	}
-	var show tvmShow
-	if err := json.Unmarshal(body, &show); err != nil {
-		log.Printf("[TVMAZE] parse %q failed: %v", title, err)
-		return
-	}
-	if show.ID == 0 {
-		log.Printf("[TVMAZE] no show found for %q", title)
-		return
+
+	if show.ID > 0 {
+		if full, err := h.fetchShowWithEpisodes(show.ID); err == nil && full.ID > 0 {
+			show = full
+		} else if h.debug {
+			log.Printf("[TVMAZE] episode fetch %q failed: %v", title, err)
+		}
 	}
 
 	var ep *tvmEpisode
@@ -247,13 +240,63 @@ func (h *Handler) doLookup(j job) {
 		}
 	}
 
-	content := formatTVMazeFile(&show, ep, h.version)
+	content := formatTVMazeFile(show, ep, h.version)
 	filePath := path.Join(j.dirPath, ".tvmaze")
 	if err := h.svc.Bridge.WriteFile(filePath, []byte(content)); err != nil {
 		log.Printf("[TVMAZE] WriteFile %s failed: %v", filePath, err)
 		return
 	}
 	log.Printf("[TVMAZE] Wrote .tvmaze for %s", j.relname)
+}
+
+func (h *Handler) lookupShow(title string) (*tvmShow, error) {
+	q := url.QueryEscape(title)
+	searchURL := fmt.Sprintf("https://api.tvmaze.com/search/shows?q=%s", q)
+	resp, err := h.client.Get(searchURL)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	var results []tvmSearchResult
+	if err := json.Unmarshal(body, &results); err != nil {
+		return nil, err
+	}
+	if len(results) == 0 {
+		return nil, fmt.Errorf("no results")
+	}
+	show := selectBestTVMazeShow(results, title)
+	if show == nil {
+		return nil, fmt.Errorf("no safe match")
+	}
+	return show, nil
+}
+
+func (h *Handler) fetchShowWithEpisodes(id int) (*tvmShow, error) {
+	u := fmt.Sprintf("https://api.tvmaze.com/shows/%d?embed=episodes", id)
+	resp, err := h.client.Get(u)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	var show tvmShow
+	if err := json.Unmarshal(body, &show); err != nil {
+		return nil, err
+	}
+	return &show, nil
 }
 
 // =============================================================================
@@ -286,6 +329,110 @@ func parseTVName(rel string) (string, int, int) {
 		return strings.ReplaceAll(m[1], ".", " "), 0, 0
 	}
 	return strings.ReplaceAll(rel, ".", " "), 0, 0
+}
+
+func selectBestTVMazeShow(results []tvmSearchResult, query string) *tvmShow {
+	var best *tvmShow
+	bestScore := -1
+	for i := range results {
+		show := &results[i].Show
+		titleScore := titleSimilarityScore(query, show.Name)
+		if titleScore < 70 {
+			continue
+		}
+		score := titleScore
+		if results[i].Score > 0 {
+			score += int(results[i].Score * 5)
+		}
+		if score > bestScore {
+			best = show
+			bestScore = score
+		}
+	}
+	return best
+}
+
+func titleSimilarityScore(query, candidate string) int {
+	q := normalizeLookupTitle(query)
+	c := normalizeLookupTitle(candidate)
+	if q == "" || c == "" {
+		return 0
+	}
+	if q == c {
+		return 100
+	}
+	if strings.Contains(c, q) || strings.Contains(q, c) {
+		return 85
+	}
+
+	qTokens := strings.Fields(q)
+	cTokens := strings.Fields(c)
+	if len(qTokens) == 0 || len(cTokens) == 0 {
+		return 0
+	}
+	cSet := make(map[string]struct{}, len(cTokens))
+	for _, token := range cTokens {
+		cSet[token] = struct{}{}
+	}
+	cInitials := tokenInitials(cTokens)
+	common := 0
+	for _, token := range qTokens {
+		if _, ok := cSet[token]; ok {
+			common++
+			continue
+		}
+		if len(token) >= 2 && strings.Contains(cInitials, token) {
+			common++
+		}
+	}
+	queryCoverage := common * 100 / len(qTokens)
+	if queryCoverage >= 90 && common >= 2 {
+		return 90
+	}
+	maxTokens := len(qTokens)
+	if len(cTokens) > maxTokens {
+		maxTokens = len(cTokens)
+	}
+	return common * 100 / maxTokens
+}
+
+func tokenInitials(tokens []string) string {
+	var b strings.Builder
+	for _, token := range tokens {
+		if token != "" {
+			b.WriteByte(token[0])
+		}
+	}
+	return b.String()
+}
+
+var lookupTitleReplacer = strings.NewReplacer(
+	"ä", "ae", "ö", "oe", "ü", "ue", "ß", "ss",
+	"à", "a", "á", "a", "â", "a", "ã", "a", "å", "a",
+	"è", "e", "é", "e", "ê", "e", "ë", "e",
+	"ì", "i", "í", "i", "î", "i", "ï", "i",
+	"ò", "o", "ó", "o", "ô", "o", "õ", "o",
+	"ù", "u", "ú", "u", "û", "u",
+	"ç", "c", "ñ", "n",
+	"&", " and ",
+)
+
+func normalizeLookupTitle(s string) string {
+	s = lookupTitleReplacer.Replace(strings.ToLower(strings.TrimSpace(s)))
+	var b strings.Builder
+	lastSpace := false
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			lastSpace = false
+			continue
+		}
+		if !lastSpace {
+			b.WriteByte(' ')
+			lastSpace = true
+		}
+	}
+	return strings.Join(strings.Fields(b.String()), " ")
 }
 
 func formatTVMazeFile(show *tvmShow, ep *tvmEpisode, version string) string {

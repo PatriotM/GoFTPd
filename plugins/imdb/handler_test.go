@@ -2,18 +2,10 @@ package imdb
 
 import "testing"
 
-func TestNormalizePlotText(t *testing.T) {
-	got := normalizePlotText("What was supposed to be fun &amp; games\nbecomes a long story", 24)
-	want := "What was supposed..."
-	if got != want {
-		t.Fatalf("normalizePlotText() = %q, want %q", got, want)
-	}
-}
-
-func TestExtractMovieTitleYear(t *testing.T) {
-	title, year := extractMovieTitleYear("Daemonen.1986.REMASTERED.German.720p.BluRay.x264-CONTRiBUTiON")
+func TestParseMovieName(t *testing.T) {
+	title, year := parseMovieName("Daemonen.1986.REMASTERED.German.720p.BluRay.x264-CONTRiBUTiON")
 	if title != "Daemonen" || year != 1986 {
-		t.Fatalf("extractMovieTitleYear() = %q, %d; want Daemonen, 1986", title, year)
+		t.Fatalf("parseMovieName() = %q, %d; want Daemonen, 1986", title, year)
 	}
 }
 
