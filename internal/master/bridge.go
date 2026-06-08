@@ -32,6 +32,7 @@ type Bridge struct {
 	readFileCache          map[string]cachedReadFileResult
 	liveTransferStatsCache []core.LiveTransferStat
 	liveTransferStatsAt    time.Time
+	liveTransferStatsMu    sync.Mutex
 	transferSpeedPolicy    func(username, primaryGroup, transferPath, direction string) (int64, int64, int64)
 }
 
@@ -151,6 +152,19 @@ func (b *Bridge) getLiveTransferStats(useCache bool) []core.LiveTransferStat {
 	if b == nil {
 		return nil
 	}
+	if useCache {
+		b.cacheMu.Lock()
+		if !b.liveTransferStatsAt.IsZero() && time.Since(b.liveTransferStatsAt) < liveTransferStatsCacheTTL {
+			cached := append([]core.LiveTransferStat(nil), b.liveTransferStatsCache...)
+			b.cacheMu.Unlock()
+			return cached
+		}
+		b.cacheMu.Unlock()
+	}
+
+	b.liveTransferStatsMu.Lock()
+	defer b.liveTransferStatsMu.Unlock()
+
 	if useCache {
 		b.cacheMu.Lock()
 		if !b.liveTransferStatsAt.IsZero() && time.Since(b.liveTransferStatsAt) < liveTransferStatsCacheTTL {
