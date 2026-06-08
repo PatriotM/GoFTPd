@@ -231,6 +231,9 @@ func LoadConfig(filePath string) (*Config, error) {
 	if _, ok := raw["show_cwd_banner"]; !ok {
 		cfg.ShowCWDBanner = true
 	}
+	if _, ok := raw["dl_incomplete"]; !ok {
+		cfg.DLIncomplete = true
+	}
 	if err := resolvePluginConfigFiles(cfg.Mode, cfg.Plugins, filepath.Dir(filePath)); err != nil {
 		return nil, err
 	}
@@ -570,6 +573,7 @@ func (c *Config) Rehash() (string, error) {
 	c.MaxUsers = fresh.MaxUsers
 	c.MaxUsersPerIP = fresh.MaxUsersPerIP
 	c.TotalUsers = fresh.TotalUsers
+	c.DLIncomplete = fresh.DLIncomplete
 	// Debug toggle
 	c.Debug = fresh.Debug
 	c.LogFile = fresh.LogFile

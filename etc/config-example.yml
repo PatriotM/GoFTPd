@@ -317,6 +317,7 @@ tls_exempt_users:    []        # Optional plaintext bypass for trusted local use
 #  Limits + credits
 # =============================================================================
 creditcheck:     true           # Enforce user credit/ratio rules on downloads
+dl_incomplete:   true           # true = allow RETR while a file is still uploading; false = deny like DRFTPD denydownload
 free_space_mb:   2048           # Reject uploads when free space drops below this
 max_connections: 300            # Global concurrent FTP session cap
 

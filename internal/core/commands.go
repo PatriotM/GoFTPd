@@ -184,6 +184,11 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				var slaveName string
 				var err error
 				if s.PretCmd == "RETR" {
+					if activeUploadForPathWithBridge(bridge, targetPath) && !allowIncompleteDownload(s) {
+						log.Printf("[CPSV] Passthrough download delayed for user %s path %s: file is currently uploading", s.User.Name, targetPath)
+						fmt.Fprintf(s.Conn, "450 File is currently being uploaded; retry shortly.\r\n")
+						return false
+					}
 					slaveIP, port, xferIdx, slaveName, err = bridge.SlaveListenForDownloadPassthrough(targetPath, s.DataTLS, true)
 				} else {
 					slaveIP, port, xferIdx, slaveName, err = bridge.SlaveListenForPassthrough(targetPath, s.DataTLS, true)
@@ -892,6 +897,11 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					var slaveName string
 					var err error
 					if s.PretCmd == "RETR" {
+						if activeUploadForPathWithBridge(bridge, targetPath) && !allowIncompleteDownload(s) {
+							log.Printf("[PASV] Passthrough download delayed for user %s path %s: file is currently uploading", s.User.Name, targetPath)
+							fmt.Fprintf(s.Conn, "450 File is currently being uploaded; retry shortly.\r\n")
+							return false
+						}
 						slaveIP, port, xferIdx, slaveName, err = bridge.SlaveListenForDownloadPassthrough(targetPath, s.DataTLS, false)
 					} else {
 						slaveIP, port, xferIdx, slaveName, err = bridge.SlaveListenForPassthrough(targetPath, s.DataTLS, false)
@@ -1958,11 +1968,12 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 					fmt.Fprintf(s.Conn, "550 File not found on any slave.\r\n")
 					return false
 				}
-				if activeUploadForPathWithBridge(bridge, filePath) {
+				activeUpload := activeUploadForPathWithBridge(bridge, filePath)
+				if activeUpload && !allowIncompleteDownload(s) {
 					fmt.Fprintf(s.Conn, "550 No Permission To Download A File Currently Being Uploaded.\r\n")
 					return false
 				}
-				if s.Config != nil && zipscript.ShouldTreatDownloadAsMissing(s.Config.Zipscript, sfvBridge(bridge), filePath, log.Printf) {
+				if !activeUpload && s.Config != nil && zipscript.ShouldTreatDownloadAsMissing(s.Config.Zipscript, sfvBridge(bridge), filePath, log.Printf) {
 					fmt.Fprintf(s.Conn, "550 File is incomplete or failed checksum verification.\r\n")
 					return false
 				}
@@ -2122,11 +2133,12 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			return false
 		}
 		fileSize := info.Size()
-		if activeUploadForPath(filePath) {
+		activeUpload := activeUploadForPath(filePath)
+		if activeUpload && !allowIncompleteDownload(s) {
 			fmt.Fprintf(s.Conn, "550 No Permission To Download A File Currently Being Uploaded.\r\n")
 			return false
 		}
-		if zipscript.LocalShouldTreatDownloadAsMissing(s.Config.Zipscript, filePath, localPath) {
+		if !activeUpload && zipscript.LocalShouldTreatDownloadAsMissing(s.Config.Zipscript, filePath, localPath) {
 			fmt.Fprintf(s.Conn, "550 File is incomplete or failed checksum verification.\r\n")
 			return false
 		}
@@ -2767,6 +2779,10 @@ func activeUploadForPath(filePath string) bool {
 		}
 	}
 	return false
+}
+
+func allowIncompleteDownload(s *Session) bool {
+	return s != nil && s.Config != nil && s.Config.DLIncomplete
 }
 
 func activeUploadForPathWithBridge(bridge MasterBridge, filePath string) bool {
