@@ -60,7 +60,8 @@ type tvmazeShow struct {
 }
 
 type tvmazeSearchResult struct {
-	Show tvmazeShow `json:"show"`
+	Score float64    `json:"score"`
+	Show  tvmazeShow `json:"show"`
 }
 
 func New() *TVMazePlugin {
@@ -174,8 +175,115 @@ func (p *TVMazePlugin) lookup(query string) (*tvmazeShow, error) {
 	if len(results) == 0 {
 		return nil, fmt.Errorf("no results")
 	}
-	s := results[0].Show
-	return &s, nil
+	show := selectBestTVMazeShow(results, query)
+	if show == nil {
+		return nil, fmt.Errorf("no safe match")
+	}
+	return show, nil
+}
+
+func selectBestTVMazeShow(results []tvmazeSearchResult, query string) *tvmazeShow {
+	var best *tvmazeShow
+	bestScore := -1
+	for i := range results {
+		show := &results[i].Show
+		titleScore := titleSimilarityScore(query, show.Name)
+		if titleScore < 70 {
+			continue
+		}
+		score := titleScore
+		if results[i].Score > 0 {
+			score += int(results[i].Score * 5)
+		}
+		if score > bestScore {
+			best = show
+			bestScore = score
+		}
+	}
+	return best
+}
+
+func titleSimilarityScore(query, candidate string) int {
+	q := normalizeLookupTitle(query)
+	c := normalizeLookupTitle(candidate)
+	if q == "" || c == "" {
+		return 0
+	}
+	if q == c {
+		return 100
+	}
+	if strings.Contains(c, q) || strings.Contains(q, c) {
+		return 85
+	}
+
+	qTokens := strings.Fields(q)
+	cTokens := strings.Fields(c)
+	if len(qTokens) == 0 || len(cTokens) == 0 {
+		return 0
+	}
+	cSet := make(map[string]struct{}, len(cTokens))
+	for _, token := range cTokens {
+		cSet[token] = struct{}{}
+	}
+	cInitials := tokenInitials(cTokens)
+	common := 0
+	for _, token := range qTokens {
+		if _, ok := cSet[token]; ok {
+			common++
+			continue
+		}
+		if len(token) >= 2 && strings.Contains(cInitials, token) {
+			common++
+		}
+	}
+	queryCoverage := common * 100 / len(qTokens)
+	if queryCoverage >= 90 && common >= 2 {
+		return 90
+	}
+	maxTokens := len(qTokens)
+	if len(cTokens) > maxTokens {
+		maxTokens = len(cTokens)
+	}
+	return common * 100 / maxTokens
+}
+
+func tokenInitials(tokens []string) string {
+	var b strings.Builder
+	for _, token := range tokens {
+		if token != "" {
+			b.WriteByte(token[0])
+		}
+	}
+	return b.String()
+}
+
+var lookupTitleReplacer = strings.NewReplacer(
+	"ä", "ae", "ö", "oe", "ü", "ue", "ß", "ss",
+	"à", "a", "á", "a", "â", "a", "ã", "a", "å", "a",
+	"è", "e", "é", "e", "ê", "e", "ë", "e",
+	"ì", "i", "í", "i", "î", "i", "ï", "i",
+	"ò", "o", "ó", "o", "ô", "o", "õ", "o",
+	"ù", "u", "ú", "u", "û", "u",
+	"ç", "c", "ñ", "n",
+	"&", " and ",
+)
+
+func normalizeLookupTitle(s string) string {
+	s = lookupTitleReplacer.Replace(strings.ToLower(strings.TrimSpace(s)))
+	var b strings.Builder
+	lastSpace := false
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			lastSpace = false
+			continue
+		}
+		if !lastSpace {
+			b.WriteByte(' ')
+			lastSpace = true
+		}
+	}
+	return strings.Join(strings.Fields(b.String()), " ")
 }
 
 func (p *TVMazePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
@@ -330,5 +438,3 @@ func (p *TVMazePlugin) sectionColor(section string, slot int) string {
 	}
 	return fallback
 }
-
-

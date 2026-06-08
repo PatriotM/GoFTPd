@@ -262,20 +262,9 @@ func (p *IMDBPlugin) lookup(title string, year int) (*imdbTitle, error) {
 		return nil, fmt.Errorf("no results")
 	}
 
-	// Prefer exact year match on a movie-type title; fall back to first result.
-	var best *imdbTitle
-	for i := range sr.Titles {
-		t := &sr.Titles[i]
-		if year > 0 && t.StartYear == year && strings.EqualFold(t.Type, "movie") {
-			best = t
-			break
-		}
-		if best == nil && strings.EqualFold(t.Type, "movie") {
-			best = t
-		}
-	}
+	best := selectBestIMDBTitle(sr.Titles, title, year)
 	if best == nil {
-		best = &sr.Titles[0]
+		return nil, fmt.Errorf("no safe match")
 	}
 
 	// Search results don't include genres/plot/runtime/countries/languages.
@@ -288,6 +277,147 @@ func (p *IMDBPlugin) lookup(title string, year int) (*imdbTitle, error) {
 		}
 	}
 	return best, nil
+}
+
+func selectBestIMDBTitle(titles []imdbTitle, query string, year int) *imdbTitle {
+	var best *imdbTitle
+	bestScore := -1
+	for i := range titles {
+		t := &titles[i]
+		if !isMovieLikeIMDBType(t.Type) {
+			continue
+		}
+		titleScore := titleSimilarityScore(query, t.PrimaryTitle)
+		if originalScore := titleSimilarityScore(query, t.OriginalTitle); originalScore > titleScore {
+			titleScore = originalScore
+		}
+		if titleScore < 70 {
+			continue
+		}
+
+		score := titleScore
+		if year > 0 {
+			if t.StartYear <= 0 {
+				continue
+			}
+			delta := absInt(t.StartYear - year)
+			switch {
+			case delta == 0:
+				score += 40
+			case delta == 1 && titleScore >= 95:
+				score += 10
+			default:
+				continue
+			}
+		}
+		if strings.EqualFold(t.Type, "movie") {
+			score += 10
+		}
+		if score > bestScore {
+			best = t
+			bestScore = score
+		}
+	}
+	return best
+}
+
+func isMovieLikeIMDBType(t string) bool {
+	switch strings.ToLower(strings.ReplaceAll(strings.TrimSpace(t), " ", "")) {
+	case "movie", "tvmovie", "video", "short":
+		return true
+	default:
+		return false
+	}
+}
+
+func titleSimilarityScore(query, candidate string) int {
+	q := normalizeLookupTitle(query)
+	c := normalizeLookupTitle(candidate)
+	if q == "" || c == "" {
+		return 0
+	}
+	if q == c {
+		return 100
+	}
+	if strings.Contains(c, q) || strings.Contains(q, c) {
+		return 85
+	}
+
+	qTokens := strings.Fields(q)
+	cTokens := strings.Fields(c)
+	if len(qTokens) == 0 || len(cTokens) == 0 {
+		return 0
+	}
+	cSet := make(map[string]struct{}, len(cTokens))
+	for _, token := range cTokens {
+		cSet[token] = struct{}{}
+	}
+	cInitials := tokenInitials(cTokens)
+	common := 0
+	for _, token := range qTokens {
+		if _, ok := cSet[token]; ok {
+			common++
+			continue
+		}
+		if len(token) >= 2 && strings.Contains(cInitials, token) {
+			common++
+		}
+	}
+	queryCoverage := common * 100 / len(qTokens)
+	if queryCoverage >= 90 && common >= 2 {
+		return 90
+	}
+	maxTokens := len(qTokens)
+	if len(cTokens) > maxTokens {
+		maxTokens = len(cTokens)
+	}
+	return common * 100 / maxTokens
+}
+
+func tokenInitials(tokens []string) string {
+	var b strings.Builder
+	for _, token := range tokens {
+		if token != "" {
+			b.WriteByte(token[0])
+		}
+	}
+	return b.String()
+}
+
+var lookupTitleReplacer = strings.NewReplacer(
+	"ä", "ae", "ö", "oe", "ü", "ue", "ß", "ss",
+	"à", "a", "á", "a", "â", "a", "ã", "a", "å", "a",
+	"è", "e", "é", "e", "ê", "e", "ë", "e",
+	"ì", "i", "í", "i", "î", "i", "ï", "i",
+	"ò", "o", "ó", "o", "ô", "o", "õ", "o",
+	"ù", "u", "ú", "u", "û", "u",
+	"ç", "c", "ñ", "n",
+	"&", " and ",
+)
+
+func normalizeLookupTitle(s string) string {
+	s = lookupTitleReplacer.Replace(strings.ToLower(strings.TrimSpace(s)))
+	var b strings.Builder
+	lastSpace := false
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			lastSpace = false
+			continue
+		}
+		if !lastSpace {
+			b.WriteByte(' ')
+			lastSpace = true
+		}
+	}
+	return strings.Join(strings.Fields(b.String()), " ")
+}
+
+func absInt(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
 }
 
 // fetchDetails hits /titles/{id} for the full title record.
