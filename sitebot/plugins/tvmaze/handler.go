@@ -42,32 +42,19 @@ type tvmazeJob struct {
 	data    map[string]string
 }
 
-type tvmazeReleaseQuery struct {
-	Title       string
-	Year        string
-	CountryCode string
-}
-
 type tvmazeShow struct {
-	Name      string   `json:"name"`
-	Language  string   `json:"language"`
-	Genres    []string `json:"genres"`
-	Type      string   `json:"type"`
-	Premiered string   `json:"premiered"`
-	Rating    struct {
+	Name     string   `json:"name"`
+	Language string   `json:"language"`
+	Genres   []string `json:"genres"`
+	Type     string   `json:"type"`
+	Rating   struct {
 		Average float64 `json:"average"`
 	} `json:"rating"`
 	Network struct {
-		Name    string `json:"name"`
-		Country struct {
-			Code string `json:"code"`
-		} `json:"country"`
+		Name string `json:"name"`
 	} `json:"network"`
 	WebChannel struct {
-		Name    string `json:"name"`
-		Country struct {
-			Code string `json:"code"`
-		} `json:"country"`
+		Name string `json:"name"`
 	} `json:"webChannel"`
 	URL string `json:"url"`
 }
@@ -147,39 +134,14 @@ func isReleaseDirName(rel string) bool {
 // extractShowName parses a release name and returns a query title.
 // e.g. "Fire.Country.S04E15.1080p.WEB.h264-ETHEL" -> "Fire Country"
 func extractShowName(rel string) string {
-	return extractTVMazeReleaseQuery(rel).Title
-}
-
-func extractTVMazeReleaseQuery(rel string) tvmazeReleaseQuery {
 	if idx := strings.LastIndex(rel, "-"); idx > 0 {
 		rel = rel[:idx]
 	}
-	query := tvmazeReleaseQuery{}
-	titlePart := rel
-	if loc := regexp.MustCompile(`(?i)(^|[.\s])(S(\d+)\.?(?:E(\d+))?)`).FindStringSubmatchIndex(rel); loc != nil {
-		titlePart = strings.TrimRight(rel[:loc[2]], ". ")
-	} else if loc := regexp.MustCompile(`(?i)(^|[.\s])((\d+)x(\d+))`).FindStringSubmatchIndex(rel); loc != nil {
-		titlePart = strings.TrimRight(rel[:loc[2]], ". ")
-	} else if loc := regexp.MustCompile(`(?i)(^|[.\s])(Season\.?\d+|(?:19|20)\d{2})([.\s]|$)`).FindStringSubmatchIndex(rel); loc != nil {
-		titlePart = strings.TrimRight(rel[:loc[2]], ". ")
+	re := regexp.MustCompile(`(?i)\.(S\d{1,2}(E\d{1,3})?|Season\.?\d+|\d{4})\.`)
+	if loc := re.FindStringIndex(rel); loc != nil {
+		rel = rel[:loc[0]]
 	}
-	filterCut := len(titlePart)
-	if loc := regexp.MustCompile(`(?i)(^|[.\s])((?:19|20)\d{2})([.\s]|$)`).FindStringSubmatchIndex(titlePart); loc != nil {
-		query.Year = titlePart[loc[4]:loc[5]]
-		filterCut = min(filterCut, loc[4])
-	}
-	if loc := regexp.MustCompile(`(?i)(^|[.\s])(UK|GB|US|CA|AU)([.\s]|$)`).FindStringSubmatchIndex(titlePart); loc != nil {
-		query.CountryCode = strings.ToUpper(titlePart[loc[4]:loc[5]])
-		if query.CountryCode == "UK" {
-			query.CountryCode = "GB"
-		}
-		filterCut = min(filterCut, loc[4])
-	}
-	if filterCut < len(titlePart) {
-		titlePart = strings.TrimRight(titlePart[:filterCut], ". ")
-	}
-	query.Title = strings.Join(strings.Fields(strings.ReplaceAll(titlePart, ".", " ")), " ")
-	return query
+	return strings.ReplaceAll(rel, ".", " ")
 }
 
 func (p *TVMazePlugin) sectionMatches(section string) bool {
@@ -192,7 +154,7 @@ func (p *TVMazePlugin) sectionMatches(section string) bool {
 	return false
 }
 
-func (p *TVMazePlugin) lookup(query, year, countryCode string) (*tvmazeShow, error) {
+func (p *TVMazePlugin) lookup(query string) (*tvmazeShow, error) {
 	u := "https://api.tvmaze.com/search/shows?q=" + url.QueryEscape(query)
 	resp, err := p.client.Get(u)
 	if err != nil {
@@ -213,44 +175,32 @@ func (p *TVMazePlugin) lookup(query, year, countryCode string) (*tvmazeShow, err
 	if len(results) == 0 {
 		return nil, fmt.Errorf("no results")
 	}
-	show := selectBestTVMazeShow(results, query, tvmazeMatchCriteria{Year: year, CountryCode: countryCode})
+	show := selectBestTVMazeShow(results, query)
 	if show == nil {
-		return nil, fmt.Errorf("no show matched search criteria")
+		return nil, fmt.Errorf("no safe match")
 	}
 	return show, nil
 }
 
-type tvmazeMatchCriteria struct {
-	Year        string
-	CountryCode string
-}
-
-func selectBestTVMazeShow(results []tvmazeSearchResult, query string, criteriaList ...tvmazeMatchCriteria) *tvmazeShow {
-	criteria := tvmazeMatchCriteria{}
-	if len(criteriaList) > 0 {
-		criteria = criteriaList[0]
-	}
+func selectBestTVMazeShow(results []tvmazeSearchResult, query string) *tvmazeShow {
+	var best *tvmazeShow
+	bestScore := -1
 	for i := range results {
 		show := &results[i].Show
-		if criteria.Year != "" && !strings.HasPrefix(show.Premiered, criteria.Year) {
+		titleScore := titleSimilarityScore(query, show.Name)
+		if titleScore < 70 {
 			continue
 		}
-		if criteria.CountryCode != "" && !strings.EqualFold(showCountryCode(show), criteria.CountryCode) {
-			continue
+		score := titleScore
+		if results[i].Score > 0 {
+			score += int(results[i].Score * 5)
 		}
-		return show
+		if score > bestScore {
+			best = show
+			bestScore = score
+		}
 	}
-	return nil
-}
-
-func showCountryCode(show *tvmazeShow) string {
-	if show == nil {
-		return ""
-	}
-	if show.Network.Country.Code != "" {
-		return show.Network.Country.Code
-	}
-	return show.WebChannel.Country.Code
+	return best
 }
 
 func titleSimilarityScore(query, candidate string) int {
@@ -320,7 +270,6 @@ var lookupTitleReplacer = strings.NewReplacer(
 
 func normalizeLookupTitle(s string) string {
 	s = lookupTitleReplacer.Replace(strings.ToLower(strings.TrimSpace(s)))
-	s = strings.NewReplacer("'", "", "\u2019", "", "`", "").Replace(s)
 	var b strings.Builder
 	lastSpace := false
 	for _, r := range s {
@@ -388,14 +337,14 @@ func (p *TVMazePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 // Runs on the plugin's worker goroutine — can block on HTTP without stalling
 // the bot's main event loop.
 func (p *TVMazePlugin) doLookup(job tvmazeJob) {
-	query := extractTVMazeReleaseQuery(job.rel)
-	if query.Title == "" {
+	query := extractShowName(job.rel)
+	if query == "" {
 		return
 	}
-	show, err := p.lookup(query.Title, query.Year, query.CountryCode)
+	show, err := p.lookup(query)
 	if err != nil {
 		if p.debug {
-			log.Printf("[TVMaze] lookup %q failed: %v", query.Title, err)
+			log.Printf("[TVMaze] lookup %q failed: %v", query, err)
 		}
 		return
 	}

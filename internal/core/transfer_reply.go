@@ -54,14 +54,6 @@ func describeTransferFailure(err error) string {
 		return "a different host than the announced data peer connected to the prepared socket"
 	case strings.Contains(lower, "unexpected response from slave"):
 		return "slave returned an unexpected async response"
-	case strings.Contains(lower, "file has no owning slave yet"):
-		return "file exists in VFS but has not been assigned to an online slave yet"
-	case strings.Contains(lower, "owning slave") && strings.Contains(lower, "unavailable"):
-		return "file exists in VFS but its owning slave is not currently available"
-	case strings.Contains(lower, "owning slave") && strings.Contains(lower, "not registered"):
-		return "file exists in VFS but its owning slave is not registered"
-	case strings.Contains(lower, "file not found in vfs"):
-		return "file was requested before it was visible in the master VFS"
 	case strings.Contains(lower, "file not found on any available slave"):
 		return "file was requested before it was available on any online slave"
 	case strings.Contains(lower, "receive ack:") && strings.Contains(lower, "file not found:"):

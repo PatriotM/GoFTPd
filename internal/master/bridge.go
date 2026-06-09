@@ -569,7 +569,6 @@ func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group s
 		slaveConn.Close()
 		return 0, 0, fmt.Errorf("receive ack: %w", err)
 	}
-	b.noteUploadStarted(filePath, slave, owner, group, position)
 
 	// Bridge: client -> slave. The slave calculates and returns the authoritative CRC.
 	bridgeStart := time.Now()
@@ -621,7 +620,6 @@ func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group s
 		SlaveName:    slave.Name(),
 		Owner:        owner,
 		Group:        group,
-		Seen:         true,
 		XferTime:     xferTime,
 		Checksum:     checksum,
 	})
@@ -641,22 +639,6 @@ func finalUploadFileSize(status protocol.TransferStatus, position int64) int64 {
 	return status.Transferred
 }
 
-func (b *Bridge) noteUploadStarted(filePath string, slave *RemoteSlave, owner, group string, position int64) {
-	if b == nil || b.sm == nil || b.sm.GetVFS() == nil || slave == nil || position > 0 {
-		return
-	}
-	b.sm.GetVFS().AddFile(filePath, VFSFile{
-		Path:         filePath,
-		Size:         0,
-		IsDir:        false,
-		LastModified: time.Now().Unix(),
-		SlaveName:    slave.Name(),
-		Owner:        owner,
-		Group:        group,
-		Seen:         true,
-	})
-}
-
 func (b *Bridge) recordUploadMetadata(filePath, owner, group string, size int64, durationMs int64, checksum uint32) {
 	if b == nil || b.raceDB == nil || size <= 0 || durationMs <= 0 {
 		return
@@ -664,31 +646,6 @@ func (b *Bridge) recordUploadMetadata(filePath, owner, group string, size int64,
 	if err := b.raceDB.RecordUpload(filepath.Clean(filePath), owner, group, size, durationMs, checksum); err != nil {
 		log.Printf("[Bridge] Race DB record upload failed for %s: %v", filePath, err)
 	}
-}
-
-func (b *Bridge) slaveForDownload(filePath string) (*RemoteSlave, error) {
-	if b == nil || b.sm == nil || b.sm.GetVFS() == nil {
-		return nil, fmt.Errorf("download bridge is not ready for %s", filePath)
-	}
-	file := b.sm.GetVFS().GetFile(filePath)
-	if file == nil {
-		return nil, fmt.Errorf("file not found in VFS: %s", filePath)
-	}
-	if file.IsDir {
-		return nil, fmt.Errorf("download target is a directory: %s", filePath)
-	}
-	slaveName := strings.TrimSpace(file.SlaveName)
-	if slaveName == "" {
-		return nil, fmt.Errorf("file has no owning slave yet: %s", filePath)
-	}
-	slave := b.sm.GetSlave(slaveName)
-	if slave == nil {
-		return nil, fmt.Errorf("owning slave %s is not registered for %s", slaveName, filePath)
-	}
-	if !slave.IsAvailable() {
-		return nil, fmt.Errorf("owning slave %s is unavailable for %s", slaveName, filePath)
-	}
-	return slave, nil
 }
 
 // DownloadFile routes a download from a slave to the FTP client.
@@ -700,9 +657,9 @@ func (b *Bridge) slaveForDownload(filePath string) (*RemoteSlave, error) {
 //  4. Tell slave to SEND the file
 //  5. Bridge data: read from slave, write to clientData
 func (b *Bridge) DownloadFile(filePath string, clientData net.Conn, username, primaryGroup string, position int64, transferType byte) (uint32, error) {
-	slave, err := b.slaveForDownload(filePath)
-	if err != nil {
-		return 0, err
+	slave := b.sm.SelectSlaveForDownload(filePath)
+	if slave == nil {
+		return 0, fmt.Errorf("file not found on any available slave: %s", filePath)
 	}
 
 	slave.IncActiveTransfers()
@@ -2387,9 +2344,9 @@ func (b *Bridge) SlaveListenForPassthrough(uploadPath string, encrypted bool, ss
 // SlaveListenForDownloadPassthrough asks the slave that owns filePath to open
 // a listener for direct client download.
 func (b *Bridge) SlaveListenForDownloadPassthrough(filePath string, encrypted bool, sslClientMode bool) (string, int, int32, string, error) {
-	slave, err := b.slaveForDownload(filePath)
-	if err != nil {
-		return "", 0, 0, "", err
+	slave := b.sm.SelectSlaveForDownload(filePath)
+	if slave == nil {
+		return "", 0, 0, "", fmt.Errorf("file not found on any available slave: %s", filePath)
 	}
 
 	listenIdx, err := IssueListen(slave, encrypted, sslClientMode)
@@ -2432,7 +2389,6 @@ func (b *Bridge) SlaveReceivePassthrough(filePath string, transferIdx int32, sla
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("receive ack: %w", err)
 	}
-	b.noteUploadStarted(filePath, slave, owner, group, position)
 
 	// Wait for transfer to complete — poll the RemoteTransfer status
 	status, err := slave.WaitTransferStatus(transferIdx, 2*time.Hour)
@@ -2461,7 +2417,6 @@ func (b *Bridge) SlaveReceivePassthrough(filePath string, transferIdx int32, sla
 		SlaveName:    slaveName,
 		Owner:        owner,
 		Group:        group,
-		Seen:         true,
 		XferTime:     status.Elapsed,
 		Checksum:     finalChecksum,
 	})
@@ -2569,7 +2524,6 @@ func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group strin
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("receive ack: %w", err)
 	}
-	b.noteUploadStarted(filePath, slave, owner, group, position)
 
 	status, err := slave.WaitTransferStatus(transferResp.Info.TransferIndex, 2*time.Hour)
 	if err != nil {
@@ -2597,7 +2551,6 @@ func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group strin
 		SlaveName:    slave.Name(),
 		Owner:        owner,
 		Group:        group,
-		Seen:         true,
 		XferTime:     status.Elapsed,
 		Checksum:     finalChecksum,
 	})
@@ -2613,9 +2566,9 @@ func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group strin
 // SlaveConnectAndSend tells the owning slave to connect out to a remote address (PORT mode passthrough)
 // and send a file directly. The master only orchestrates the control flow.
 func (b *Bridge) SlaveConnectAndSend(filePath, remoteAddr, username, primaryGroup string, position int64, encrypted bool, sslClientMode bool, transferType byte, onReady core.TransferReadyFunc) (uint32, int64, error) {
-	slave, err := b.slaveForDownload(filePath)
-	if err != nil {
-		return 0, 0, err
+	slave := b.sm.SelectSlaveForDownload(filePath)
+	if slave == nil {
+		return 0, 0, fmt.Errorf("file not found on any available slave: %s", filePath)
 	}
 
 	slave.IncActiveTransfers()
