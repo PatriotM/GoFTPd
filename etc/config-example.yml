@@ -427,7 +427,7 @@ zipscript:
     restrict_files: true       # once an .sfv exists, payload files should be listed in it
     delete_bad_crc: true       # delete uploaded files that fail SFV CRC
     ignore_zero_size: true     # delete zero-byte uploads instead of keeping them
-    allow_resume: false        # allow REST resume for STOR / RETR when enabled
+    allow_resume: false        # allow REST resume for STOR uploads; RETR download resume is always allowed
     path_check: ["*"]          # scope where sfv-first is enforced
     path_ignore: ["/PRE/*", "/REQUESTS/*", "*/Subs", "*/Cover", "*/Covers", "/SPEEDTEST/*"] # paths excluded from sfv-first enforcement
     users: ["*"]               # users/groups affected by sfv-first; use ["!=SiteOP", "*"] to exempt a group

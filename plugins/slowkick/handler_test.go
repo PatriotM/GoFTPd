@@ -169,3 +169,56 @@ func TestValidateLoginReturnsRemainingSeconds(t *testing.T) {
 		t.Fatalf("expected retry hint in error, got %v", err)
 	}
 }
+
+func TestReloadConfigCanDisableSlowkick(t *testing.T) {
+	h := New()
+	h.svc = testServices()
+	h.setTempBan("tester", time.Now().Add(time.Minute))
+
+	if err := h.ReloadConfig(map[string]interface{}{
+		"enabled":          false,
+		"min_users_online": 0,
+	}); err != nil {
+		t.Fatalf("ReloadConfig failed: %v", err)
+	}
+
+	if _, _, _, ok := h.TransferSpeedPolicy("tester", "USERS", "/TV/release/file.r00", "upload"); ok {
+		t.Fatal("expected disabled slowkick to return no transfer policy")
+	}
+	if err := h.ValidateLogin(&user.User{Name: "tester", PrimaryGroup: "USERS"}, "127.0.0.1"); err != nil {
+		t.Fatalf("expected disabled slowkick to ignore tempban, got %v", err)
+	}
+}
+
+func TestReloadConfigCanClearDefaultExclusions(t *testing.T) {
+	h := New()
+	h.svc = testServices()
+
+	if _, _, _, ok := h.TransferSpeedPolicy("tester", "USERS", "/REQUESTS/Test/file.sfv", "upload"); ok {
+		t.Fatal("expected default request/sfv exclusions before reload")
+	}
+
+	if err := h.ReloadConfig(map[string]interface{}{
+		"monitor_uploads":         true,
+		"min_upload_speed_kbps":   5,
+		"min_users_online":        0,
+		"exclude_paths":           []interface{}{},
+		"exclude_extensions":      []interface{}{},
+		"tempban_after_kick":      false,
+		"verify_upload_seconds":   3,
+		"verify_download_seconds": 3,
+	}); err != nil {
+		t.Fatalf("ReloadConfig failed: %v", err)
+	}
+
+	minSpeed, _, grace, ok := h.TransferSpeedPolicy("tester", "USERS", "/REQUESTS/Test/file.sfv", "upload")
+	if !ok {
+		t.Fatal("expected cleared exclusions to allow upload policy")
+	}
+	if minSpeed != 5*1024 {
+		t.Fatalf("expected reloaded min speed 5120, got %d", minSpeed)
+	}
+	if grace != 3 {
+		t.Fatalf("expected reloaded grace 3, got %d", grace)
+	}
+}
