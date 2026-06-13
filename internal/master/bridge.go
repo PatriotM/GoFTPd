@@ -361,6 +361,9 @@ var _ plugin.MasterBridge = (*Bridge)(nil)
 // ListDir returns directory entries from the master's VFS.
 func (b *Bridge) ListDir(dirPath string) []core.MasterFileEntry {
 	vfsFiles := b.sm.GetVFS().ListDirectory(dirPath)
+	if b.repairZeroSizeListEntries(dirPath, vfsFiles) {
+		vfsFiles = b.sm.GetVFS().ListDirectory(dirPath)
+	}
 	entries := make([]core.MasterFileEntry, 0, len(vfsFiles)+3)
 	for _, f := range vfsFiles {
 		if f == nil {
@@ -373,6 +376,48 @@ func (b *Bridge) ListDir(dirPath string) []core.MasterFileEntry {
 		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
 	})
 	return entries
+}
+
+func (b *Bridge) repairZeroSizeListEntries(dirPath string, files []*VFSFile) bool {
+	if b == nil || b.raceDB == nil || b.sm == nil || b.sm.GetVFS() == nil {
+		return false
+	}
+
+	hasZeroSizeFile := false
+	for _, f := range files {
+		if f != nil && !f.IsDir && !f.IsSymlink && f.Size <= 0 {
+			hasZeroSizeFile = true
+			break
+		}
+	}
+	if !hasZeroSizeFile {
+		return false
+	}
+
+	records, err := b.raceDB.VerifiedPresentFiles(dirPath)
+	if err != nil {
+		log.Printf("[Bridge] race DB zero-size listing repair failed for %s: %v", dirPath, err)
+		return false
+	}
+	if len(records) == 0 {
+		return false
+	}
+
+	repaired := false
+	for _, f := range files {
+		if f == nil || f.IsDir || f.IsSymlink || f.Size > 0 {
+			continue
+		}
+		rec := records[raceDBFileKey(filepath.Base(f.Path))]
+		if rec.SizeBytes <= 0 {
+			continue
+		}
+		if b.sm.GetVFS().HydrateRaceFile(f.Path, rec.Owner, rec.Group, rec.SizeBytes, rec.DurationMs, rec.Checksum) {
+			repaired = true
+			b.invalidateReadFileCache(f.Path)
+		}
+	}
+	return repaired
 }
 
 func masterEntryFromVFSFile(f *VFSFile) core.MasterFileEntry {
@@ -639,6 +684,18 @@ func finalUploadFileSize(status protocol.TransferStatus, position int64) int64 {
 	return status.Transferred
 }
 
+func (b *Bridge) repairDownloadedFileSize(filePath string, sizeBytes int64) {
+	if b == nil || b.sm == nil || b.sm.GetVFS() == nil || sizeBytes <= 0 {
+		return
+	}
+	if !b.sm.GetVFS().UpdateFileTransferSize(filePath, sizeBytes) {
+		return
+	}
+	b.invalidateReadFileCache(filePath)
+	b.sm.InvalidateReleaseStateForPath(filePath, false)
+	b.sm.SyncStatusMarkersForPath(filePath, false)
+}
+
 func (b *Bridge) recordUploadMetadata(filePath, owner, group string, size int64, durationMs int64, checksum uint32) {
 	if b == nil || b.raceDB == nil || size <= 0 || durationMs <= 0 {
 		return
@@ -728,6 +785,7 @@ func (b *Bridge) DownloadFile(filePath string, clientData net.Conn, username, pr
 	if position > 0 {
 		return 0, nil
 	}
+	b.repairDownloadedFileSize(filePath, status.Transferred)
 	return status.Checksum, nil
 }
 
@@ -2464,6 +2522,7 @@ func (b *Bridge) SlaveSendPassthrough(filePath string, transferIdx int32, slaveN
 	if position > 0 {
 		return 0, status.Elapsed, nil
 	}
+	b.repairDownloadedFileSize(filePath, status.Transferred)
 	return status.Checksum, status.Elapsed, nil
 }
 
@@ -2626,5 +2685,6 @@ func (b *Bridge) SlaveConnectAndSend(filePath, remoteAddr, username, primaryGrou
 	if position > 0 {
 		return 0, status.Elapsed, nil
 	}
+	b.repairDownloadedFileSize(filePath, status.Transferred)
 	return status.Checksum, status.Elapsed, nil
 }

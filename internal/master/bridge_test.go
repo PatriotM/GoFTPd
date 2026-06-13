@@ -3,6 +3,7 @@ package master
 import (
 	"goftpd/internal/core"
 	"goftpd/internal/protocol"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -93,4 +94,54 @@ func TestReadFileMissingVFSEntryDoesNotProbeSlaves(t *testing.T) {
 	if _, err := bridge.ReadFile("/ARCHiVE/TV-1080P/.tvmaze"); err == nil {
 		t.Fatalf("expected missing VFS file to return an error")
 	}
+}
+
+func TestListDirRepairsZeroSizeFromVerifiedRaceDB(t *testing.T) {
+	const checksum = 0x12345678
+	const fullSize = int64(400000000)
+	releasePath := "/X265/Release.Name-GRP"
+	filePath := releasePath + "/release.name-grp.r15"
+
+	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60)
+	sm.GetVFS().AddFile(filePath, VFSFile{
+		Path:         filePath,
+		Size:         0,
+		IsDir:        false,
+		SlaveName:    "LOCAL",
+		Owner:        "GoFTPd",
+		Group:        "GoFTPd",
+		XferTime:     1000,
+		Checksum:     checksum,
+		LastModified: 1234,
+	})
+
+	raceDB, err := NewRaceDB(filepath.Join(t.TempDir(), "race.db"))
+	if err != nil {
+		t.Fatalf("new race DB: %v", err)
+	}
+	defer raceDB.Close()
+	if err := raceDB.SaveSFV(releasePath, "release.sfv", map[string]uint32{
+		"release.name-grp.r15": checksum,
+	}); err != nil {
+		t.Fatalf("save SFV: %v", err)
+	}
+	if err := raceDB.RecordUpload(filePath, "steel", "iND", fullSize, 2500, checksum); err != nil {
+		t.Fatalf("record upload: %v", err)
+	}
+
+	bridge := &Bridge{sm: sm, raceDB: raceDB, readFileCache: make(map[string]cachedReadFileResult)}
+	entries := bridge.ListDir(releasePath)
+	for _, entry := range entries {
+		if entry.Name != "release.name-grp.r15" {
+			continue
+		}
+		if entry.Size != fullSize {
+			t.Fatalf("listing size = %d, want %d", entry.Size, fullSize)
+		}
+		if entry.Owner != "steel" || entry.Group != "iND" {
+			t.Fatalf("listing owner/group = %s/%s, want steel/iND", entry.Owner, entry.Group)
+		}
+		return
+	}
+	t.Fatalf("expected listed file")
 }

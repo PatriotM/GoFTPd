@@ -361,6 +361,49 @@ func existingReleaseFilesTx(tx *sql.Tx, releaseID int64) (map[string]ReleaseFile
 	return out, nil
 }
 
+func (r *RaceDB) VerifiedPresentFiles(dirPath string) (map[string]ReleaseFileRecord, error) {
+	if r == nil || r.db == nil {
+		return nil, nil
+	}
+	dirPath = filepath.Clean(dirPath)
+	rows, err := r.db.Query(`
+        SELECT p.filename, p.uploader, p.grp, p.size_bytes, p.duration_ms, p.checksum
+        FROM releases r
+        JOIN release_files p
+          ON p.release_id = r.id
+        LEFT JOIN release_files e
+          ON e.release_id = p.release_id
+         AND e.is_expected = 1
+         AND e.filename = p.filename
+        WHERE r.path = ?
+          AND p.is_present = 1
+          AND p.duration_ms > 0
+          AND (e.id IS NULL OR p.checksum = e.expected_crc32)
+    `, dirPath)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string]ReleaseFileRecord)
+	for rows.Next() {
+		var rec ReleaseFileRecord
+		var checksum int64
+		if err := rows.Scan(&rec.FileName, &rec.Owner, &rec.Group, &rec.SizeBytes, &rec.DurationMs, &checksum); err != nil {
+			return nil, err
+		}
+		rec.FileName = raceDBFileKey(rec.FileName)
+		rec.Checksum = uint32(checksum)
+		if rec.FileName != "" {
+			out[rec.FileName] = rec
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func mergeRaceFileRecord(next, existing ReleaseFileRecord) ReleaseFileRecord {
 	if isWeakMetadataValue(next.Owner) && !isWeakMetadataValue(existing.Owner) {
 		next.Owner = existing.Owner

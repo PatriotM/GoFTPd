@@ -727,6 +727,26 @@ func TestVFSUpdateFileVerificationRefreshesRaceTruth(t *testing.T) {
 	}
 }
 
+func TestVFSUpdateFileTransferSizeRepairsStaleZeroListing(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/X265/release", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/X265/release/file.r15", VFSFile{Seen: true, Size: 0, Checksum: 1})
+
+	if !vfs.UpdateFileTransferSize("/X265/release/file.r15", 400000000) {
+		t.Fatalf("expected transfer size update to repair stale zero listing")
+	}
+	got := vfs.GetFile("/X265/release/file.r15")
+	if got == nil {
+		t.Fatalf("expected file to remain present")
+	}
+	if got.Size != 400000000 {
+		t.Fatalf("expected repaired size 400000000, got %d", got.Size)
+	}
+	if vfs.UpdateFileTransferSize("/X265/release/file.r15", 10) {
+		t.Fatalf("did not expect transfer size update to shrink existing size")
+	}
+}
+
 func TestVFSRaceStatsIgnoreVerifiedFilesWithoutXferTime(t *testing.T) {
 	vfs := NewVirtualFileSystem()
 	vfs.AddFile("/X265/release", VFSFile{IsDir: true, Seen: true})
@@ -1007,6 +1027,44 @@ func TestVFSHydrateRaceFileRestoresStrongerZipSize(t *testing.T) {
 	}
 	if got.Checksum != 0x12345678 || got.XferTime != 1500 {
 		t.Fatalf("expected hydrate to restore transfer metadata, checksum=%08X xfer=%d", got.Checksum, got.XferTime)
+	}
+}
+
+func TestVFSHydrateRaceFileRestoresZeroByteListingSize(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/X265/release", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/X265/release/release.sfv", VFSFile{Seen: true, Size: 10, Checksum: 123})
+	vfs.SetSFVDataWithChecksum("/X265/release", "release.sfv", 123, map[string]uint32{
+		"file.r15": 0x12345678,
+	})
+	vfs.AddFile("/X265/release/file.r15", VFSFile{
+		Seen:         true,
+		Size:         0,
+		Owner:        "GoFTPd",
+		Group:        "root",
+		XferTime:     1500,
+		Checksum:     0x12345678,
+		LastModified: 1,
+	})
+
+	_, _, _, present, total := vfs.GetRaceStats("/X265/release")
+	if present != 1 || total != 1 {
+		t.Fatalf("expected checksum metadata to make release complete before hydration, present=%d total=%d", present, total)
+	}
+
+	if !vfs.HydrateRaceFile("/X265/release/file.r15", "steel", "iND", 400000000, 1500, 0x12345678) {
+		t.Fatalf("expected hydrate to repair stale zero-byte listing size")
+	}
+
+	got := vfs.GetFile("/X265/release/file.r15")
+	if got == nil {
+		t.Fatalf("expected hydrated file to remain present")
+	}
+	if got.Size != 400000000 {
+		t.Fatalf("expected hydrate to restore listing size 400000000, got %d", got.Size)
+	}
+	if got.Checksum != 0x12345678 {
+		t.Fatalf("expected checksum to remain verified, got %08X", got.Checksum)
 	}
 }
 
