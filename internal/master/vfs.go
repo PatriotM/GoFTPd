@@ -211,6 +211,26 @@ func (vfs *VirtualFileSystem) UpdateFileVerification(path string, checksum uint3
 	return true
 }
 
+func (vfs *VirtualFileSystem) UpdateFileTransferSize(path string, sizeBytes int64) bool {
+	if sizeBytes <= 0 {
+		return false
+	}
+	vfs.mu.Lock()
+	defer vfs.mu.Unlock()
+
+	path = cleanVFSPath(path)
+	file := vfs.files[path]
+	if file == nil || file.IsDir {
+		return false
+	}
+	if sizeBytes <= file.Size {
+		return false
+	}
+	file.Size = sizeBytes
+	vfs.markPersistDirtyLocked()
+	return true
+}
+
 // ScrubReleaseRaceMetadata neutralizes a release tree after it moves out of a
 // private race area. Ownership is rewritten for listings, while transfer times
 // are cleared so CWD/STOR race stats no longer expose the original racers.
@@ -798,7 +818,7 @@ func (vfs *VirtualFileSystem) HydrateRaceFile(path, owner, group string, sizeByt
 		file.Group = group
 		changed = true
 	}
-	if sizeBytes > 0 && file.Size > 0 && file.XferTime <= 0 && file.Checksum == 0 && sizeBytes > file.Size {
+	if sizeBytes > 0 && sizeBytes > file.Size && (file.Size <= 0 || (file.XferTime <= 0 && file.Checksum == 0)) {
 		file.Size = sizeBytes
 		changed = true
 	}

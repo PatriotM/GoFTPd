@@ -1949,10 +1949,6 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 
 		if s.Config.Mode == "master" && s.MasterManager != nil {
 			if bridge, ok := s.MasterManager.(MasterBridge); ok {
-				if restOffset > 0 && !zipscript.AllowResumeForDir(s.Config.Zipscript, path.Dir(filePath)) {
-					fmt.Fprintf(s.Conn, "550 Resume is disabled for this release.\r\n")
-					return false
-				}
 				fileSize := bridge.GetFileSize(filePath)
 				if fileSize < 0 {
 					fmt.Fprintf(s.Conn, "550 File not found on any slave.\r\n")
@@ -2108,10 +2104,6 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		}
 
 		localPath := filepath.Join(s.Config.StoragePath, filepath.FromSlash(strings.TrimPrefix(filePath, "/")))
-		if restOffset > 0 && !zipscript.AllowResumeForDir(s.Config.Zipscript, path.Dir(filePath)) {
-			fmt.Fprintf(s.Conn, "550 Resume is disabled for this release.\r\n")
-			return false
-		}
 		info, err := os.Stat(localPath)
 		if err != nil {
 			fmt.Fprintf(s.Conn, "550 File not found.\r\n")
