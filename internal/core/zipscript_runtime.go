@@ -1063,10 +1063,15 @@ func buildReleaseUploadPipelineState(s *Session, bridge MasterBridge, in release
 		log.Printf("[MASTER-ZS] zip diz refresh skipped for %s: %v", in.FilePath, err)
 	}
 
-	state.HadAudioInfo = zipscript.AudioInfoLooksUsable(bridge.GetDirMediaInfo(in.UploadDir))
-	state.HadMediaInfo = releaseMediaInfoLooksUsable(bridge.GetDirMediaInfo(in.MediaInfoDir))
+	uploadMediaInfo := bridge.GetDirMediaInfo(in.UploadDir)
+	mediaInfoFields := uploadMediaInfo
+	if path.Clean(in.MediaInfoDir) != path.Clean(in.UploadDir) {
+		mediaInfoFields = bridge.GetDirMediaInfo(in.MediaInfoDir)
+	}
+	state.HadAudioInfo = zipscript.AudioInfoLooksUsable(uploadMediaInfo)
+	state.HadMediaInfo = releaseMediaInfoLooksUsable(mediaInfoFields)
 
-	audioFields, err := applyAudioZipscriptChecksForDir(s, bridge, in.UploadDir, in.FilePath, in.FileName)
+	audioFields, err := applyAudioZipscriptChecksForDirWithCached(s, bridge, in.UploadDir, in.FilePath, in.FileName, uploadMediaInfo)
 	if err != nil {
 		log.Printf("[MASTER-ZS] post-upload audio check failed for %s: %v", in.FilePath, err)
 	} else {
@@ -1499,10 +1504,17 @@ func applyAudioZipscriptChecks(s *Session, bridge MasterBridge, filePath, fileNa
 }
 
 func applyAudioZipscriptChecksForDir(s *Session, bridge MasterBridge, dirPath, filePath, fileName string) (map[string]string, error) {
+	return applyAudioZipscriptChecksForDirWithCached(s, bridge, dirPath, filePath, fileName, nil)
+}
+
+func applyAudioZipscriptChecksForDirWithCached(s *Session, bridge MasterBridge, dirPath, filePath, fileName string, cached map[string]string) (map[string]string, error) {
 	if !zipscript.AudioCheckEnabled(s.Config.Zipscript, dirPath, fileName) {
 		return nil, nil
 	}
-	if cached := bridge.GetDirMediaInfo(dirPath); zipscript.AudioInfoLooksUsable(cached) {
+	if cached == nil {
+		cached = bridge.GetDirMediaInfo(dirPath)
+	}
+	if zipscript.AudioInfoLooksUsable(cached) {
 		return cached, nil
 	}
 	fields, err := bridge.ProbeMediaInfo(filePath, "", 0)

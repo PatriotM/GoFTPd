@@ -1,6 +1,7 @@
 package slave
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
 	"fmt"
@@ -11,6 +12,18 @@ import (
 	"strings"
 	"unicode/utf16"
 )
+
+var mp3Bitrates = [4][16]int{
+	0: {0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0},
+	2: {0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0},
+	3: {0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0},
+}
+
+var mp3SampleRates = [4][3]int{
+	0: {11025, 12000, 8000},
+	2: {22050, 24000, 16000},
+	3: {44100, 48000, 32000},
+}
 
 func probeFastAudioMetadata(fullPath string) (map[string]string, bool, error) {
 	switch strings.ToLower(strings.TrimPrefix(filepath.Ext(fullPath), ".")) {
@@ -46,56 +59,9 @@ func probeMP3Metadata(fullPath string) (map[string]string, error) {
 		return nil, err
 	}
 
-	var bitrates []int
-	var sampleRate int
-	var channels string
-	var stereoMode string
-	var firstBitrate int
-
-	buf := make([]byte, 4)
-	if _, err := io.ReadFull(f, buf); err != nil {
+	firstBitrate, sampleRate, channels, stereoMode, bitrates, err := scanMP3Frames(f)
+	if err != nil {
 		return nil, err
-	}
-	pos := audioOffset
-	for scans := 0; scans < 1_000_000; scans++ {
-		h := binary.BigEndian.Uint32(buf)
-		br, sr, mode, frameLen, ok := parseMP3FrameHeader(h)
-		if ok {
-			firstBitrate = br
-			sampleRate = sr
-			channels, stereoMode = mp3ChannelsForMode(mode)
-			bitrates = append(bitrates, br)
-			pos += 4
-			if frameLen < 4 {
-				break
-			}
-			if _, err := f.Seek(int64(frameLen-4), io.SeekCurrent); err != nil {
-				break
-			}
-			pos += int64(frameLen - 4)
-			for len(bitrates) < 12 {
-				if _, err := io.ReadFull(f, buf); err != nil {
-					break
-				}
-				h = binary.BigEndian.Uint32(buf)
-				br, _, _, frameLen, ok = parseMP3FrameHeader(h)
-				if !ok || frameLen < 4 {
-					break
-				}
-				bitrates = append(bitrates, br)
-				if _, err := f.Seek(int64(frameLen-4), io.SeekCurrent); err != nil {
-					break
-				}
-			}
-			break
-		}
-		pos++
-		if _, err := f.Seek(pos, io.SeekStart); err != nil {
-			return nil, err
-		}
-		if _, err := io.ReadFull(f, buf); err != nil {
-			return nil, fmt.Errorf("no valid mp3 frame found")
-		}
 	}
 	if firstBitrate <= 0 || sampleRate <= 0 {
 		return nil, fmt.Errorf("no valid mp3 frame found")
@@ -124,9 +90,53 @@ func probeMP3Metadata(fullPath string) (map[string]string, error) {
 	fields["stereomode"] = stereoMode
 	fields["duration"] = fmt.Sprintf("%.0f", durationSeconds)
 	deriveMediaInfoFields(fields)
-	readID3v1Tags(fullPath, fields)
+	readID3v1Tags(f, info.Size(), fields)
 	deriveMediaInfoFields(fields)
 	return fields, nil
+}
+
+func scanMP3Frames(r io.Reader) (firstBitrate int, sampleRate int, channels string, stereoMode string, bitrates []int, err error) {
+	br := bufio.NewReaderSize(r, 64*1024)
+	var header [4]byte
+	if _, err := io.ReadFull(br, header[:]); err != nil {
+		return 0, 0, "", "", nil, err
+	}
+	for scans := 0; scans < 1_000_000; scans++ {
+		h := binary.BigEndian.Uint32(header[:])
+		bitrate, sr, mode, frameLen, ok := parseMP3FrameHeader(h)
+		if ok {
+			firstBitrate = bitrate
+			sampleRate = sr
+			channels, stereoMode = mp3ChannelsForMode(mode)
+			bitrates = append(bitrates, bitrate)
+			if frameLen >= 4 {
+				if _, skipErr := io.CopyN(io.Discard, br, int64(frameLen-4)); skipErr != nil {
+					return firstBitrate, sampleRate, channels, stereoMode, bitrates, nil
+				}
+			}
+			for len(bitrates) < 12 {
+				if _, err := io.ReadFull(br, header[:]); err != nil {
+					break
+				}
+				h = binary.BigEndian.Uint32(header[:])
+				bitrate, _, _, frameLen, ok = parseMP3FrameHeader(h)
+				if !ok || frameLen < 4 {
+					break
+				}
+				bitrates = append(bitrates, bitrate)
+				if _, err := io.CopyN(io.Discard, br, int64(frameLen-4)); err != nil {
+					break
+				}
+			}
+			return firstBitrate, sampleRate, channels, stereoMode, bitrates, nil
+		}
+		next, err := br.ReadByte()
+		if err != nil {
+			return 0, 0, "", "", nil, fmt.Errorf("no valid mp3 frame found")
+		}
+		header[0], header[1], header[2], header[3] = header[1], header[2], header[3], next
+	}
+	return 0, 0, "", "", nil, fmt.Errorf("no valid mp3 frame found")
 }
 
 func readID3v2Tags(f *os.File, fields map[string]string) (int64, error) {
@@ -188,18 +198,12 @@ func readID3v2Tags(f *os.File, fields map[string]string) (int64, error) {
 	return int64(10 + tagSize), nil
 }
 
-func readID3v1Tags(fullPath string, fields map[string]string) {
-	f, err := os.Open(fullPath)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil || info.Size() < 128 {
+func readID3v1Tags(f *os.File, fileSize int64, fields map[string]string) {
+	if f == nil || fileSize < 128 {
 		return
 	}
 	buf := make([]byte, 128)
-	if _, err := f.ReadAt(buf, info.Size()-128); err != nil {
+	if _, err := f.ReadAt(buf, fileSize-128); err != nil {
 		return
 	}
 	if string(buf[:3]) != "TAG" {
@@ -288,22 +292,11 @@ func parseMP3FrameHeader(h uint32) (bitrate int, sampleRate int, mode int, frame
 	if versionID == 1 || layerID != 1 || bitrateIdx == 0 || bitrateIdx == 15 || sampleIdx == 3 {
 		return
 	}
-	versionKey := versionID
-	mp3Bitrates := map[uint32][]int{
-		3: {0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0},
-		2: {0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0},
-		0: {0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0},
-	}
-	sampleRates := map[uint32][]int{
-		3: {44100, 48000, 32000},
-		2: {22050, 24000, 16000},
-		0: {11025, 12000, 8000},
-	}
-	brKbps := mp3Bitrates[versionKey][bitrateIdx]
+	brKbps := mp3Bitrates[versionID][bitrateIdx]
 	if brKbps == 0 {
 		return
 	}
-	sampleRate = sampleRates[versionKey][sampleIdx]
+	sampleRate = mp3SampleRates[versionID][sampleIdx]
 	if sampleRate == 0 {
 		return
 	}
@@ -359,13 +352,22 @@ func probeFLACMetadata(fullPath string) (map[string]string, error) {
 		blockLen := int(header[1])<<16 | int(header[2])<<8 | int(header[3])
 		switch blockType {
 		case 0:
-			block := make([]byte, blockLen)
-			if _, err := io.ReadFull(f, block); err != nil {
+			var streamInfo [34]byte
+			readLen := blockLen
+			if readLen > len(streamInfo) {
+				readLen = len(streamInfo)
+			}
+			if _, err := io.ReadFull(f, streamInfo[:readLen]); err != nil {
 				return nil, err
 			}
-			if len(block) >= 34 {
-				word := uint64(block[10])<<56 | uint64(block[11])<<48 | uint64(block[12])<<40 | uint64(block[13])<<32 |
-					uint64(block[14])<<24 | uint64(block[15])<<16 | uint64(block[16])<<8 | uint64(block[17])
+			if blockLen > readLen {
+				if _, err := f.Seek(int64(blockLen-readLen), io.SeekCurrent); err != nil {
+					return nil, err
+				}
+			}
+			if readLen >= len(streamInfo) {
+				word := uint64(streamInfo[10])<<56 | uint64(streamInfo[11])<<48 | uint64(streamInfo[12])<<40 | uint64(streamInfo[13])<<32 |
+					uint64(streamInfo[14])<<24 | uint64(streamInfo[15])<<16 | uint64(streamInfo[16])<<8 | uint64(streamInfo[17])
 				sampleRate = uint32((word >> 44) & 0xFFFFF)
 				channels = int(((word >> 41) & 0x7) + 1)
 				totalSamples = word & 0xFFFFFFFFF
