@@ -633,7 +633,7 @@ func (vfs *VirtualFileSystem) ListDirectory(dirPath string) []*VFSFile {
 		if vfs.isHiddenPathLocked(childPath) {
 			continue
 		}
-		if cleanVFSPath(filepath.Dir(childPath)) != dirPath {
+		if !isDirectVFSChildPath(dirPath, childPath) {
 			continue
 		}
 		if file := vfs.files[childPath]; file != nil {
@@ -642,6 +642,19 @@ func (vfs *VirtualFileSystem) ListDirectory(dirPath string) []*VFSFile {
 	}
 
 	return results
+}
+
+func isDirectVFSChildPath(parent, child string) bool {
+	if parent == "/" {
+		rest := strings.TrimPrefix(child, "/")
+		return rest != "" && !strings.Contains(rest, "/")
+	}
+	prefix := parent + "/"
+	if !strings.HasPrefix(child, prefix) {
+		return false
+	}
+	rest := strings.TrimPrefix(child, prefix)
+	return rest != "" && !strings.Contains(rest, "/")
 }
 
 func (vfs *VirtualFileSystem) GetReleaseStatus(dirPath string) (core.ReleaseStatus, bool) {

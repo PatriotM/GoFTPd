@@ -7,6 +7,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"goftpd/internal/acl"
@@ -84,7 +85,7 @@ type Session struct {
 	LastCommandAt         time.Time
 	TransferDirection     string
 	TransferPath          string
-	TransferBytes         int64
+	TransferBytes         atomic.Int64
 	TransferStartedAt     time.Time
 	TransferSlaveName     string
 	TransferSlaveIdx      int32

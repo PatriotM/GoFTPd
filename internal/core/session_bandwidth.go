@@ -25,7 +25,7 @@ func (s *Session) beginTransferOnSlave(direction, targetPath, slaveName string, 
 	s.stateMu.Lock()
 	s.TransferDirection = direction
 	s.TransferPath = targetPath
-	s.TransferBytes = 0
+	s.TransferBytes.Store(0)
 	s.TransferStartedAt = time.Now()
 	s.TransferSlaveName = slaveName
 	s.TransferSlaveIdx = slaveIdx
@@ -46,9 +46,7 @@ func (s *Session) addTransferBytes(n int64) {
 	if s == nil || n <= 0 {
 		return
 	}
-	s.stateMu.Lock()
-	s.TransferBytes += n
-	s.stateMu.Unlock()
+	s.TransferBytes.Add(n)
 }
 
 func (s *Session) endTransfer() {
@@ -58,7 +56,7 @@ func (s *Session) endTransfer() {
 	s.stateMu.Lock()
 	s.TransferDirection = ""
 	s.TransferPath = ""
-	s.TransferBytes = 0
+	s.TransferBytes.Store(0)
 	s.TransferStartedAt = time.Time{}
 	s.TransferSlaveName = ""
 	s.TransferSlaveIdx = 0
@@ -71,14 +69,15 @@ func (s *Session) currentTransferSpeedBytes() float64 {
 	}
 	s.stateMu.RLock()
 	defer s.stateMu.RUnlock()
-	if s.TransferDirection == "" || s.TransferStartedAt.IsZero() || s.TransferBytes <= 0 {
+	bytes := s.TransferBytes.Load()
+	if s.TransferDirection == "" || s.TransferStartedAt.IsZero() || bytes <= 0 {
 		return 0
 	}
 	seconds := time.Since(s.TransferStartedAt).Seconds()
 	if seconds <= 0 {
 		return 0
 	}
-	return float64(s.TransferBytes) / seconds
+	return float64(bytes) / seconds
 }
 
 type bandwidthTrackingConn struct {
