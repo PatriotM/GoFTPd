@@ -1432,7 +1432,9 @@ func (s *Slave) handleSFVFile(ac *protocol.AsyncCommand) interface{} {
 		h := crc32.NewIEEE()
 		h.Write(data)
 
-		log.Printf("[Slave] Parsed SFV %s: %d entries", sfvPath, len(entries))
+		if s.debug {
+			log.Printf("[Slave] Parsed SFV %s: %d entries", sfvPath, len(entries))
+		}
 		return &protocol.AsyncResponseSFVInfo{
 			Index:    ac.Index,
 			SFVName:  filepath.Base(sfvPath),

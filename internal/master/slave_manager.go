@@ -2550,12 +2550,29 @@ func (sm *SlaveManager) vfsPersistLoop() {
 
 	for sm.running.Load() {
 		<-ticker.C
+		if sm.anySlaveRemerging() {
+			continue
+		}
 		if sm.vfs.Count() > 0 {
 			if err := sm.vfs.SaveToDisk(vfsFilePath); err != nil {
 				log.Printf("[SlaveManager] Error saving VFS: %v", err)
 			}
 		}
 	}
+}
+
+func (sm *SlaveManager) anySlaveRemerging() bool {
+	if sm == nil {
+		return false
+	}
+	sm.slavesMu.RLock()
+	defer sm.slavesMu.RUnlock()
+	for _, rs := range sm.slaves {
+		if rs != nil && rs.IsRemerging() {
+			return true
+		}
+	}
+	return false
 }
 
 func (sm *SlaveManager) diskStatusLoop() {
