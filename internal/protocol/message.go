@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"bufio"
 	"encoding/gob"
 	"fmt"
 	"io"
@@ -176,14 +177,17 @@ func (ar *AsyncResponseSiteBotMessage) GetIndex() string { return "SiteBotMessag
 type ObjectStream struct {
 	enc   *gob.Encoder
 	dec   *gob.Decoder
+	buf   *bufio.Writer
 	encMu sync.Mutex
 	conn  io.ReadWriteCloser
 }
 
 func NewObjectStream(conn io.ReadWriteCloser) *ObjectStream {
+	buf := bufio.NewWriterSize(conn, 64*1024)
 	return &ObjectStream{
-		enc:  gob.NewEncoder(conn),
+		enc:  gob.NewEncoder(buf),
 		dec:  gob.NewDecoder(conn),
+		buf:  buf,
 		conn: conn,
 	}
 }
@@ -191,7 +195,10 @@ func NewObjectStream(conn io.ReadWriteCloser) *ObjectStream {
 func (os *ObjectStream) WriteObject(obj interface{}) error {
 	os.encMu.Lock()
 	defer os.encMu.Unlock()
-	return os.enc.Encode(&obj)
+	if err := os.enc.Encode(&obj); err != nil {
+		return err
+	}
+	return os.buf.Flush()
 }
 
 func (os *ObjectStream) ReadObject() (interface{}, error) {

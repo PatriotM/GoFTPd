@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"goftpd/internal/netutil"
@@ -45,7 +46,7 @@ type Transfer struct {
 	direction   byte
 	started     time.Time
 	finished    time.Time
-	transferred int64
+	transferred atomic.Int64
 	checksum    uint32
 	abortReason string
 	mu          sync.Mutex
@@ -108,13 +109,14 @@ func (t *Transfer) SnapshotLiveStat() protocol.TransferLiveStat {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	transferred := t.transferred.Load()
 	var startedUnixMs int64
 	var speedBytes int64
 	if !t.started.IsZero() {
 		startedUnixMs = t.started.UnixMilli()
 		elapsedMs := time.Since(t.started).Milliseconds()
-		if elapsedMs > 0 && t.transferred > 0 {
-			speedBytes = t.transferred * 1000 / elapsedMs
+		if elapsedMs > 0 && transferred > 0 {
+			speedBytes = transferred * 1000 / elapsedMs
 		}
 	}
 
@@ -123,7 +125,7 @@ func (t *Transfer) SnapshotLiveStat() protocol.TransferLiveStat {
 		Direction:     t.direction,
 		Path:          t.path,
 		StartedUnixMs: startedUnixMs,
-		Transferred:   t.transferred,
+		Transferred:   transferred,
 		SpeedBytes:    speedBytes,
 	}
 }
@@ -211,9 +213,7 @@ func (t *Transfer) ReceiveFile(path string, position int64, expectedPeer string)
 				cleanupFailedReceive(file, fullPath, position)
 				return t.errorStatus(fmt.Sprintf("write error: %v", werr))
 			}
-			t.mu.Lock()
-			t.transferred += int64(n)
-			t.mu.Unlock()
+			t.transferred.Add(int64(n))
 			t.applyMaxSpeed()
 		}
 		if time.Since(lastStatus) >= transferStatusTick {
@@ -242,11 +242,12 @@ func (t *Transfer) ReceiveFile(path string, position int64, expectedPeer string)
 		}
 	}
 
-	log.Printf("[Transfer] Received %s (%d bytes, CRC32=%08X, offset=%d)", path, t.transferred, h.Sum32(), position)
+	transferred := t.transferred.Load()
+	log.Printf("[Transfer] Received %s (%d bytes, CRC32=%08X, offset=%d)", path, transferred, h.Sum32(), position)
 	t.mu.Lock()
 	t.checksum = h.Sum32()
 	t.mu.Unlock()
-	finalSize := t.transferred
+	finalSize := transferred
 	if info, statErr := file.Stat(); statErr == nil {
 		finalSize = info.Size()
 	}
@@ -254,7 +255,7 @@ func (t *Transfer) ReceiveFile(path string, position int64, expectedPeer string)
 	return protocol.TransferStatus{
 		TransferIndex: t.transferIndex,
 		Elapsed:       time.Since(t.started).Milliseconds(),
-		Transferred:   t.transferred,
+		Transferred:   transferred,
 		FileSize:      finalSize,
 		Checksum:      h.Sum32(),
 		Finished:      true,
@@ -342,9 +343,7 @@ func (t *Transfer) SendFile(path string, position int64, expectedPeer string) pr
 			if written != n {
 				return t.errorStatus("write error: short write")
 			}
-			t.mu.Lock()
-			t.transferred += int64(n)
-			t.mu.Unlock()
+			t.transferred.Add(int64(n))
 			t.applyMaxSpeed()
 		}
 		if time.Since(lastStatus) >= transferStatusTick {
@@ -366,7 +365,8 @@ func (t *Transfer) SendFile(path string, position int64, expectedPeer string) pr
 		}
 	}
 
-	log.Printf("[Transfer] Sent %s (%d bytes, offset=%d)", path, t.transferred, position)
+	transferred := t.transferred.Load()
+	log.Printf("[Transfer] Sent %s (%d bytes, offset=%d)", path, transferred, position)
 	t.mu.Lock()
 	t.checksum = 0
 	t.mu.Unlock()
@@ -374,7 +374,7 @@ func (t *Transfer) SendFile(path string, position int64, expectedPeer string) pr
 	return protocol.TransferStatus{
 		TransferIndex: t.transferIndex,
 		Elapsed:       time.Since(t.started).Milliseconds(),
-		Transferred:   t.transferred,
+		Transferred:   transferred,
 		Checksum:      0,
 		Finished:      true,
 	}
@@ -414,12 +414,12 @@ func (t *Transfer) acceptPassiveConn() error {
 		return nil
 	}
 
-	cert, err := tls.LoadX509KeyPair(t.slave.tlsCert, t.slave.tlsKey)
+	tlsCfg, err := t.slave.serverTLSConfig()
 	if err != nil {
 		conn.Close()
 		return fmt.Errorf("load TLS cert: %v", err)
 	}
-	tlsConn := tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{cert}, DynamicRecordSizingDisabled: true})
+	tlsConn := tls.Server(conn, tlsCfg)
 	if err := tlsConn.Handshake(); err != nil {
 		conn.Close()
 		return fmt.Errorf("TLS server handshake failed: %v", err)
@@ -466,12 +466,12 @@ func (t *Transfer) connectActive() error {
 		return nil
 	}
 
-	cert, err := tls.LoadX509KeyPair(t.slave.tlsCert, t.slave.tlsKey)
+	tlsCfg, err := t.slave.serverTLSConfig()
 	if err != nil {
 		conn.Close()
 		return fmt.Errorf("load TLS cert: %v", err)
 	}
-	tlsConn := tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{cert}, DynamicRecordSizingDisabled: true})
+	tlsConn := tls.Server(conn, tlsCfg)
 	if err := tlsConn.Handshake(); err != nil {
 		conn.Close()
 		return fmt.Errorf("TLS server handshake failed: %v", err)
@@ -540,10 +540,11 @@ func (t *Transfer) currentStatus(finished bool, errMsg string) protocol.Transfer
 	if !t.started.IsZero() {
 		elapsed = time.Since(t.started).Milliseconds()
 	}
+	transferred := t.transferred.Load()
 	return protocol.TransferStatus{
 		TransferIndex: t.transferIndex,
 		Elapsed:       elapsed,
-		Transferred:   t.transferred,
+		Transferred:   transferred,
 		Checksum:      t.checksum,
 		Finished:      finished,
 		Error:         errMsg,
@@ -554,8 +555,8 @@ func (t *Transfer) applyMaxSpeed() {
 	t.mu.Lock()
 	maxSpeed := t.maxSpeed
 	started := t.started
-	transferred := t.transferred
 	t.mu.Unlock()
+	transferred := t.transferred.Load()
 	if maxSpeed <= 0 || started.IsZero() || transferred <= 0 {
 		return
 	}
@@ -570,9 +571,9 @@ func (t *Transfer) checkMinSpeed(lastCheck *time.Time, first *bool) error {
 	t.mu.Lock()
 	minSpeed := t.minSpeed
 	started := t.started
-	transferred := t.transferred
 	grace := t.minSpeedGrace
 	t.mu.Unlock()
+	transferred := t.transferred.Load()
 	if minSpeed <= 0 || started.IsZero() || transferred <= 0 {
 		return nil
 	}

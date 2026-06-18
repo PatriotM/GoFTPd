@@ -62,4 +62,4 @@ slave:
 
   timeout: 60
 
-  transfer_buffer_size: 1048576
+  transfer_buffer_size: 4194304

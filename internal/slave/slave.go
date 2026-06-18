@@ -30,7 +30,7 @@ const (
 	actualTimeout             = 60 * time.Second
 	diskStatusInterval        = 15 * time.Second
 	minTransferBufferSize     = 1024 * 1024
-	defaultTransferBufferSize = 1024 * 1024
+	defaultTransferBufferSize = 4 * 1024 * 1024
 	remergeEntryYieldEvery    = 128
 )
 
@@ -47,6 +47,8 @@ type Slave struct {
 	tlsEnabled         bool
 	tlsCert            string
 	tlsKey             string
+	tlsServerConfig    *tls.Config
+	tlsServerConfigErr error
 	bindIP             string
 	transferBufferSize int
 	freeSpaceMB        int
@@ -128,6 +130,7 @@ func NewSlave(cfg SlaveConfig) *Slave {
 	if bufferSize < minTransferBufferSize {
 		bufferSize = minTransferBufferSize
 	}
+	tlsServerConfig, tlsServerConfigErr := loadTLSServerConfig(cfg.TLSCert, cfg.TLSKey)
 	return &Slave{
 		name:               cfg.Name,
 		masterHost:         cfg.MasterHost,
@@ -138,12 +141,22 @@ func NewSlave(cfg SlaveConfig) *Slave {
 		tlsEnabled:         cfg.TLSEnabled,
 		tlsCert:            cfg.TLSCert,
 		tlsKey:             cfg.TLSKey,
+		tlsServerConfig:    tlsServerConfig,
+		tlsServerConfigErr: tlsServerConfigErr,
 		bindIP:             cfg.BindIP,
 		timeout:            timeout,
 		transferBufferSize: bufferSize,
 		freeSpaceMB:        cfg.FreeSpaceMB,
 		debug:              cfg.Debug,
 	}
+}
+
+func loadTLSServerConfig(certPath, keyPath string) (*tls.Config, error) {
+	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		return nil, err
+	}
+	return &tls.Config{Certificates: []tls.Certificate{cert}, DynamicRecordSizingDisabled: true}, nil
 }
 
 func normalizeMountedRoots(configured []MountedRoot, legacy []string) []MountedRoot {
@@ -386,6 +399,23 @@ func (s *Slave) getTransferBufferSize() int {
 		return defaultTransferBufferSize
 	}
 	return s.transferBufferSize
+}
+
+func (s *Slave) serverTLSConfig() (*tls.Config, error) {
+	if s == nil {
+		return nil, fmt.Errorf("missing slave")
+	}
+	if s.tlsServerConfig != nil {
+		return s.tlsServerConfig, nil
+	}
+	if s.tlsServerConfigErr != nil {
+		return nil, s.tlsServerConfigErr
+	}
+	cfg, err := loadTLSServerConfig(s.tlsCert, s.tlsKey)
+	if err != nil {
+		return nil, err
+	}
+	return cfg, nil
 }
 
 // Boot connects to master, performs handshake, sends disk status, then enters command loop.
