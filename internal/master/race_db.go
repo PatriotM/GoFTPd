@@ -49,6 +49,7 @@ func NewRaceDB(dbPath string) (*RaceDB, error) {
 		"PRAGMA journal_mode = WAL;",
 		"PRAGMA synchronous = NORMAL;",
 		"PRAGMA busy_timeout = 5000;",
+		"PRAGMA cache_size = -32000;",
 	}
 	for _, stmt := range pragmas {
 		if _, err := db.Exec(stmt); err != nil {

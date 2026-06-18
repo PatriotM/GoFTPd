@@ -126,6 +126,58 @@ func TestLoadAndSavePreservesImportedUserfileFields(t *testing.T) {
 	}
 }
 
+func TestLoadUserCacheReturnsIndependentCopies(t *testing.T) {
+	tmp := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+
+	if err := os.MkdirAll(filepath.Join("etc", "users"), 0755); err != nil {
+		t.Fatalf("MkdirAll(users) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join("etc", "passwd"), []byte("Finity:x:100:300:0:/site:/bin/false\n"), 0600); err != nil {
+		t.Fatalf("WriteFile(passwd) error = %v", err)
+	}
+	input := strings.Join([]string{
+		"FLAGS 3",
+		"HOMEDIR /site",
+		"DIR /",
+		"GROUP iND 0",
+		"IP *@127.0.0.1",
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join("etc", "users", "Finity"), []byte(input), 0600); err != nil {
+		t.Fatalf("WriteFile(user) error = %v", err)
+	}
+
+	first, err := LoadUser("Finity", map[string]int{"iND": 300})
+	if err != nil {
+		t.Fatalf("LoadUser(first) error = %v", err)
+	}
+	second, err := LoadUser("Finity", map[string]int{"iND": 300})
+	if err != nil {
+		t.Fatalf("LoadUser(second) error = %v", err)
+	}
+
+	first.Groups["LEAK"] = 1
+	first.IPs[0] = "*@10.0.0.1"
+	first.StatExtras["ALLUP"] = "mutated"
+
+	if _, ok := second.Groups["LEAK"]; ok {
+		t.Fatal("second cached user shared Groups map with first")
+	}
+	if got := second.IPs[0]; got != "*@127.0.0.1" {
+		t.Fatalf("second cached user shared IP slice with first: %q", got)
+	}
+	if got := second.StatExtras["ALLUP"]; got != "" {
+		t.Fatalf("second cached user shared StatExtras map with first: %q", got)
+	}
+}
+
 func TestSaveRefusesToStripAccountFields(t *testing.T) {
 	tmp := t.TempDir()
 	oldWD, err := os.Getwd()

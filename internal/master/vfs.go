@@ -850,8 +850,15 @@ func (vfs *VirtualFileSystem) HydrateRaceFile(path, owner, group string, sizeByt
 }
 
 func isWeakMetadataValue(value string) bool {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "", "goftpd", "ftp", "root", "0":
+	value = strings.TrimSpace(value)
+	switch {
+	case value == "", value == "0":
+		return true
+	case len(value) == 3 && strings.EqualFold(value, "ftp"):
+		return true
+	case len(value) == 4 && strings.EqualFold(value, "root"):
+		return true
+	case len(value) == 6 && strings.EqualFold(value, "goftpd"):
 		return true
 	default:
 		return false

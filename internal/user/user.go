@@ -85,6 +85,18 @@ type User struct {
 }
 
 var userStatLocks sync.Map
+var userFileCache sync.Map
+
+type cachedUserFile struct {
+	user        *User
+	userStamp   fileStamp
+	passwdStamp fileStamp
+}
+
+type fileStamp struct {
+	modTimeUnixNano int64
+	size            int64
+}
 
 func userStatLock(name string) *sync.Mutex {
 	lock, _ := userStatLocks.LoadOrStore(name, &sync.Mutex{})
@@ -96,6 +108,81 @@ func WithFileLock(name string, fn func() error) error {
 	lock.Lock()
 	defer lock.Unlock()
 	return fn()
+}
+
+func userCacheKey(name, filePath string) string {
+	if abs, err := filepath.Abs(filePath); err == nil {
+		filePath = abs
+	}
+	return name + "\x00" + filepath.Clean(filePath)
+}
+
+func statFileStamp(filePath string) (fileStamp, error) {
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return fileStamp{}, err
+	}
+	return fileStamp{modTimeUnixNano: info.ModTime().UnixNano(), size: info.Size()}, nil
+}
+
+func optionalFileStamp(filePath string) fileStamp {
+	stamp, err := statFileStamp(filePath)
+	if err != nil {
+		return fileStamp{modTimeUnixNano: -1, size: -1}
+	}
+	return stamp
+}
+
+func cachedUser(name, filePath string, userStamp, passwdStamp fileStamp) (*User, bool) {
+	value, ok := userFileCache.Load(userCacheKey(name, filePath))
+	if !ok {
+		return nil, false
+	}
+	entry, ok := value.(cachedUserFile)
+	if !ok || entry.user == nil {
+		return nil, false
+	}
+	if entry.userStamp != userStamp || entry.passwdStamp != passwdStamp {
+		return nil, false
+	}
+	return cloneUser(entry.user), true
+}
+
+func storeCachedUser(name, filePath string, userStamp, passwdStamp fileStamp, u *User) {
+	if u == nil {
+		return
+	}
+	userFileCache.Store(userCacheKey(name, filePath), cachedUserFile{
+		user:        cloneUser(u),
+		userStamp:   userStamp,
+		passwdStamp: passwdStamp,
+	})
+}
+
+func invalidateCachedUser(name, filePath string) {
+	userFileCache.Delete(userCacheKey(name, filePath))
+}
+
+func cloneUser(u *User) *User {
+	if u == nil {
+		return nil
+	}
+	cp := *u
+	if u.Groups != nil {
+		cp.Groups = make(map[string]int, len(u.Groups))
+		for k, v := range u.Groups {
+			cp.Groups[k] = v
+		}
+	}
+	cp.IPs = append([]string(nil), u.IPs...)
+	if u.StatExtras != nil {
+		cp.StatExtras = make(map[string]string, len(u.StatExtras))
+		for k, v := range u.StatExtras {
+			cp.StatExtras[k] = v
+		}
+	}
+	cp.TimeFields = append([]string(nil), u.TimeFields...)
+	return &cp
 }
 
 func MutateAndSave(name string, groupMap map[string]int, mutate func(*User) error) (*User, error) {
@@ -131,6 +218,17 @@ func LoadTemplate(name, templatePath string, groupMap map[string]int) (*User, er
 }
 
 func loadUserFile(name, path string, groupMap map[string]int) (*User, error) {
+	path = filepath.Clean(path)
+	userStamp, err := statFileStamp(path)
+	if err != nil {
+		return nil, err
+	}
+	passwdStamp := optionalFileStamp("etc/passwd")
+	if u, ok := cachedUser(name, path, userStamp, passwdStamp); ok {
+		applyGroupMap(u, groupMap)
+		return u, nil
+	}
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -148,9 +246,7 @@ func loadUserFile(name, path string, groupMap map[string]int) (*User, error) {
 		GID:        300,  // default
 		StatExtras: make(map[string]string),
 	}
-	if st, err := os.Stat(path); err == nil {
-		u.FileModTime = st.ModTime().Unix()
-	}
+	u.FileModTime = userStamp.modTimeUnixNano / int64(time.Second)
 
 	// Load UID/GID from passwd file
 	if passwdData, err := os.ReadFile("etc/passwd"); err == nil {
@@ -389,29 +485,34 @@ func loadUserFile(name, path string, groupMap map[string]int) (*User, error) {
 		return nil, err
 	}
 
-	// Set GID based on primary group
-	if groupMap != nil {
-		if u.PrimaryGroup != "" {
-			// Use explicitly set primary group
-			if gid, ok := groupMap[u.PrimaryGroup]; ok {
-				u.GID = gid
-			}
-		} else if len(u.Groups) > 0 {
-			// Fallback: use first group (alphabetically sorted for determinism)
-			var groups []string
-			for g := range u.Groups {
-				groups = append(groups, g)
-			}
-			// Sort for deterministic order
-			sort.Strings(groups)
-			if gid, ok := groupMap[groups[0]]; ok {
-				u.GID = gid
-				u.PrimaryGroup = groups[0]
-			}
-		}
-	}
+	storeCachedUser(name, path, userStamp, passwdStamp, u)
+	applyGroupMap(u, groupMap)
 
 	return u, nil
+}
+
+func applyGroupMap(u *User, groupMap map[string]int) {
+	if u == nil || groupMap == nil {
+		return
+	}
+	if u.PrimaryGroup != "" {
+		if gid, ok := groupMap[u.PrimaryGroup]; ok {
+			u.GID = gid
+		}
+		return
+	}
+	if len(u.Groups) == 0 {
+		return
+	}
+	groups := make([]string, 0, len(u.Groups))
+	for g := range u.Groups {
+		groups = append(groups, g)
+	}
+	sort.Strings(groups)
+	if gid, ok := groupMap[groups[0]]; ok {
+		u.GID = gid
+		u.PrimaryGroup = groups[0]
+	}
 }
 
 func validateLoadedUserfile(name, raw string, u *User) error {
@@ -602,6 +703,7 @@ func (u *User) saveLocked() error {
 		return err
 	}
 	cleanup = false
+	invalidateCachedUser(u.Name, path)
 	return nil
 }
 

@@ -52,7 +52,7 @@ var zipPayloadNameRE = regexp.MustCompile(`(?i)\.(zip|z\d\d)$`)
 const (
 	readFileCacheTTL          = 2 * time.Second
 	liveTransferStatsCacheTTL = 1 * time.Second
-	bridgeTransferBufferSize  = 1024 * 1024
+	bridgeTransferBufferSize  = 4 * 1024 * 1024
 )
 
 var bridgeTransferBufferPool = sync.Pool{

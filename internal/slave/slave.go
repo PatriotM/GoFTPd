@@ -1323,8 +1323,8 @@ func (s *Slave) scanRemergeDirectory(target scanTarget, dir string, excludePaths
 			IsSymlink:    info.Mode()&os.ModeSymlink != 0,
 			Size:         info.Size(),
 			LastModified: info.ModTime().Unix(),
-			Owner:        getFileOwner(info),
-			Group:        getFileGroup(info),
+			Owner:        defaultFileOwner,
+			Group:        defaultFileGroup,
 		}
 		if inode.IsSymlink {
 			if linkTarget, err := os.Readlink(fullPath); err == nil {
@@ -1420,7 +1420,11 @@ func normalizeExcludeVFSPaths(paths []string) []string {
 }
 
 func isExcludedVFSPath(p string, excluded []string) bool {
-	p = path.Clean("/" + strings.TrimSpace(filepath.ToSlash(p)))
+	if strings.TrimSpace(p) != p || !strings.HasPrefix(p, "/") || strings.Contains(p, "\\") ||
+		strings.Contains(p, "//") || strings.Contains(p, "/./") || strings.Contains(p, "/../") ||
+		strings.HasSuffix(p, "/.") || strings.HasSuffix(p, "/..") {
+		p = path.Clean("/" + strings.TrimSpace(filepath.ToSlash(p)))
+	}
 	if p == "/" || p == "." || p == "" {
 		return false
 	}
