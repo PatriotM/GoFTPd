@@ -246,7 +246,6 @@ func (t *Transfer) ReceiveFile(path string, position int64, expectedPeer string)
 	t.mu.Lock()
 	t.checksum = h.Sum32()
 	t.mu.Unlock()
-	_ = t.slave.writeObject(&protocol.AsyncResponseDiskStatus{Status: t.slave.getDiskStatus()})
 	finalSize := t.transferred
 	if info, statErr := file.Stat(); statErr == nil {
 		finalSize = info.Size()

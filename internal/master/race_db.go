@@ -9,13 +9,15 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	_ "github.com/mattn/go-sqlite3"
 	"goftpd/internal/core"
 )
 
 type RaceDB struct {
-	db *sql.DB
+	db             *sql.DB
+	releaseIDCache sync.Map
 }
 
 type ReleaseFileRecord struct {
@@ -116,6 +118,11 @@ func (r *RaceDB) Close() error {
 }
 
 func (r *RaceDB) getOrCreateReleaseID(dirPath string) (int64, error) {
+	dirPath = filepath.Clean(dirPath)
+	if cached, ok := r.cachedReleaseID(dirPath); ok {
+		return cached, nil
+	}
+
 	tx, err := r.db.Begin()
 	if err != nil {
 		return 0, err
@@ -138,7 +145,49 @@ func (r *RaceDB) getOrCreateReleaseID(dirPath string) (int64, error) {
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
+	r.cacheReleaseID(dirPath, releaseID)
 	return releaseID, nil
+}
+
+func (r *RaceDB) cachedReleaseID(dirPath string) (int64, bool) {
+	if r == nil {
+		return 0, false
+	}
+	if value, ok := r.releaseIDCache.Load(filepath.Clean(dirPath)); ok {
+		if releaseID, ok := value.(int64); ok && releaseID > 0 {
+			return releaseID, true
+		}
+	}
+	return 0, false
+}
+
+func (r *RaceDB) cacheReleaseID(dirPath string, releaseID int64) {
+	if r == nil || releaseID <= 0 {
+		return
+	}
+	r.releaseIDCache.Store(filepath.Clean(dirPath), releaseID)
+}
+
+func (r *RaceDB) invalidateReleaseID(dirPath string) {
+	if r == nil {
+		return
+	}
+	r.releaseIDCache.Delete(filepath.Clean(dirPath))
+}
+
+func (r *RaceDB) invalidateReleaseIDPrefix(dirPath string) {
+	if r == nil {
+		return
+	}
+	dirPath = filepath.Clean(dirPath)
+	prefix := dirPath + string(filepath.Separator)
+	r.releaseIDCache.Range(func(key, _ interface{}) bool {
+		cachedPath, ok := key.(string)
+		if ok && (cachedPath == dirPath || strings.HasPrefix(cachedPath, prefix)) {
+			r.releaseIDCache.Delete(cachedPath)
+		}
+		return true
+	})
 }
 
 func (r *RaceDB) SaveSFV(dirPath, sfvName string, entries map[string]uint32) error {
@@ -426,6 +475,9 @@ func mergeRaceFileRecord(next, existing ReleaseFileRecord) ReleaseFileRecord {
 func (r *RaceDB) DeletePath(path string, isDir bool) error {
 	if isDir {
 		_, err := r.db.Exec(`DELETE FROM releases WHERE path = ? OR path LIKE ?`, path, path+"/%")
+		if err == nil {
+			r.invalidateReleaseIDPrefix(path)
+		}
 		return err
 	}
 
@@ -474,7 +526,11 @@ func (r *RaceDB) RenamePath(from, to string, isDir bool) error {
 				return err
 			}
 		}
-		return tx.Commit()
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		r.invalidateReleaseIDPrefix(from)
+		return nil
 	}
 
 	oldDir, oldName := filepath.Dir(from), filepath.Base(from)
@@ -545,6 +601,7 @@ func (r *RaceDB) Reconcile(vfs *VirtualFileSystem) error {
 		if _, err := r.db.Exec(`DELETE FROM releases WHERE path = ?`, dirPath); err != nil {
 			return err
 		}
+		r.invalidateReleaseID(dirPath)
 	}
 
 	return nil
