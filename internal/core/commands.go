@@ -630,6 +630,11 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			targetPath = "/" + targetPath
 		}
 		targetPath = path.Clean(targetPath)
+		if s.Config.Mode == "master" && s.MasterManager != nil {
+			if bridge, ok := s.MasterManager.(MasterBridge); ok {
+				targetPath = path.Clean(bridge.ResolvePath(targetPath))
+			}
+		}
 
 		aclPath := path.Join(s.Config.ACLBasePath, targetPath)
 		if !s.ACLEngine.CanPerform(s.User, "MKD", aclPath) {
