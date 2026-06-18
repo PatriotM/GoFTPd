@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"goftpd/internal/core"
+	"goftpd/internal/netutil"
 	"goftpd/internal/plugin"
 	"goftpd/internal/protocol"
 )
@@ -37,9 +38,7 @@ type Bridge struct {
 }
 
 func configureBridgeDataSocket(conn net.Conn) {
-	if tcpConn, ok := conn.(*net.TCPConn); ok {
-		_ = tcpConn.SetNoDelay(true)
-	}
+	netutil.ConfigureDataSocket(conn, netutil.DefaultDataSocketBufferSize)
 }
 
 type cachedReadFileResult struct {
@@ -53,7 +52,7 @@ var zipPayloadNameRE = regexp.MustCompile(`(?i)\.(zip|z\d\d)$`)
 const (
 	readFileCacheTTL          = 2 * time.Second
 	liveTransferStatsCacheTTL = 1 * time.Second
-	bridgeTransferBufferSize  = 256 * 1024
+	bridgeTransferBufferSize  = 1024 * 1024
 )
 
 var bridgeTransferBufferPool = sync.Pool{

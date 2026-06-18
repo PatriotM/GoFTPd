@@ -5,7 +5,7 @@ import (
 	"sync"
 )
 
-const transferCopyBufferSize = 256 * 1024
+const transferCopyBufferSize = 1024 * 1024
 
 var transferCopyBufferPool = sync.Pool{
 	New: func() interface{} {

@@ -98,12 +98,13 @@ func main() {
 	copy(ticketKey[:], "goftpd-secret-session-key-32byte")
 
 	tlsConfig := &tls.Config{
-		Certificates:       []tls.Certificate{cert},
-		MinVersion:         tls.VersionTLS12,
-		MaxVersion:         tls.VersionTLS13,
-		ClientSessionCache: sharedCache,
-		SessionTicketKey:   ticketKey,
-		InsecureSkipVerify: true,
+		Certificates:                []tls.Certificate{cert},
+		MinVersion:                  tls.VersionTLS12,
+		MaxVersion:                  tls.VersionTLS13,
+		ClientSessionCache:          sharedCache,
+		SessionTicketKey:            ticketKey,
+		InsecureSkipVerify:          true,
+		DynamicRecordSizingDisabled: true,
 	}
 
 	// 5. Ensure Storage Path Exists

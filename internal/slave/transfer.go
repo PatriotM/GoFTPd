@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"goftpd/internal/netutil"
 	"goftpd/internal/protocol"
 )
 
@@ -395,9 +396,7 @@ func (t *Transfer) acceptPassiveConn() error {
 	if err != nil {
 		return fmt.Errorf("accept failed: %v", err)
 	}
-	if tcpConn, ok := conn.(*net.TCPConn); ok {
-		_ = tcpConn.SetNoDelay(true)
-	}
+	t.configureDataSocket(conn)
 	if !t.encrypted {
 		t.conn = conn
 		return nil
@@ -407,7 +406,7 @@ func (t *Transfer) acceptPassiveConn() error {
 	defer conn.SetDeadline(time.Time{})
 
 	if t.sslClientMode {
-		tlsConn := tls.Client(conn, &tls.Config{InsecureSkipVerify: true})
+		tlsConn := tls.Client(conn, &tls.Config{InsecureSkipVerify: true, DynamicRecordSizingDisabled: true})
 		if err := tlsConn.Handshake(); err != nil {
 			conn.Close()
 			return fmt.Errorf("TLS client handshake failed: %v", err)
@@ -421,7 +420,7 @@ func (t *Transfer) acceptPassiveConn() error {
 		conn.Close()
 		return fmt.Errorf("load TLS cert: %v", err)
 	}
-	tlsConn := tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{cert}})
+	tlsConn := tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{cert}, DynamicRecordSizingDisabled: true})
 	if err := tlsConn.Handshake(); err != nil {
 		conn.Close()
 		return fmt.Errorf("TLS server handshake failed: %v", err)
@@ -448,9 +447,7 @@ func (t *Transfer) connectActive() error {
 	if err != nil {
 		return fmt.Errorf("connect failed: %v", err)
 	}
-	if tcpConn, ok := conn.(*net.TCPConn); ok {
-		_ = tcpConn.SetNoDelay(true)
-	}
+	t.configureDataSocket(conn)
 
 	if !t.encrypted {
 		t.conn = conn
@@ -461,7 +458,7 @@ func (t *Transfer) connectActive() error {
 	defer conn.SetDeadline(time.Time{})
 
 	if t.sslClientMode {
-		tlsConn := tls.Client(conn, &tls.Config{InsecureSkipVerify: true})
+		tlsConn := tls.Client(conn, &tls.Config{InsecureSkipVerify: true, DynamicRecordSizingDisabled: true})
 		if err := tlsConn.Handshake(); err != nil {
 			conn.Close()
 			return fmt.Errorf("TLS client handshake failed: %v", err)
@@ -475,13 +472,21 @@ func (t *Transfer) connectActive() error {
 		conn.Close()
 		return fmt.Errorf("load TLS cert: %v", err)
 	}
-	tlsConn := tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{cert}})
+	tlsConn := tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{cert}, DynamicRecordSizingDisabled: true})
 	if err := tlsConn.Handshake(); err != nil {
 		conn.Close()
 		return fmt.Errorf("TLS server handshake failed: %v", err)
 	}
 	t.conn = tlsConn
 	return nil
+}
+
+func (t *Transfer) configureDataSocket(conn net.Conn) {
+	bufferSize := defaultTransferBufferSize * 4
+	if t != nil && t.slave != nil {
+		bufferSize = t.slave.getTransferBufferSize() * 4
+	}
+	netutil.ConfigureDataSocket(conn, bufferSize)
 }
 
 func (t *Transfer) Abort(reason string) {

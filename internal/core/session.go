@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"goftpd/internal/acl"
+	"goftpd/internal/netutil"
 	"goftpd/internal/user"
 )
 
@@ -77,16 +78,16 @@ type Session struct {
 	RestOffset      int64       // REST offset applied to the next STOR/RETR
 	XDupeMode       int         // SITE XDUPE mode for duplicate listings on STOR
 
-	stateMu           sync.RWMutex
-	lastDataConnActive bool
+	stateMu               sync.RWMutex
+	lastDataConnActive    bool
 	nextDataTLSClientMode bool
-	LastCommandAt     time.Time
-	TransferDirection string
-	TransferPath      string
-	TransferBytes     int64
-	TransferStartedAt time.Time
-	TransferSlaveName string
-	TransferSlaveIdx  int32
+	LastCommandAt         time.Time
+	TransferDirection     string
+	TransferPath          string
+	TransferBytes         int64
+	TransferStartedAt     time.Time
+	TransferSlaveName     string
+	TransferSlaveIdx      int32
 }
 
 func (s *Session) currentTransferTypeByte() byte {
@@ -279,9 +280,7 @@ func (s *Session) getRawDataConn() (net.Conn, error) {
 }
 
 func configureDataSocket(conn net.Conn) {
-	if tcpConn, ok := conn.(*net.TCPConn); ok {
-		_ = tcpConn.SetNoDelay(true)
-	}
+	netutil.ConfigureDataSocket(conn, netutil.DefaultDataSocketBufferSize)
 }
 
 // upgradeDataTLS applies encryption to the data connection if PROT P is enabled.

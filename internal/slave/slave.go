@@ -29,8 +29,8 @@ const (
 	socketTimeout             = 10 * time.Second
 	actualTimeout             = 60 * time.Second
 	diskStatusInterval        = 15 * time.Second
-	minTransferBufferSize     = 32 * 1024
-	defaultTransferBufferSize = 256 * 1024
+	minTransferBufferSize     = 1024 * 1024
+	defaultTransferBufferSize = 1024 * 1024
 	remergeEntryYieldEvery    = 128
 )
 
