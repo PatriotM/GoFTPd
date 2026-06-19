@@ -631,23 +631,17 @@ func currentRaceSpeedMB(dirPath string, totalBytes int64, bridge MasterBridge) f
 	return (float64(totalBytes) / 1024.0 / 1024.0) / (float64(ms) / 1000.0)
 }
 
-// aggregateRaceSpeedMB returns the pzs-ng COMPLETE speed: the file-count
-// weighted mean of every racer's per-file transfer speeds. Since each racer's
-// Speed is already the mean of their file speeds, weighting by file count and
-// dividing by the total file count yields total.speed/total.files exactly.
+// aggregateRaceSpeedMB returns the combined race throughput: the sum of every
+// racer's combined per-user speed. With parallel slots this is the high
+// headline number sites expect on the COMPLETE line.
 func aggregateRaceSpeedMB(users []VFSRaceUser) float64 {
-	var sum float64
-	var files int
+	total := 0.0
 	for _, u := range users {
-		if u.Speed > 0 && u.Files > 0 {
-			sum += u.Speed * float64(u.Files)
-			files += u.Files
+		if u.Speed > 0 {
+			total += u.Speed
 		}
 	}
-	if files == 0 {
-		return 0
-	}
-	return sum / float64(files) / 1024.0 / 1024.0
+	return total / 1024.0 / 1024.0
 }
 
 func maxUserRaceDurationMs(users []VFSRaceUser) int64 {

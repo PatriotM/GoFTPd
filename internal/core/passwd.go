@@ -4,13 +4,16 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/crypto/pbkdf2"
@@ -18,35 +21,137 @@ import (
 
 var passwdFileMu sync.RWMutex
 
-// LoadPasswdFile reads standard /etc/passwd
-func LoadPasswdFile(path string) (map[string]string, error) {
-	passwdFileMu.RLock()
-	defer passwdFileMu.RUnlock()
+// In-memory cache of the parsed passwd file. The login path calls
+// LoadPasswdFile on every PASS; without this cache every login re-reads and
+// re-parses the whole file from disk, which becomes a bottleneck during a race
+// when many connections log in at once. The cache is keyed by path+mtime+size
+// and is cleared explicitly whenever the file is rewritten.
+var (
+	passwdCacheMu   sync.Mutex
+	passwdCachePath string
+	passwdCacheMod  time.Time
+	passwdCacheSize int64
+	passwdCacheMap  map[string]string
+)
 
+// LoadPasswdFile reads standard /etc/passwd. The returned map is read-only and
+// may be shared with other callers; do not mutate it.
+func LoadPasswdFile(path string) (map[string]string, error) {
+	if st, err := os.Stat(path); err == nil {
+		passwdCacheMu.Lock()
+		if passwdCacheMap != nil && passwdCachePath == path &&
+			passwdCacheMod.Equal(st.ModTime()) && passwdCacheSize == st.Size() {
+			cached := passwdCacheMap
+			passwdCacheMu.Unlock()
+			return cached, nil
+		}
+		passwdCacheMu.Unlock()
+	}
+
+	passwdFileMu.RLock()
 	file, err := os.Open(path)
 	if err != nil {
+		passwdFileMu.RUnlock()
 		return nil, err
 	}
-	defer file.Close()
-
 	passwds := make(map[string]string)
 	scanner := bufio.NewScanner(file)
-
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-
 		parts := strings.Split(line, ":")
 		if len(parts) >= 2 {
-			username := parts[0]
-			hash := parts[1]
-			passwds[username] = hash
+			passwds[parts[0]] = parts[1]
 		}
 	}
+	scanErr := scanner.Err()
+	_ = file.Close()
+	passwdFileMu.RUnlock()
+	if scanErr != nil {
+		return passwds, scanErr
+	}
 
-	return passwds, scanner.Err()
+	if st, err := os.Stat(path); err == nil {
+		passwdCacheMu.Lock()
+		passwdCachePath = path
+		passwdCacheMod = st.ModTime()
+		passwdCacheSize = st.Size()
+		passwdCacheMap = passwds
+		passwdCacheMu.Unlock()
+	}
+	return passwds, nil
+}
+
+// clearPasswdCache forces the next LoadPasswdFile to re-read from disk. Called
+// after any write to the passwd file.
+func clearPasswdCache() {
+	passwdCacheMu.Lock()
+	passwdCacheMap = nil
+	passwdCacheMu.Unlock()
+}
+
+// Short-lived cache of successful logins so a burst of connections from the
+// same racer (cbftp opens a control connection per slot at race start) doesn't
+// run bcrypt on every one. Only successes are cached, keyed by
+// username + a process-salted SHA-256 of the plaintext (never the plaintext
+// itself), so the cached value is useless outside this process.
+var (
+	authCacheMu   sync.Mutex
+	authCache     = map[string]authCacheEntry{}
+	authCacheSalt [16]byte
+)
+
+type authCacheEntry struct {
+	plainHash  [32]byte
+	storedHash string
+	expiry     time.Time
+}
+
+const authCacheTTL = 60 * time.Second
+
+func init() {
+	_, _ = rand.Read(authCacheSalt[:])
+}
+
+func authPlainHash(username, plaintext string) [32]byte {
+	h := sha256.New()
+	h.Write(authCacheSalt[:])
+	h.Write([]byte(username))
+	h.Write([]byte{0})
+	h.Write([]byte(plaintext))
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
+	return out
+}
+
+func invalidateAuthUser(username string) {
+	authCacheMu.Lock()
+	delete(authCache, username)
+	authCacheMu.Unlock()
+}
+
+// VerifyPasswordCached verifies a login password with a short-lived success
+// cache to avoid running bcrypt on every connection in a login burst. Falls
+// back to the full VerifyPassword (and caches the result) on a miss.
+func VerifyPasswordCached(username, plaintext, hash string) bool {
+	ph := authPlainHash(username, plaintext)
+	now := time.Now()
+	authCacheMu.Lock()
+	if e, ok := authCache[username]; ok && e.expiry.After(now) && e.storedHash == hash && e.plainHash == ph {
+		authCacheMu.Unlock()
+		return true
+	}
+	authCacheMu.Unlock()
+
+	if !VerifyPassword(plaintext, hash) {
+		return false
+	}
+	authCacheMu.Lock()
+	authCache[username] = authCacheEntry{plainHash: ph, storedHash: hash, expiry: now.Add(authCacheTTL)}
+	authCacheMu.Unlock()
+	return true
 }
 
 // VerifyPassword checks plaintext password against a hash.
@@ -257,7 +362,12 @@ func AddUserToPasswd(username, hash, path string) error {
 	}
 
 	next := []byte(strings.Join(lines, "\n") + "\n")
-	return writeAuthFileWithDashBackup(path, existing, next, mode)
+	if err := writeAuthFileWithDashBackup(path, existing, next, mode); err != nil {
+		return err
+	}
+	clearPasswdCache()
+	invalidateAuthUser(username)
+	return nil
 }
 
 func formatPasswdLine(username, hash, existingLine string) string {
@@ -313,7 +423,12 @@ func RemoveUserFromPasswd(username, path string) error {
 		}
 	}
 
-	return writeAuthFileWithDashBackup(path, existing, []byte(strings.Join(kept, "\n")), mode)
+	if err := writeAuthFileWithDashBackup(path, existing, []byte(strings.Join(kept, "\n")), mode); err != nil {
+		return err
+	}
+	clearPasswdCache()
+	invalidateAuthUser(username)
+	return nil
 }
 
 // RenameUserInPasswd renames a passwd entry while preserving the existing hash and fields.
@@ -349,7 +464,13 @@ func RenameUserInPasswd(oldUsername, newUsername, path string) error {
 	if !changed {
 		return fmt.Errorf("user %s not found in passwd", oldUsername)
 	}
-	return writeAuthFileWithDashBackup(path, existing, []byte(strings.Join(lines, "\n")), mode)
+	if err := writeAuthFileWithDashBackup(path, existing, []byte(strings.Join(lines, "\n")), mode); err != nil {
+		return err
+	}
+	clearPasswdCache()
+	invalidateAuthUser(oldUsername)
+	invalidateAuthUser(newUsername)
+	return nil
 }
 
 func writeAuthFileWithDashBackup(path string, existing, next []byte, mode os.FileMode) error {

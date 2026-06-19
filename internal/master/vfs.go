@@ -1888,8 +1888,6 @@ func (vfs *VirtualFileSystem) computeRaceStateFilteredLocked(dirPath string, exc
 	groupMap := make(map[string]*RaceGroupStat)
 	userStartMs := make(map[string]int64)
 	userEndMs := make(map[string]int64)
-	userSpeedSum := make(map[string]float64)
-	groupSpeedSum := make(map[string]float64)
 	presentFiles := make(map[string]*VFSFile)
 	for childPath := range vfs.children[dirPath] {
 		f := vfs.files[childPath]
@@ -1939,7 +1937,6 @@ func (vfs *VirtualFileSystem) computeRaceStateFilteredLocked(dirPath string, exc
 		us.Files++
 		us.Bytes += f.Size
 		fileSpeed := float64(f.Size) / (float64(f.XferTime) / 1000.0)
-		userSpeedSum[owner] += fileSpeed
 		if fileSpeed > us.PeakSpeed {
 			us.PeakSpeed = fileSpeed
 		}
@@ -1969,18 +1966,18 @@ func (vfs *VirtualFileSystem) computeRaceStateFilteredLocked(dirPath string, exc
 		}
 		gs.Files++
 		gs.Bytes += f.Size
-		groupSpeedSum[group] += fileSpeed
 	}
 
 	cache.Users = make([]RaceUserStat, 0, len(userMap))
 	for _, us := range userMap {
-		// pzs-ng: per-user speed is the mean of that racer's per-file transfer
-		// speeds (sum of file speeds / file count), so idle between a racer's
-		// files never drags it down. Wall-clock span is only a fallback.
-		if us.Files > 0 && userSpeedSum[us.Name] > 0 {
-			us.Speed = userSpeedSum[us.Name] / float64(us.Files)
-		} else if startMs, endMs := userStartMs[us.Name], userEndMs[us.Name]; us.Bytes > 0 && endMs > startMs {
+		// Per-user speed = combined throughput over the racer's active span
+		// (first file start -> last file end). Parallel upload slots overlap, so
+		// this reflects ALL slots combined: the high per-user number glftpd
+		// shows. Sum of per-file transfer time is only a fallback.
+		if startMs, endMs := userStartMs[us.Name], userEndMs[us.Name]; us.Bytes > 0 && endMs > startMs {
 			us.Speed = float64(us.Bytes) / (float64(endMs-startMs) / 1000.0)
+		} else if us.Bytes > 0 && us.DurationMs > 0 {
+			us.Speed = float64(us.Bytes) / (float64(us.DurationMs) / 1000.0)
 		}
 		if cache.Total > 0 {
 			us.Percent = (us.Files * 100) / cache.Total
@@ -2002,9 +1999,11 @@ func (vfs *VirtualFileSystem) computeRaceStateFilteredLocked(dirPath string, exc
 		if cache.Total > 0 {
 			gs.Percent = (gs.Files * 100) / cache.Total
 		}
-		// pzs-ng: group speed is the mean of the group's per-file speeds.
-		if gs.Files > 0 && groupSpeedSum[gs.Name] > 0 {
-			gs.Speed = groupSpeedSum[gs.Name] / float64(gs.Files)
+		// Group speed = sum of its racers' combined throughputs.
+		for _, us := range cache.Users {
+			if us.Group == gs.Name {
+				gs.Speed += us.Speed
+			}
 		}
 		cache.Groups = append(cache.Groups, *gs)
 	}
@@ -2027,8 +2026,6 @@ func (vfs *VirtualFileSystem) computeZipRaceStateFilteredLocked(dirPath string, 
 	groupMap := make(map[string]*RaceGroupStat)
 	userStartMs := make(map[string]int64)
 	userEndMs := make(map[string]int64)
-	userSpeedSum := make(map[string]float64)
-	groupSpeedSum := make(map[string]float64)
 
 	cache := &VFSRaceCache{}
 	if expected, ok := vfs.getZipExpectedPartsLocked(dirPath); ok && expected > 0 {
@@ -2069,7 +2066,6 @@ func (vfs *VirtualFileSystem) computeZipRaceStateFilteredLocked(dirPath string, 
 		us.Files++
 		us.Bytes += f.Size
 		fileSpeed := float64(f.Size) / (float64(f.XferTime) / 1000.0)
-		userSpeedSum[owner] += fileSpeed
 		if fileSpeed > us.PeakSpeed {
 			us.PeakSpeed = fileSpeed
 		}
@@ -2099,7 +2095,6 @@ func (vfs *VirtualFileSystem) computeZipRaceStateFilteredLocked(dirPath string, 
 		}
 		gs.Files++
 		gs.Bytes += f.Size
-		groupSpeedSum[group] += fileSpeed
 	}
 	if cache.Present == 0 && cache.Total == 0 {
 		return nil
@@ -2110,13 +2105,14 @@ func (vfs *VirtualFileSystem) computeZipRaceStateFilteredLocked(dirPath string, 
 
 	cache.Users = make([]RaceUserStat, 0, len(userMap))
 	for _, us := range userMap {
-		// pzs-ng: per-user speed is the mean of that racer's per-file transfer
-		// speeds (sum of file speeds / file count), so idle between a racer's
-		// files never drags it down. Wall-clock span is only a fallback.
-		if us.Files > 0 && userSpeedSum[us.Name] > 0 {
-			us.Speed = userSpeedSum[us.Name] / float64(us.Files)
-		} else if startMs, endMs := userStartMs[us.Name], userEndMs[us.Name]; us.Bytes > 0 && endMs > startMs {
+		// Per-user speed = combined throughput over the racer's active span
+		// (first file start -> last file end). Parallel upload slots overlap, so
+		// this reflects ALL slots combined: the high per-user number glftpd
+		// shows. Sum of per-file transfer time is only a fallback.
+		if startMs, endMs := userStartMs[us.Name], userEndMs[us.Name]; us.Bytes > 0 && endMs > startMs {
 			us.Speed = float64(us.Bytes) / (float64(endMs-startMs) / 1000.0)
+		} else if us.Bytes > 0 && us.DurationMs > 0 {
+			us.Speed = float64(us.Bytes) / (float64(us.DurationMs) / 1000.0)
 		}
 		if cache.Total > 0 {
 			us.Percent = (us.Files * 100) / cache.Total
@@ -2138,9 +2134,11 @@ func (vfs *VirtualFileSystem) computeZipRaceStateFilteredLocked(dirPath string, 
 		if cache.Total > 0 {
 			gs.Percent = (gs.Files * 100) / cache.Total
 		}
-		// pzs-ng: group speed is the mean of the group's per-file speeds.
-		if gs.Files > 0 && groupSpeedSum[gs.Name] > 0 {
-			gs.Speed = groupSpeedSum[gs.Name] / float64(gs.Files)
+		// Group speed = sum of its racers' combined throughputs.
+		for _, us := range cache.Users {
+			if us.Group == gs.Name {
+				gs.Speed += us.Speed
+			}
 		}
 		cache.Groups = append(cache.Groups, *gs)
 	}
