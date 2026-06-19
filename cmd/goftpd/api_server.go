@@ -4,15 +4,18 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"path"
+	"sort"
 	"strings"
 	"time"
 
 	"goftpd/internal/core"
 	"goftpd/internal/master"
+	"goftpd/internal/metrics"
 )
 
 type vfsMoveRequest struct {
@@ -26,7 +29,7 @@ type vfsDeleteRequest struct {
 }
 
 func startVFSAPIServer(cfg *core.Config, bridge *master.Bridge) *http.Server {
-	if cfg == nil || bridge == nil || !cfg.API.Enabled {
+	if cfg == nil || !cfg.API.Enabled {
 		return nil
 	}
 	listenAddr := strings.TrimSpace(cfg.API.Listen)
@@ -37,8 +40,11 @@ func startVFSAPIServer(cfg *core.Config, bridge *master.Bridge) *http.Server {
 	mux := http.NewServeMux()
 	api := &vfsAPI{cfg: cfg, bridge: bridge}
 	mux.HandleFunc("/api/v1/health", api.handleHealth)
-	mux.HandleFunc("/api/v1/vfs/move", api.handleVFSMove)
-	mux.HandleFunc("/api/v1/vfs/delete", api.handleVFSDelete)
+	mux.HandleFunc("/api/v1/metrics", api.handleMetrics)
+	if bridge != nil {
+		mux.HandleFunc("/api/v1/vfs/move", api.handleVFSMove)
+		mux.HandleFunc("/api/v1/vfs/delete", api.handleVFSDelete)
+	}
 
 	ln, err := net.Listen("tcp", listenAddr)
 	if err != nil {
@@ -54,7 +60,11 @@ func startVFSAPIServer(cfg *core.Config, bridge *master.Bridge) *http.Server {
 			log.Printf("[API] VFS sync API stopped: %v", err)
 		}
 	}()
-	log.Printf("[API] VFS sync API listening on %s", listenAddr)
+	if bridge != nil {
+		log.Printf("[API] VFS sync API listening on %s", listenAddr)
+	} else {
+		log.Printf("[API] metrics API listening on %s", listenAddr)
+	}
 	return srv
 }
 
@@ -68,6 +78,57 @@ func (a *vfsAPI) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeAPIJSON(w, http.StatusOK, map[string]interface{}{"ok": true})
+}
+
+// handleMetrics exposes the process metrics. JSON by default; ?format=text
+// renders a flat, curl-friendly view (handy for `watch`).
+func (a *vfsAPI) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	if !a.authorize(w, r) {
+		return
+	}
+	snap := metrics.Snapshot()
+	if strings.EqualFold(r.URL.Query().Get("format"), "text") {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		writeMetricsText(w, snap)
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, snap)
+}
+
+func writeMetricsText(w io.Writer, snap map[string]interface{}) {
+	// Fixed section order for readability; unknown sections appended sorted.
+	order := []string{"transfers", "link", "race_stats", "runtime"}
+	seen := map[string]bool{}
+	emit := func(section string) {
+		m, ok := snap[section].(map[string]interface{})
+		if !ok {
+			return
+		}
+		seen[section] = true
+		fmt.Fprintf(w, "[%s]\n", section)
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			fmt.Fprintf(w, "  %-20s %v\n", k, m[k])
+		}
+	}
+	for _, section := range order {
+		emit(section)
+	}
+	rest := make([]string, 0)
+	for section := range snap {
+		if !seen[section] {
+			rest = append(rest, section)
+		}
+	}
+	sort.Strings(rest)
+	for _, section := range rest {
+		emit(section)
+	}
 }
 
 func (a *vfsAPI) handleVFSMove(w http.ResponseWriter, r *http.Request) {

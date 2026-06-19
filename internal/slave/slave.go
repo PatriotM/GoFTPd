@@ -22,6 +22,7 @@ import (
 	"time"
 	"unicode"
 
+	"goftpd/internal/metrics"
 	"goftpd/internal/protocol"
 )
 
@@ -99,6 +100,7 @@ func (s *Slave) writeObjectNoActivity(obj interface{}) error {
 // behind a backlog of per-second status writes.
 func (s *Slave) writeStatusObject(obj interface{}) {
 	if !s.writeMu.TryLock() {
+		metrics.StatusDrops.Inc()
 		return
 	}
 	defer s.writeMu.Unlock()

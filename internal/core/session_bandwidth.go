@@ -3,6 +3,8 @@ package core
 import (
 	"net"
 	"time"
+
+	"goftpd/internal/metrics"
 )
 
 func (s *Session) touchActivity() {
@@ -30,6 +32,7 @@ func (s *Session) beginTransferOnSlave(direction, targetPath, slaveName string, 
 	s.TransferSlaveName = slaveName
 	s.TransferSlaveIdx = slaveIdx
 	s.stateMu.Unlock()
+	metrics.TransferBegin(direction)
 }
 
 func (s *Session) attachTransferToSlave(slaveName string, slaveIdx int32) {
@@ -54,6 +57,9 @@ func (s *Session) endTransfer() {
 		return
 	}
 	s.stateMu.Lock()
+	dir := s.TransferDirection
+	startedAt := s.TransferStartedAt
+	bytes := s.TransferBytes.Load()
 	s.TransferDirection = ""
 	s.TransferPath = ""
 	s.TransferBytes.Store(0)
@@ -61,6 +67,12 @@ func (s *Session) endTransfer() {
 	s.TransferSlaveName = ""
 	s.TransferSlaveIdx = 0
 	s.stateMu.Unlock()
+	// Several upload paths call endTransfer explicitly and again via defer.
+	// Record metrics only on the first call (when a transfer was actually
+	// active) so the gauge and latency aren't double-counted.
+	if dir != "" && !startedAt.IsZero() {
+		metrics.TransferEnd(dir, time.Since(startedAt), bytes)
+	}
 }
 
 func (s *Session) currentTransferSpeedBytes() float64 {

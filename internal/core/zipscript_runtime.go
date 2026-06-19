@@ -525,13 +525,13 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 		zipscript.CacheZipReleaseProgress(zipBridge(bridge), dirPath, presentCount, expected)
 		if presentCount > 0 {
 			raceDurationMs := bridge.GetRaceWallClockMilliseconds(dirPath)
-			// pzs-ng: avg speed = release size / race duration.
-			avgSpeedMB := currentRaceSpeedMB(dirPath, totalBytes, bridge)
+			// pzs-ng: live avg speed is the mean of racer file speeds.
+			avgSpeedMB := aggregateRaceSpeedMB(users)
 			if avgSpeedMB <= 0 {
-				avgSpeedMB = raceSpeedMBForDuration(totalBytes, raceDurationMs)
+				avgSpeedMB = currentRaceSpeedMB(dirPath, totalBytes, bridge)
 			}
 			if avgSpeedMB <= 0 {
-				avgSpeedMB = aggregateRaceSpeedMB(users)
+				avgSpeedMB = raceSpeedMBForDuration(totalBytes, raceDurationMs)
 			}
 			totalFiles := presentCount
 			if expected > 0 {
@@ -584,13 +584,13 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 		}
 		raceDurationMs = bridge.GetRaceWallClockMilliseconds(dirPath)
 		if total > 0 {
-			// pzs-ng: avg speed = release size / race duration.
-			avgSpeedMB := currentRaceSpeedMB(dirPath, totalBytes, bridge)
+			// pzs-ng: live avg speed is the mean of racer file speeds.
+			avgSpeedMB := aggregateRaceSpeedMB(users)
 			if avgSpeedMB <= 0 {
-				avgSpeedMB = raceSpeedMBForDuration(totalBytes, raceDurationMs)
+				avgSpeedMB = currentRaceSpeedMB(dirPath, totalBytes, bridge)
 			}
 			if avgSpeedMB <= 0 {
-				avgSpeedMB = aggregateRaceSpeedMB(users)
+				avgSpeedMB = raceSpeedMBForDuration(totalBytes, raceDurationMs)
 			}
 			data["relname"] = path.Base(dirPath)
 			data["t_files"] = fmt.Sprintf("%d", total)
@@ -631,14 +631,23 @@ func currentRaceSpeedMB(dirPath string, totalBytes int64, bridge MasterBridge) f
 	return (float64(totalBytes) / 1024.0 / 1024.0) / (float64(ms) / 1000.0)
 }
 
+// aggregateRaceSpeedMB returns the pzs-ng COMPLETE speed: the file-count
+// weighted mean of every racer's per-file transfer speeds. Since each racer's
+// Speed is already the mean of their file speeds, weighting by file count and
+// dividing by the total file count yields total.speed/total.files exactly.
 func aggregateRaceSpeedMB(users []VFSRaceUser) float64 {
-	total := 0.0
+	var sum float64
+	var files int
 	for _, u := range users {
-		if u.Speed > 0 {
-			total += u.Speed
+		if u.Speed > 0 && u.Files > 0 {
+			sum += u.Speed * float64(u.Files)
+			files += u.Files
 		}
 	}
-	return total / 1024.0 / 1024.0
+	if files == 0 {
+		return 0
+	}
+	return sum / float64(files) / 1024.0 / 1024.0
 }
 
 func maxUserRaceDurationMs(users []VFSRaceUser) int64 {

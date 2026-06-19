@@ -68,6 +68,10 @@ func main() {
 
 	// SLAVE MODE: No FTP server, just connect to master and serve files
 	if cfg.Mode == "slave" {
+		apiServer := startVFSAPIServer(cfg, nil)
+		if apiServer != nil {
+			defer apiServer.Close()
+		}
 		startSlave(cfg)
 		return
 	}
