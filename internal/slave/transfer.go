@@ -387,8 +387,9 @@ func (t *Transfer) acceptPassiveConn() error {
 	if t.listener == nil {
 		return t.connectActive()
 	}
+	timeout := t.setupTimeout()
 	if deadlineListener, ok := t.listener.(interface{ SetDeadline(time.Time) error }); ok {
-		deadlineListener.SetDeadline(time.Now().Add(10 * time.Second))
+		deadlineListener.SetDeadline(time.Now().Add(timeout))
 	}
 	conn, err := t.listener.Accept()
 	t.listener.Close()
@@ -401,7 +402,7 @@ func (t *Transfer) acceptPassiveConn() error {
 		return nil
 	}
 
-	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(timeout))
 	defer conn.SetDeadline(time.Time{})
 
 	if t.sslClientMode {
@@ -436,7 +437,8 @@ func (t *Transfer) connectActive() error {
 		return fmt.Errorf("no connection")
 	}
 
-	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	timeout := t.setupTimeout()
+	dialer := &net.Dialer{Timeout: timeout}
 	if bindIP := strings.TrimSpace(t.slave.bindIP); bindIP != "" {
 		if ip := net.ParseIP(bindIP); ip != nil {
 			dialer.LocalAddr = &net.TCPAddr{IP: ip}
@@ -453,7 +455,7 @@ func (t *Transfer) connectActive() error {
 		return nil
 	}
 
-	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(timeout))
 	defer conn.SetDeadline(time.Time{})
 
 	if t.sslClientMode {
@@ -486,6 +488,13 @@ func (t *Transfer) configureDataSocket(conn net.Conn) {
 		bufferSize = t.slave.getTransferBufferSize() * 4
 	}
 	netutil.ConfigureDataSocket(conn, bufferSize)
+}
+
+func (t *Transfer) setupTimeout() time.Duration {
+	if t != nil && t.slave != nil && t.slave.timeout > 0 {
+		return t.slave.timeout
+	}
+	return actualTimeout
 }
 
 func (t *Transfer) Abort(reason string) {

@@ -373,6 +373,9 @@ func (rs *RemoteSlave) Run(masterSlaveManager *SlaveManager) {
 		case *protocol.AsyncResponseTransferStats:
 			rs.routeResponse(resp.Index, obj)
 
+		case *protocol.AsyncResponseCommandResult:
+			rs.routeResponse(resp.Index, obj)
+
 		default:
 			log.Printf("[Master] Unknown response type from slave %s: %T", rs.name, obj)
 		}
