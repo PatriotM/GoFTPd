@@ -90,6 +90,23 @@ func (s *Slave) writeObjectNoActivity(obj interface{}) error {
 	return err
 }
 
+// writeStatusObject sends a best-effort progress update. It never blocks: if the
+// shared write stream is busy (another transfer's update, a completion message,
+// or remerge data is being written), the update is skipped instead of queued.
+// Progress updates are advisory, so dropping one under load is harmless — and it
+// keeps the transfer copy loop from stalling on writeMu contention while making
+// sure transfer-complete messages (which fire the client's 226) aren't delayed
+// behind a backlog of per-second status writes.
+func (s *Slave) writeStatusObject(obj interface{}) {
+	if !s.writeMu.TryLock() {
+		return
+	}
+	defer s.writeMu.Unlock()
+	if err := s.stream.WriteObject(obj); err == nil {
+		s.lastWriteTime.Store(time.Now().UnixMilli())
+	}
+}
+
 // SlaveConfig holds slave configuration loaded from YAML
 type SlaveConfig struct {
 	Name               string        `yaml:"name"`
@@ -1233,6 +1250,7 @@ func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
 	totalDirs := 0
 	sentDirs := 0
 
+	var scanErr error
 	for _, target := range scanTargets {
 		scanRoot := target.scanRoot
 
@@ -1251,6 +1269,7 @@ func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
 				return &protocol.AsyncResponseError{Index: ac.Index, Message: "remerge stopped"}
 			}
 			log.Printf("[Slave] Remerge root %s stopped: %v", target.root.Path, err)
+			scanErr = err
 		}
 		totalFiles += counts.totalFiles
 		totalDirs += counts.totalDirs
@@ -1260,6 +1279,13 @@ func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
 	}
 
 	log.Printf("[Slave] Remerge complete: %d files, %d dirs across %d sent directories", totalFiles, totalDirs, sentDirs)
+	if scanErr != nil {
+		// A root failed to scan completely (I/O error, went offline mid-walk).
+		// Report incomplete so the master keeps the directory snapshots we did
+		// send but SKIPS the final PurgeUnseen — otherwise files under the
+		// unscanned area would be wrongly removed from the index.
+		return &protocol.AsyncResponseError{Index: ac.Index, Message: fmt.Sprintf("remerge incomplete: %v", scanErr)}
+	}
 	return &protocol.AsyncResponse{Index: ac.Index}
 }
 

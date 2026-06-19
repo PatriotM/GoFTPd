@@ -426,13 +426,14 @@ func emitRaceEnd(s *Session, dirPath string, users []VFSRaceUser, groups []VFSRa
 		}
 	}
 
-	// Keep COMPLETE speed aligned with the summed racer throughput first;
-	// fall back to wall-clock throughput only when live user speeds are absent.
+	// pzs-ng convention: COMPLETE speed is release size / race duration (the
+	// effective throughput over the wall-clock race window). Fall back to the
+	// summed per-racer throughput only when no duration is available.
 	raceDurationMs = chooseRaceDurationMs(raceDurationMs, users, xferMs)
 
-	avgMB := aggregateRaceSpeedMB(users)
+	avgMB := raceSpeedMBForDuration(totalBytes, raceDurationMs)
 	if avgMB <= 0 {
-		avgMB = raceSpeedMBForDuration(totalBytes, raceDurationMs)
+		avgMB = aggregateRaceSpeedMB(users)
 	}
 	rel := path.Base(dirPath)
 	common := map[string]string{

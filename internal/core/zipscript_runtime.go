@@ -525,12 +525,13 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 		zipscript.CacheZipReleaseProgress(zipBridge(bridge), dirPath, presentCount, expected)
 		if presentCount > 0 {
 			raceDurationMs := bridge.GetRaceWallClockMilliseconds(dirPath)
-			avgSpeedMB := aggregateRaceSpeedMB(users)
-			if avgSpeedMB <= 0 {
-				avgSpeedMB = currentRaceSpeedMB(dirPath, totalBytes, bridge)
-			}
+			// pzs-ng: avg speed = release size / race duration.
+			avgSpeedMB := currentRaceSpeedMB(dirPath, totalBytes, bridge)
 			if avgSpeedMB <= 0 {
 				avgSpeedMB = raceSpeedMBForDuration(totalBytes, raceDurationMs)
+			}
+			if avgSpeedMB <= 0 {
+				avgSpeedMB = aggregateRaceSpeedMB(users)
 			}
 			totalFiles := presentCount
 			if expected > 0 {
@@ -583,12 +584,13 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 		}
 		raceDurationMs = bridge.GetRaceWallClockMilliseconds(dirPath)
 		if total > 0 {
-			avgSpeedMB := aggregateRaceSpeedMB(users)
-			if avgSpeedMB <= 0 {
-				avgSpeedMB = currentRaceSpeedMB(dirPath, totalBytes, bridge)
-			}
+			// pzs-ng: avg speed = release size / race duration.
+			avgSpeedMB := currentRaceSpeedMB(dirPath, totalBytes, bridge)
 			if avgSpeedMB <= 0 {
 				avgSpeedMB = raceSpeedMBForDuration(totalBytes, raceDurationMs)
+			}
+			if avgSpeedMB <= 0 {
+				avgSpeedMB = aggregateRaceSpeedMB(users)
 			}
 			data["relname"] = path.Base(dirPath)
 			data["t_files"] = fmt.Sprintf("%d", total)

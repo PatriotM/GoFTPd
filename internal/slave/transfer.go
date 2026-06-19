@@ -217,7 +217,7 @@ func (t *Transfer) ReceiveFile(path string, position int64, expectedPeer string)
 			t.applyMaxSpeed()
 		}
 		if time.Since(lastStatus) >= transferStatusTick {
-			_ = t.slave.writeObject(&protocol.AsyncResponseTransferStatus{Status: t.currentStatus(false, "")})
+			t.slave.writeStatusObject(&protocol.AsyncResponseTransferStatus{Status: t.currentStatus(false, "")})
 			lastStatus = time.Now()
 		}
 		if err := t.checkMinSpeed(&lastMinCheck, &firstMinCheck); err != nil {
@@ -322,32 +322,58 @@ func (t *Transfer) SendFile(path string, position int64, expectedPeer string) pr
 		}
 	}
 
-	buf := make([]byte, t.slave.getTransferBufferSize())
 	lastStatus := time.Now()
 	firstMinCheck := true
 	lastMinCheck := time.Now()
 	associatedUpload := t.findAssociatedUpload(path)
-	var writer io.Writer = t.conn
+
+	// Snapshot transfer settings once to pick the copy strategy. The zero-copy
+	// sendfile(2) fast path is only valid for plaintext, unthrottled downloads:
+	// TLS needs userspace encryption, and a max-speed cap needs per-write
+	// pacing. When eligible, io.CopyN(*net.TCPConn, *os.File) makes the kernel
+	// DMA straight from the page cache to the socket — no userspace bounce.
+	t.mu.Lock()
+	maxSpeed := t.maxSpeed
+	t.mu.Unlock()
+	useSendfile := !t.encrypted && maxSpeed <= 0
+
+	chunkSize := int64(t.slave.getTransferBufferSize())
+	var buf []byte
+	if !useSendfile {
+		buf = make([]byte, chunkSize)
+	}
 
 	for {
 		if t.abortReason != "" {
 			return t.errorStatus("aborted: " + t.abortReason)
 		}
 
-		n, err := file.Read(buf)
-		if n > 0 {
-			written, werr := writer.Write(buf[:n])
-			if werr != nil {
-				return t.errorStatus(fmt.Sprintf("write error: %v", werr))
+		var n int64
+		var err error
+		if useSendfile {
+			n, err = io.CopyN(t.conn, file, chunkSize)
+			if n > 0 {
+				t.transferred.Add(n)
 			}
-			if written != n {
-				return t.errorStatus("write error: short write")
+		} else {
+			var r int
+			r, err = file.Read(buf)
+			if r > 0 {
+				written, werr := t.conn.Write(buf[:r])
+				if werr != nil {
+					return t.errorStatus(fmt.Sprintf("write error: %v", werr))
+				}
+				if written != r {
+					return t.errorStatus("write error: short write")
+				}
+				n = int64(r)
+				t.transferred.Add(n)
+				t.applyMaxSpeed()
 			}
-			t.transferred.Add(int64(n))
-			t.applyMaxSpeed()
 		}
+
 		if time.Since(lastStatus) >= transferStatusTick {
-			_ = t.slave.writeObject(&protocol.AsyncResponseTransferStatus{Status: t.currentStatus(false, "")})
+			t.slave.writeStatusObject(&protocol.AsyncResponseTransferStatus{Status: t.currentStatus(false, "")})
 			lastStatus = time.Now()
 		}
 		if err := t.checkMinSpeed(&lastMinCheck, &firstMinCheck); err != nil {
@@ -361,7 +387,7 @@ func (t *Transfer) SendFile(path string, position int64, expectedPeer string) pr
 				time.Sleep(transferPollTick)
 				continue
 			}
-			return t.errorStatus(fmt.Sprintf("read error: %v", err))
+			return t.errorStatus(fmt.Sprintf("transfer error: %v", err))
 		}
 	}
 

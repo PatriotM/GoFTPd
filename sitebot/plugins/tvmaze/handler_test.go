@@ -9,6 +9,13 @@ func TestExtractShowNameStopsAtYearTag(t *testing.T) {
 	}
 }
 
+func TestExtractShowQueryStripsYearBeforeSeason(t *testing.T) {
+	title, yearHint := extractShowQuery("Ghosts.2021.S05E01.1080p.WEB.h264-GROUP")
+	if title != "Ghosts" || yearHint != 2021 {
+		t.Fatalf("extractShowQuery() = %q, %d; want Ghosts, 2021", title, yearHint)
+	}
+}
+
 func TestSelectBestTVMazeShowRejectsWeakTitleMatch(t *testing.T) {
 	results := []tvmazeSearchResult{{
 		Score: 1,
@@ -38,5 +45,45 @@ func TestSelectBestTVMazeShowAcceptsAcronymAlias(t *testing.T) {
 	got := selectBestTVMazeShow(results, "Law Order SVU")
 	if got == nil || got.Name != "Law & Order: Special Victims Unit" {
 		t.Fatalf("selectBestTVMazeShow() = %#v, want acronym alias match", got)
+	}
+}
+
+func TestSelectBestTVMazeShowAcceptsPossessiveTitleVariant(t *testing.T) {
+	results := []tvmazeSearchResult{{
+		Score: 1,
+		Show:  tvmazeShow{Name: "Bob's Burgers"},
+	}}
+	got := selectBestTVMazeShow(results, "Bobs Burgers")
+	if got == nil || got.Name != "Bob's Burgers" {
+		t.Fatalf("selectBestTVMazeShow() = %#v, want Bob's Burgers", got)
+	}
+}
+
+func TestSelectBestTVMazeShowSplitsLetterDigitTitles(t *testing.T) {
+	results := []tvmazeSearchResult{{
+		Score: 1,
+		Show:  tvmazeShow{Name: "Formula 1"},
+	}}
+	got := selectBestTVMazeShow(results, "Formula1")
+	if got == nil || got.Name != "Formula 1" {
+		t.Fatalf("selectBestTVMazeShow() = %#v, want Formula 1", got)
+	}
+}
+
+func TestSelectBestTVMazeShowPrefersPremieredYear(t *testing.T) {
+	results := []tvmazeSearchResult{
+		{Score: 1, Show: tvmazeShow{Name: "Ghosts", Premiered: "2019-04-15"}},
+		{Score: 1, Show: tvmazeShow{Name: "Ghosts", Premiered: "2021-10-07"}},
+	}
+	got := selectBestTVMazeShow(results, "Ghosts", 2021)
+	if got == nil || got.Premiered != "2021-10-07" {
+		t.Fatalf("selectBestTVMazeShow() = %#v, want 2021 Ghosts", got)
+	}
+}
+
+func TestTVMazeLookupQueriesAddsLoveIslandUSAlias(t *testing.T) {
+	got := tvmazeLookupQueries("Love Island US")
+	if len(got) != 2 || got[0] != "Love Island US" || got[1] != "Love Island USA" {
+		t.Fatalf("tvmazeLookupQueries() = %#v, want Love Island US then Love Island USA", got)
 	}
 }

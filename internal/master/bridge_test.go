@@ -72,8 +72,10 @@ func TestCacheSFVKeepsLiveRaceWindow(t *testing.T) {
 	})
 	sm.NoteRacePayloadTransferAt("/X265/release", 100, 3000)
 
-	if got := sm.GetReleaseRaceWindowMilliseconds("/X265/release"); got != 2000 {
-		t.Fatalf("race window after SFV cache = %dms, want 2000ms", got)
+	// First payload defines the start (3000-100=2900), overriding the mkdir
+	// seed at 1000, so the live window is 100ms and survives the SFV cache.
+	if got := sm.GetReleaseRaceWindowMilliseconds("/X265/release"); got != 100 {
+		t.Fatalf("race window after SFV cache = %dms, want 100ms", got)
 	}
 }
 

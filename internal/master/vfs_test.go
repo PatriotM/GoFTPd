@@ -559,6 +559,25 @@ func TestVFSAddSymlinkKeepsTargetType(t *testing.T) {
 	}
 }
 
+func TestVFSSearchDirsDoesNotCountDirectorySymlinkAsFile(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/X265/release", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/X265/release/file.r00", VFSFile{Size: 100, Seen: true})
+	vfs.AddSymlink("/X265/release-link", "/X265/release")
+
+	results := vfs.SearchDirs("X265", 10)
+	for _, result := range results {
+		if result.Path != "/X265" {
+			continue
+		}
+		if result.Files != 1 || result.Bytes != 100 {
+			t.Fatalf("SearchDirs /X265 = files=%d bytes=%d, want files=1 bytes=100", result.Files, result.Bytes)
+		}
+		return
+	}
+	t.Fatalf("SearchDirs did not return /X265: %+v", results)
+}
+
 func TestVFSAddFilePreservesVerifiedTransferDataAcrossRemerge(t *testing.T) {
 	vfs := NewVirtualFileSystem()
 
