@@ -7,10 +7,18 @@ import (
 	pathpkg "path"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"goftpd/internal/user"
 	"gopkg.in/yaml.v3"
 )
+
+// requirementCache memoizes parsed scalar requirements. checkRequired is called
+// per ACL rule, per directory entry, per listing. Re-parsing the same handful
+// of requirement strings thousands of times. Parsed Requirements are read-only
+// after parsing, so caching them by source string is safe and cuts the
+// per-listing CPU/allocation churn that slows LIST/MLSD on busy sections.
+var requirementCache sync.Map // string -> *Requirement
 
 type Rule struct {
 	Type        string       `yaml:"type"`     // privpath, upload, download, makedir, delete, nuke, etc
@@ -684,10 +692,15 @@ func ruleMatchesPath(rule Rule, vpath string) bool {
 	return false
 }
 
-// checkRequired checks if user meets requirement
+// checkRequired checks if user meets requirement. The parsed requirement is
+// memoized so repeated ACL checks (every entry in a listing) don't re-parse.
 func checkRequired(required string, u *user.User) bool {
+	if cached, ok := requirementCache.Load(required); ok {
+		return checkRequirement(cached.(*Requirement), u)
+	}
 	req := &Requirement{}
 	_ = parseRequirementScalar(req, required)
+	requirementCache.Store(required, req)
 	return checkRequirement(req, u)
 }
 

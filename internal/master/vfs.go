@@ -1175,6 +1175,29 @@ func (vfs *VirtualFileSystem) subtreeFileStatsLocked(dirPath string) (files int,
 	return files, bytes, modTime
 }
 
+// FindChildFoldMatch returns the base name of the first direct child of
+// parentPath whose name case-folds to one of candidates, plus the index of the
+// matched candidate. It walks the children index directly (no directory-listing
+// allocation), so releaseguard's per-MKD dupe/case/nuked check is a tight map
+// scan under a read lock instead of building and copying the whole section.
+func (vfs *VirtualFileSystem) FindChildFoldMatch(parentPath string, candidates []string) (string, int, bool) {
+	if len(candidates) == 0 {
+		return "", 0, false
+	}
+	parentPath = cleanVFSPath(parentPath)
+	vfs.mu.RLock()
+	defer vfs.mu.RUnlock()
+	for childPath := range vfs.children[parentPath] {
+		base := filepath.Base(childPath)
+		for i, cand := range candidates {
+			if strings.EqualFold(base, cand) {
+				return base, i, true
+			}
+		}
+	}
+	return "", 0, false
+}
+
 // Count returns the number of entries in the VFS
 func (vfs *VirtualFileSystem) Count() int {
 	vfs.mu.RLock()

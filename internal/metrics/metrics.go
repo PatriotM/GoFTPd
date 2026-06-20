@@ -83,6 +83,12 @@ var (
 	// load indicate the per-listing race recompute is a bottleneck.
 	RaceComputes    Counter
 	RaceComputeTime Latency
+
+	// ZeroSizeRepairs counts files that were on disk but read as size 0 in the
+	// VFS and had to be repaired from the race DB during a listing. A non-zero,
+	// climbing value during a race means uploaded files are momentarily invisible
+	// (zero-size) to clients, which makes racers skip and retry them.
+	ZeroSizeRepairs Counter
 )
 
 // TransferBegin marks a transfer as started. direction is "upload"/"download".
@@ -148,6 +154,9 @@ func Snapshot() map[string]interface{} {
 			"compute_ms_avg":  round2(rcAvg),
 			"compute_ms_max":  round2(rcMax),
 			"compute_samples": rcCount,
+		},
+		"vfs": map[string]interface{}{
+			"zero_size_repairs": ZeroSizeRepairs.Value(),
 		},
 		"runtime": map[string]interface{}{
 			"goroutines":      runtime.NumGoroutine(),
