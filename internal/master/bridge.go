@@ -2282,6 +2282,15 @@ func (b *Bridge) NoteRacePayloadTransfer(dirPath, fileName string, durationMs in
 }
 
 func (b *Bridge) NoteRacePayloadTransferAt(dirPath, fileName string, durationMs int64, endMs int64) {
+	// Only real release files seed the race window. cbftp uploads the .sfv (and
+	// often the .nfo) first, sometimes many seconds before the actual data files
+	// start flowing; counting them would stretch the window across that dead air
+	// and inflate the announced duration. pzs-ng and drftpd both time from the
+	// first DATA file, not the SFV; match that.
+	lname := strings.ToLower(strings.TrimSpace(path.Base(strings.ReplaceAll(fileName, "\\", "/"))))
+	if strings.HasSuffix(lname, ".sfv") || strings.HasSuffix(lname, ".nfo") {
+		return
+	}
 	cleanDirPath := filepath.Clean(dirPath)
 	if endMs <= 0 && b != nil && b.sm != nil {
 		if f := b.sm.GetVFS().GetFile(path.Join(cleanDirPath, fileName)); f != nil && f.LastModified > 0 {
