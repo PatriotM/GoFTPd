@@ -36,6 +36,17 @@ type Bridge struct {
 	liveTransferStatsAt    time.Time
 	liveTransferStatsMu    sync.Mutex
 	transferSpeedPolicy    func(username, primaryGroup, transferPath, direction string) (int64, int64, int64)
+
+	uploadRecords chan uploadRecord // async race-DB upload writes, off the 226 path
+}
+
+type uploadRecord struct {
+	filePath string
+	owner    string
+	group    string
+	size     int64
+	duration int64
+	checksum uint32
 }
 
 func configureBridgeDataSocket(conn net.Conn) {
@@ -91,6 +102,10 @@ func NewBridge(sm *SlaveManager) *Bridge {
 		return b
 	}
 	b.raceDB = rdb
+	// Drain upload records to the race DB asynchronously so the per-file DB write
+	// never sits on the upload-completion path before the 226.
+	b.uploadRecords = make(chan uploadRecord, 8192)
+	go b.uploadRecordWriter()
 	if err := b.raceDB.Reconcile(sm.GetVFS()); err != nil {
 		log.Printf("[Bridge] Race DB reconcile failed: %v", err)
 	}
@@ -746,8 +761,33 @@ func (b *Bridge) recordUploadMetadata(filePath, owner, group string, size int64,
 	if b == nil || b.raceDB == nil || size <= 0 || durationMs <= 0 {
 		return
 	}
-	if err := b.raceDB.RecordUpload(filepath.Clean(filePath), owner, group, size, durationMs, checksum); err != nil {
-		log.Printf("[Bridge] Race DB record upload failed for %s: %v", filePath, err)
+	rec := uploadRecord{filePath: filePath, owner: owner, group: group, size: size, duration: durationMs, checksum: checksum}
+	if b.uploadRecords != nil {
+		select {
+		case b.uploadRecords <- rec:
+			return
+		default:
+			// Queue full; fall through to a synchronous write rather than drop
+			// race data. This only happens under extreme backlog.
+		}
+	}
+	b.writeUploadRecord(rec)
+}
+
+// uploadRecordWriter drains queued upload records to the race DB on a single
+// background goroutine, keeping the DB write off the upload-completion path.
+func (b *Bridge) uploadRecordWriter() {
+	for rec := range b.uploadRecords {
+		b.writeUploadRecord(rec)
+	}
+}
+
+func (b *Bridge) writeUploadRecord(rec uploadRecord) {
+	if b == nil || b.raceDB == nil {
+		return
+	}
+	if err := b.raceDB.RecordUpload(filepath.Clean(rec.filePath), rec.owner, rec.group, rec.size, rec.duration, rec.checksum); err != nil {
+		log.Printf("[Bridge] Race DB record upload failed for %s: %v", rec.filePath, err)
 	}
 }
 
@@ -2242,6 +2282,15 @@ func (b *Bridge) NoteRacePayloadTransfer(dirPath, fileName string, durationMs in
 }
 
 func (b *Bridge) NoteRacePayloadTransferAt(dirPath, fileName string, durationMs int64, endMs int64) {
+	// Only real release files seed the race window. cbftp uploads the .sfv (and
+	// often the .nfo) first, sometimes many seconds before the actual data files
+	// start flowing; counting them would stretch the window across that dead air
+	// and inflate the announced duration. pzs-ng and drftpd both time from the
+	// first DATA file, not the SFV; match that.
+	lname := strings.ToLower(strings.TrimSpace(path.Base(strings.ReplaceAll(fileName, "\\", "/"))))
+	if strings.HasSuffix(lname, ".sfv") || strings.HasSuffix(lname, ".nfo") {
+		return
+	}
 	cleanDirPath := filepath.Clean(dirPath)
 	if endMs <= 0 && b != nil && b.sm != nil {
 		if f := b.sm.GetVFS().GetFile(path.Join(cleanDirPath, fileName)); f != nil && f.LastModified > 0 {
