@@ -46,6 +46,7 @@ type RemoteSlave struct {
 	// Transfers
 	transfers          sync.Map     // TransferIndex (int32) -> *RemoteTransfer
 	completedTransfers sync.Map     // TransferIndex (int32) -> protocol.TransferStatus
+	transferDone       sync.Map     // TransferIndex (int32) -> chan struct{}, closed on completion
 	activeCount        atomic.Int32 // number of currently-active uploads/downloads
 
 	// Timing
@@ -321,10 +322,12 @@ func (rs *RemoteSlave) Run(masterSlaveManager *SlaveManager) {
 				if resp.Status.Finished {
 					rs.completedTransfers.Store(resp.Status.TransferIndex, resp.Status)
 					rs.transfers.Delete(resp.Status.TransferIndex)
+					rs.signalTransferDone(resp.Status.TransferIndex)
 					masterSlaveManager.publishDiskStatus(rs)
 				}
 			} else if resp.Status.Finished {
 				rs.completedTransfers.Store(resp.Status.TransferIndex, resp.Status)
+				rs.signalTransferDone(resp.Status.TransferIndex)
 			}
 
 		case *protocol.AsyncResponseTransfer:
@@ -538,8 +541,37 @@ func (rs *RemoteSlave) GetTransfer(idx int32) (*RemoteTransfer, bool) {
 	return val.(*RemoteTransfer), true
 }
 
+// transferDoneChan returns the per-transfer completion channel, creating it if
+// absent. Closed by signalTransferDone when the slave reports the transfer
+// finished, so WaitTransferStatus wakes immediately instead of polling.
+func (rs *RemoteSlave) transferDoneChan(idx int32) chan struct{} {
+	ch, _ := rs.transferDone.LoadOrStore(idx, make(chan struct{}))
+	return ch.(chan struct{})
+}
+
+// signalTransferDone wakes any WaitTransferStatus waiting on idx. LoadAndDelete
+// guarantees exactly one closer, so the channel is never double-closed.
+func (rs *RemoteSlave) signalTransferDone(idx int32) {
+	if ch, ok := rs.transferDone.LoadAndDelete(idx); ok {
+		close(ch.(chan struct{}))
+	}
+}
+
+func (rs *RemoteSlave) clearTransferDone(idx int32) {
+	rs.transferDone.Delete(idx)
+}
+
 func (rs *RemoteSlave) WaitTransferStatus(idx int32, timeout time.Duration) (protocol.TransferStatus, error) {
-	deadline := time.Now().Add(timeout)
+	doneCh := rs.transferDoneChan(idx)
+	defer rs.clearTransferDone(idx)
+
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	// Safety ticker only for offline detection / missed-signal races; completion
+	// itself is delivered instantly via doneCh, so this can be coarse.
+	safety := time.NewTicker(time.Second)
+	defer safety.Stop()
+
 	for {
 		if val, ok := rs.completedTransfers.LoadAndDelete(idx); ok {
 			return val.(protocol.TransferStatus), nil
@@ -555,9 +587,14 @@ func (rs *RemoteSlave) WaitTransferStatus(idx int32, timeout time.Duration) (pro
 		if !rs.IsOnline() {
 			return protocol.TransferStatus{}, fmt.Errorf("slave %s went offline during transfer %d", rs.name, idx)
 		}
-		if time.Now().After(deadline) {
+
+		select {
+		case <-doneCh:
+			// completion recorded; loop re-reads it from completedTransfers
+		case <-safety.C:
+			// periodic re-check (offline / missed signal)
+		case <-deadline.C:
 			return protocol.TransferStatus{}, fmt.Errorf("timeout waiting for transfer %d from slave %s", idx, rs.name)
 		}
-		time.Sleep(100 * time.Millisecond)
 	}
 }
