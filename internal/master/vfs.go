@@ -1617,18 +1617,31 @@ func (vfs *VirtualFileSystem) GetRaceStatsFiltered(dirPath string, excludeKeys m
 			vfs.mu.RUnlock()
 			return
 		}
+		// Cache miss: compute under the READ lock, like the filtered path below.
+		// The compute is read-only. Holding the global WRITE lock here used to
+		// freeze every other VFS op (CWD/ResolvePath, other listings) for the
+		// whole computation, and since the race cache is invalidated on every
+		// upload, that serialized the entire VFS during a race. Readers don't
+		// block each other, so concurrent recompute is fine.
+		computeVersion := vfs.persistVersion
+		cache = vfs.computeRaceStateFilteredLocked(dirPath, nil)
 		vfs.mu.RUnlock()
-
-		vfs.mu.Lock()
-		cache = vfs.computeRaceStateCachedLocked(dirPath)
 		if cache != nil {
 			users = append(users, cache.Users...)
 			groups = append(groups, cache.Groups...)
 			totalBytes = cache.TotalBytes
 			present = cache.Present
 			total = cache.Total
+			// Publish for the next reader with a brief write lock: just a pointer
+			// store, never held across the computation. If any VFS write happened
+			// after our read-lock snapshot, skip publishing to avoid caching stale
+			// stats.
+			vfs.mu.Lock()
+			if meta := vfs.dirMeta[dirPath]; vfs.persistVersion == computeVersion && meta != nil && meta.raceCache == nil && vfs.sfvMetaValidLocked(dirPath, meta) {
+				meta.raceCache = cloneRaceCache(cache)
+			}
+			vfs.mu.Unlock()
 		}
-		vfs.mu.Unlock()
 		return
 	}
 
@@ -1667,18 +1680,24 @@ func (vfs *VirtualFileSystem) GetZipRaceStatsFiltered(dirPath string, excludeKey
 			vfs.mu.RUnlock()
 			return
 		}
+		// Cache miss: compute under the READ lock (the filtered ZIP path below
+		// already does, so the compute is read-only). Avoids taking the global
+		// write lock per miss, which serialized the VFS during races.
+		computeVersion := vfs.persistVersion
+		cache = vfs.computeZipRaceStateFilteredLocked(dirPath, nil)
 		vfs.mu.RUnlock()
-
-		vfs.mu.Lock()
-		cache = vfs.computeZipRaceStateCachedLocked(dirPath)
 		if cache != nil {
 			users = append(users, cache.Users...)
 			groups = append(groups, cache.Groups...)
 			totalBytes = cache.TotalBytes
 			present = cache.Present
 			total = cache.Total
+			vfs.mu.Lock()
+			if meta := vfs.dirMeta[dirPath]; vfs.persistVersion == computeVersion && meta != nil && meta.zipRaceCache == nil {
+				meta.zipRaceCache = cloneRaceCache(cache)
+			}
+			vfs.mu.Unlock()
 		}
-		vfs.mu.Unlock()
 		return
 	}
 
@@ -1711,39 +1730,12 @@ func (vfs *VirtualFileSystem) cachedRaceStateLocked(dirPath string) *VFSRaceCach
 	return cloneRaceCache(meta.raceCache)
 }
 
-func (vfs *VirtualFileSystem) computeRaceStateCachedLocked(dirPath string) *VFSRaceCache {
-	meta := vfs.dirMeta[dirPath]
-	if !vfs.sfvMetaValidLocked(dirPath, meta) {
-		return nil
-	}
-	if meta.raceCache != nil {
-		return cloneRaceCache(meta.raceCache)
-	}
-	cache := vfs.computeRaceStateFilteredLocked(dirPath, nil)
-	if cache != nil {
-		meta.raceCache = cloneRaceCache(cache)
-	}
-	return cache
-}
-
 func (vfs *VirtualFileSystem) cachedZipRaceStateLocked(dirPath string) *VFSRaceCache {
 	meta := vfs.dirMeta[dirPath]
 	if meta == nil {
 		return nil
 	}
 	return cloneRaceCache(meta.zipRaceCache)
-}
-
-func (vfs *VirtualFileSystem) computeZipRaceStateCachedLocked(dirPath string) *VFSRaceCache {
-	meta := vfs.dirMeta[dirPath]
-	if meta != nil && meta.zipRaceCache != nil {
-		return cloneRaceCache(meta.zipRaceCache)
-	}
-	cache := vfs.computeZipRaceStateFilteredLocked(dirPath, nil)
-	if cache != nil && meta != nil {
-		meta.zipRaceCache = cloneRaceCache(cache)
-	}
-	return cache
 }
 
 func cloneRaceCache(cache *VFSRaceCache) *VFSRaceCache {
