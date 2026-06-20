@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"path"
+	"runtime/pprof"
 	"sort"
 	"strings"
 	"time"
@@ -41,6 +42,7 @@ func startVFSAPIServer(cfg *core.Config, bridge *master.Bridge) *http.Server {
 	api := &vfsAPI{cfg: cfg, bridge: bridge}
 	mux.HandleFunc("/api/v1/health", api.handleHealth)
 	mux.HandleFunc("/api/v1/metrics", api.handleMetrics)
+	mux.HandleFunc("/api/v1/debug/goroutines", api.handleGoroutines)
 	if bridge != nil {
 		mux.HandleFunc("/api/v1/vfs/move", api.handleVFSMove)
 		mux.HandleFunc("/api/v1/vfs/delete", api.handleVFSDelete)
@@ -94,6 +96,23 @@ func (a *vfsAPI) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeAPIJSON(w, http.StatusOK, snap)
+}
+
+// handleGoroutines dumps live goroutines grouped by stack (pprof debug=1), so a
+// leak shows up as "<big number> @ <stack>" at the top. ?debug=2 gives every
+// goroutine's full stack.
+func (a *vfsAPI) handleGoroutines(w http.ResponseWriter, r *http.Request) {
+	if !a.authorize(w, r) {
+		return
+	}
+	debug := 1
+	if r.URL.Query().Get("debug") == "2" {
+		debug = 2
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if p := pprof.Lookup("goroutine"); p != nil {
+		_ = p.WriteTo(w, debug)
+	}
 }
 
 func writeMetricsText(w io.Writer, snap map[string]interface{}) {
