@@ -37,6 +37,7 @@ type releaseRaceWindow struct {
 	StartMs     int64
 	EndMs       int64
 	UpdatedAtMs int64
+	HasPayload  bool // true once a real file transfer (not just the mkdir seed) set StartMs
 }
 
 type backgroundRemergeConfig struct {
@@ -1264,12 +1265,17 @@ func (sm *SlaveManager) NoteRacePayloadTransferAt(dirPath string, durationMs int
 			StartMs:     startMs,
 			EndMs:       endMs,
 			UpdatedAtMs: endMs,
+			HasPayload:  true,
 		}
 		return
 	}
-	if window.StartMs <= 0 || startMs < window.StartMs {
+	// The first real payload replaces the mkdir seed: the seed only marks when
+	// the dir was created, not when data actually started flowing. After that,
+	// keep the earliest payload start so the window is first-file to last-file.
+	if !window.HasPayload || window.StartMs <= 0 || startMs < window.StartMs {
 		window.StartMs = startMs
 	}
+	window.HasPayload = true
 	if endMs > window.EndMs {
 		window.EndMs = endMs
 	}
@@ -2550,12 +2556,29 @@ func (sm *SlaveManager) vfsPersistLoop() {
 
 	for sm.running.Load() {
 		<-ticker.C
+		if sm.anySlaveRemerging() {
+			continue
+		}
 		if sm.vfs.Count() > 0 {
 			if err := sm.vfs.SaveToDisk(vfsFilePath); err != nil {
 				log.Printf("[SlaveManager] Error saving VFS: %v", err)
 			}
 		}
 	}
+}
+
+func (sm *SlaveManager) anySlaveRemerging() bool {
+	if sm == nil {
+		return false
+	}
+	sm.slavesMu.RLock()
+	defer sm.slavesMu.RUnlock()
+	for _, rs := range sm.slaves {
+		if rs != nil && rs.IsRemerging() {
+			return true
+		}
+	}
+	return false
 }
 
 func (sm *SlaveManager) diskStatusLoop() {

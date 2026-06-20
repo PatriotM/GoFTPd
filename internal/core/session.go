@@ -1,15 +1,18 @@
 package core
 
 import (
+	"bufio"
 	"crypto/tls"
 	"fmt"
 	"log"
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"goftpd/internal/acl"
+	"goftpd/internal/netutil"
 	"goftpd/internal/user"
 )
 
@@ -77,16 +80,16 @@ type Session struct {
 	RestOffset      int64       // REST offset applied to the next STOR/RETR
 	XDupeMode       int         // SITE XDUPE mode for duplicate listings on STOR
 
-	stateMu           sync.RWMutex
-	lastDataConnActive bool
+	stateMu               sync.RWMutex
+	lastDataConnActive    bool
 	nextDataTLSClientMode bool
-	LastCommandAt     time.Time
-	TransferDirection string
-	TransferPath      string
-	TransferBytes     int64
-	TransferStartedAt time.Time
-	TransferSlaveName string
-	TransferSlaveIdx  int32
+	LastCommandAt         time.Time
+	TransferDirection     string
+	TransferPath          string
+	TransferBytes         atomic.Int64
+	TransferStartedAt     time.Time
+	TransferSlaveName     string
+	TransferSlaveIdx      int32
 }
 
 func (s *Session) currentTransferTypeByte() byte {
@@ -96,28 +99,23 @@ func (s *Session) currentTransferTypeByte() byte {
 	return s.TransferType[0]
 }
 
-// readLinePure reads exactly one line byte-by-byte.
-// It accepts a 'prefix' buffer to catch any bytes we might have "peeked" at
-// during our legacy client check.
-func readLinePure(conn net.Conn, prefix []byte) (string, error) {
+// readLinePure reads one FTP command line from a buffered control socket.
+func readLinePure(reader *bufio.Reader) (string, error) {
 	var buf []byte
-	buf = append(buf, prefix...)
-	b := make([]byte, 1)
-
 	for {
-		_, err := conn.Read(b)
-		if err != nil {
-			return "", err
-		}
-		buf = append(buf, b[0])
-		if b[0] == '\n' {
-			break
-		}
+		part, err := reader.ReadSlice('\n')
+		buf = append(buf, part...)
 		if len(buf) > 4096 {
 			return "", fmt.Errorf("command line too long")
 		}
+		if err == nil {
+			return string(buf), nil
+		}
+		if err == bufio.ErrBufferFull {
+			continue
+		}
+		return "", err
 	}
-	return string(buf), nil
 }
 
 // HandleSession initializes the session and manages the command read loop.
@@ -142,13 +140,11 @@ func HandleSession(conn net.Conn, tlsConfig *tls.Config, cfg *Config, aclEngine 
 	fmt.Fprintf(session.Conn, "220-%s GoFTPd v%s\r\n220 Ready.\r\n",
 		session.Config.SiteNameShort, session.Config.Version)
 
-	var leftover []byte // Used to hold the 1 byte if we peeked it
+	controlReader := bufio.NewReaderSize(session.Conn, 4096)
 
 	// Main Command Loop
 	for {
-		line, err := readLinePure(session.Conn, leftover)
-		leftover = nil // Clear it immediately after using it
-
+		line, err := readLinePure(controlReader)
 		if err != nil {
 			return
 		}
@@ -179,6 +175,9 @@ func HandleSession(conn net.Conn, tlsConfig *tls.Config, cfg *Config, aclEngine 
 
 		// Handle AUTH TLS to upgrade the control channel
 		if cmd == "AUTH" && len(args) > 0 && strings.ToUpper(args[0]) == "TLS" {
+			if buffered := controlReader.Buffered(); buffered > 0 {
+				_, _ = controlReader.Discard(buffered)
+			}
 			fmt.Fprintf(session.Conn, "234 AUTH TLS successful\r\n")
 
 			tlsConn := tls.Server(session.Conn, tlsConfig)
@@ -197,31 +196,28 @@ func HandleSession(conn net.Conn, tlsConfig *tls.Config, cfg *Config, aclEngine 
 
 			session.Conn = tlsConn
 			session.IsTLS = true
+			controlReader = bufio.NewReaderSize(session.Conn, 4096)
 
 			if cfg.Debug {
 				log.Printf("[%s] TLS Handshake Successful", session.Conn.RemoteAddr())
 			}
 
-			// --- THE SMART PEEK FIX (Native net.Conn version) ---
+			// --- THE SMART PEEK FIX ---
 			// RushFTP waits for 220 in dead silence. cbftp pipelines USER instantly.
 			// We give the client 250ms to say something.
 			session.Conn.SetReadDeadline(time.Now().Add(250 * time.Millisecond))
-			peekBuf := make([]byte, 1)
-			n, peekErr := session.Conn.Read(peekBuf)
+			_, peekErr := controlReader.Peek(1)
 			session.Conn.SetReadDeadline(time.Time{}) // Clear deadline immediately!
 
 			if peekErr != nil {
 				// If we hit a timeout, the client is silent. It's RushFTP.
 				if netErr, ok := peekErr.(net.Error); ok && netErr.Timeout() {
 					fmt.Fprintf(session.Conn, "220 TLS connection established\r\n")
+					controlReader = bufio.NewReaderSize(session.Conn, 4096)
 					if cfg.Debug {
 						log.Printf("[%s] Client silent after TLS, sent implicit 220 greeting", session.Conn.RemoteAddr())
 					}
 				}
-			} else if n == 1 {
-				// The client (cbftp) sent data immediately! (Probably the 'U' in USER)
-				// We must save this byte so we don't lose it in the next read loop.
-				leftover = peekBuf
 			}
 			// ----------------------------------------------------
 
@@ -279,9 +275,7 @@ func (s *Session) getRawDataConn() (net.Conn, error) {
 }
 
 func configureDataSocket(conn net.Conn) {
-	if tcpConn, ok := conn.(*net.TCPConn); ok {
-		_ = tcpConn.SetNoDelay(true)
-	}
+	netutil.ConfigureDataSocket(conn, netutil.DefaultDataSocketBufferSize)
 }
 
 // upgradeDataTLS applies encryption to the data connection if PROT P is enabled.

@@ -91,7 +91,7 @@ func listActiveSessions() []sessionSnapshot {
 		snap.LastCommandAt = s.LastCommandAt
 		snap.TransferDirection = s.TransferDirection
 		snap.TransferPath = s.TransferPath
-		snap.TransferBytes = s.TransferBytes
+		snap.TransferBytes = s.TransferBytes.Load()
 		snap.TransferStartedAt = s.TransferStartedAt
 		snap.TransferSlaveName = s.TransferSlaveName
 		snap.TransferSlaveIdx = s.TransferSlaveIdx

@@ -177,21 +177,33 @@ func isMovieReleaseDirName(rel string) bool {
 	return regexp.MustCompile(`\.(19|20)\d{2}\.`).MatchString(rel)
 }
 
+var imdbYearTokenRe = regexp.MustCompile(`^(?:19|20)\d{2}$`)
+
 // extractMovieTitleYear parses "The.Matrix.1999.1080p.BluRay.x264-GROUP" into
 // ("The Matrix", 1999). If no year is found, returns ("", 0).
+//
+// Scene naming is Title.YEAR.quality, so when the title itself contains a
+// year-like number (Blade.Runner.2049.2017, 2012.2009, 1917.2019, 1922.2017)
+// the release year is the LAST year token, not the first. Taking the last keeps
+// the numeric part in the title and uses the real release year for matching.
 func extractMovieTitleYear(rel string) (string, int) {
 	// Strip -GROUP suffix
 	if idx := strings.LastIndex(rel, "-"); idx > 0 {
 		rel = rel[:idx]
 	}
-	re := regexp.MustCompile(`\.((?:19|20)\d{2})\.`)
-	loc := re.FindStringSubmatchIndex(rel)
-	if loc == nil {
+	tokens := strings.Split(rel, ".")
+	yearIdx := -1
+	for i, tok := range tokens {
+		if imdbYearTokenRe.MatchString(tok) {
+			yearIdx = i
+		}
+	}
+	if yearIdx <= 0 {
 		return "", 0
 	}
-	title := strings.ReplaceAll(rel[:loc[0]], ".", " ")
+	title := strings.Join(tokens[:yearIdx], " ")
 	year := 0
-	fmt.Sscanf(rel[loc[2]:loc[3]], "%d", &year)
+	fmt.Sscanf(tokens[yearIdx], "%d", &year)
 	return strings.TrimSpace(title), year
 }
 

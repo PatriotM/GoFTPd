@@ -7,16 +7,31 @@ import (
 	pathpkg "path"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"goftpd/internal/user"
 	"gopkg.in/yaml.v3"
 )
+
+// requirementCache memoizes parsed scalar requirements. checkRequired is called
+// per ACL rule, per directory entry, per listing. Re-parsing the same handful
+// of requirement strings thousands of times. Parsed Requirements are read-only
+// after parsing, so caching them by source string is safe and cuts the
+// per-listing CPU/allocation churn that slows LIST/MLSD on busy sections.
+var requirementCache sync.Map // string -> *Requirement
 
 type Rule struct {
 	Type        string       `yaml:"type"`     // privpath, upload, download, makedir, delete, nuke, etc
 	Path        string       `yaml:"path"`     // /site/*, /site/PRE/*, etc
 	Required    string       `yaml:"required"` // 1, *, "1 =SiteOP", "A =NUKERS", "=Admin", etc
 	Requirement *Requirement `yaml:"-"`
+	paths       []compiledRulePath
+}
+
+type compiledRulePath struct {
+	pattern       string
+	parent        string
+	trailingSlash bool
 }
 
 type Requirement struct {
@@ -270,6 +285,7 @@ func LoadEngine(path string) (*Engine, error) {
 				Path:     rulePath,
 				Required: required,
 			}
+			rule = prepareRule(rule)
 			e.RulesByType[ruleType] = append(e.RulesByType[ruleType], rule)
 		}
 	}
@@ -289,6 +305,7 @@ func loadYAMLRules(e *Engine, data []byte) (bool, error) {
 			return false, fmt.Errorf("structured ACL file did not compile any valid rules")
 		}
 		for _, rule := range rules {
+			rule = prepareRule(rule)
 			e.RulesByType[rule.Type] = append(e.RulesByType[rule.Type], rule)
 		}
 		return true, nil
@@ -303,24 +320,16 @@ func loadYAMLRules(e *Engine, data []byte) (bool, error) {
 			return false, fmt.Errorf("structured ACL file did not compile any valid rules")
 		}
 		for _, rule := range rules {
+			rule = prepareRule(rule)
 			e.RulesByType[rule.Type] = append(e.RulesByType[rule.Type], rule)
 		}
 		return true, nil
 	}
 	added := 0
 	for _, rule := range file.Rules {
-		rule.Type = strings.ToLower(strings.TrimSpace(rule.Type))
-		rule.Path = strings.TrimSpace(rule.Path)
-		rule.Required = strings.TrimSpace(rule.Required)
+		rule = prepareRule(rule)
 		if rule.Type == "" || rule.Path == "" {
 			continue
-		}
-		if rule.Required == "" {
-			rule.Required = "*"
-		}
-		if rule.Requirement == nil {
-			rule.Requirement = &Requirement{}
-			_ = parseRequirementScalar(rule.Requirement, rule.Required)
 		}
 		e.RulesByType[rule.Type] = append(e.RulesByType[rule.Type], rule)
 		added++
@@ -389,12 +398,12 @@ func compileStructuredRules(file yamlStructuredRulesFile) ([]Rule, bool) {
 				if path == "" {
 					continue
 				}
-				compiled = append(compiled, Rule{
+				compiled = append(compiled, prepareRule(Rule{
 					Type:        ruleType,
 					Path:        path,
 					Required:    requiredText,
 					Requirement: cloneRequirement(req),
-				})
+				}))
 			}
 		}
 	}
@@ -572,31 +581,88 @@ func expandBracePatterns(pattern string) []string {
 	return out
 }
 
-func pathMatchesSingle(pattern, vpath string) bool {
+func prepareRule(rule Rule) Rule {
+	rule.Type = strings.ToLower(strings.TrimSpace(rule.Type))
+	rule.Path = strings.TrimSpace(rule.Path)
+	rule.Required = strings.TrimSpace(rule.Required)
+	if rule.Required == "" {
+		rule.Required = "*"
+	}
+	if rule.Requirement == nil {
+		rule.Requirement = &Requirement{}
+		_ = parseRequirementScalar(rule.Requirement, rule.Required)
+	}
+	rule.paths = compileRulePaths(rule.Path)
+	return rule
+}
+
+func compileRulePaths(pattern string) []compiledRulePath {
+	expanded := expandBracePatterns(pattern)
+	out := make([]compiledRulePath, 0, len(expanded))
+	seen := make(map[string]struct{}, len(expanded))
+	for _, expandedPattern := range expanded {
+		compiled, ok := compileRulePath(expandedPattern)
+		if !ok {
+			continue
+		}
+		key := compiled.pattern + "\x00" + compiled.parent
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, compiled)
+	}
+	return out
+}
+
+func compileRulePath(pattern string) (compiledRulePath, bool) {
 	rawPattern := strings.ReplaceAll(strings.TrimSpace(pattern), "\\", "/")
-	rawPath := strings.ReplaceAll(strings.TrimSpace(vpath), "\\", "/")
-	if strings.HasSuffix(rawPattern, "/") {
-		matchPath := strings.TrimRight(rawPath, "/") + "/"
-		if ok, _ := pathpkg.Match(rawPattern, matchPath); ok {
+	if rawPattern == "" {
+		return compiledRulePath{}, false
+	}
+	trailingSlash := strings.HasSuffix(rawPattern, "/")
+	matchPattern := rawPattern
+	if !trailingSlash {
+		matchPattern = filepath.ToSlash(filepath.Clean(rawPattern))
+	}
+	return compiledRulePath{
+		pattern:       matchPattern,
+		parent:        filepath.ToSlash(filepath.Clean(rawPattern)),
+		trailingSlash: trailingSlash,
+	}, true
+}
+
+func compiledPathsForRule(rule Rule) []compiledRulePath {
+	if len(rule.paths) > 0 {
+		return rule.paths
+	}
+	return compileRulePaths(rule.Path)
+}
+
+func normalizeCheckPath(vpath string) string {
+	return filepath.ToSlash(filepath.Clean(strings.ReplaceAll(strings.TrimSpace(vpath), "\\", "/")))
+}
+
+func pathMatchesCompiled(pattern compiledRulePath, vpath string) bool {
+	if pattern.trailingSlash {
+		matchPath := strings.TrimRight(vpath, "/") + "/"
+		if ok, _ := pathpkg.Match(pattern.pattern, matchPath); ok {
 			return true
 		}
 		return false
 	}
 
-	pattern = filepath.ToSlash(filepath.Clean(rawPattern))
-	vpath = filepath.ToSlash(filepath.Clean(rawPath))
-
-	if pattern == vpath {
+	if pattern.pattern == vpath {
 		return true
 	}
-	if ok, _ := pathpkg.Match(pattern, vpath); ok {
+	if ok, _ := pathpkg.Match(pattern.pattern, vpath); ok {
 		return true
 	}
 
 	// Handle wildcards like /site/*, /site/PRE/*, /site/PRE/*/*, etc
-	if strings.Contains(pattern, "*") {
+	if strings.Contains(pattern.pattern, "*") {
 		// Convert glob to regex-like matching
-		parts := strings.Split(pattern, "*")
+		parts := strings.Split(pattern.pattern, "*")
 		if len(parts) == 2 {
 			prefix := parts[0]
 			suffix := parts[1]
@@ -617,10 +683,24 @@ func pathMatchesSingle(pattern, vpath string) bool {
 	return false
 }
 
-// checkRequired checks if user meets requirement
+func ruleMatchesPath(rule Rule, vpath string) bool {
+	for _, rulePath := range compiledPathsForRule(rule) {
+		if pathMatchesCompiled(rulePath, vpath) || pathIsBelow(vpath, rulePath.parent) {
+			return true
+		}
+	}
+	return false
+}
+
+// checkRequired checks if user meets requirement. The parsed requirement is
+// memoized so repeated ACL checks (every entry in a listing) don't re-parse.
 func checkRequired(required string, u *user.User) bool {
+	if cached, ok := requirementCache.Load(required); ok {
+		return checkRequirement(cached.(*Requirement), u)
+	}
 	req := &Requirement{}
 	_ = parseRequirementScalar(req, required)
+	requirementCache.Store(required, req)
 	return checkRequirement(req, u)
 }
 
@@ -767,15 +847,14 @@ func (e *Engine) CanPerform(u *user.User, action string, vpath string) bool {
 	}
 
 	action = strings.ToLower(action)
-	vpath = filepath.ToSlash(filepath.Clean(vpath))
+	vpath = normalizeCheckPath(vpath)
 
 	// Private-path rules are an override gate. If a path is marked private,
 	// the user must satisfy that rule before any broader action allow-list
 	// is considered.
 	if privRules, ok := e.RulesByType["privpath"]; ok {
 		for _, rule := range privRules {
-			rulePath := filepath.ToSlash(filepath.Clean(strings.ReplaceAll(strings.TrimSpace(rule.Path), "\\", "/")))
-			if pathMatches(rule.Path, vpath) || pathIsBelow(vpath, rulePath) {
+			if ruleMatchesPath(rule, vpath) {
 				return ruleAllows(rule, u)
 			}
 		}
@@ -787,8 +866,7 @@ func (e *Engine) CanPerform(u *user.User, action string, vpath string) bool {
 	// Check rules for this action type only
 	if rules, ok := e.RulesByType[ruleType]; ok {
 		for _, rule := range rules {
-			rulePath := filepath.ToSlash(filepath.Clean(strings.ReplaceAll(strings.TrimSpace(rule.Path), "\\", "/")))
-			if pathMatches(rule.Path, vpath) || pathIsBelow(vpath, rulePath) {
+			if ruleMatchesPath(rule, vpath) {
 				return ruleAllows(rule, u)
 			}
 		}
@@ -806,11 +884,10 @@ func (e *Engine) CanPerformRuleOnly(u *user.User, action string, vpath string) b
 		return false
 	}
 	ruleType := ruleTypeForAction(action)
-	vpath = filepath.ToSlash(filepath.Clean(vpath))
+	vpath = normalizeCheckPath(vpath)
 	if rules, ok := e.RulesByType[ruleType]; ok {
 		for _, rule := range rules {
-			rulePath := filepath.ToSlash(filepath.Clean(strings.ReplaceAll(strings.TrimSpace(rule.Path), "\\", "/")))
-			if pathMatches(rule.Path, vpath) || pathIsBelow(vpath, rulePath) {
+			if ruleMatchesPath(rule, vpath) {
 				return ruleAllows(rule, u)
 			}
 		}
@@ -820,8 +897,9 @@ func (e *Engine) CanPerformRuleOnly(u *user.User, action string, vpath string) b
 
 // pathMatches checks if path matches pattern
 func pathMatches(pattern, vpath string) bool {
-	for _, expanded := range expandBracePatterns(pattern) {
-		if pathMatchesSingle(expanded, vpath) {
+	vpath = normalizeCheckPath(vpath)
+	for _, compiled := range compileRulePaths(pattern) {
+		if pathMatchesCompiled(compiled, vpath) {
 			return true
 		}
 	}
@@ -847,10 +925,9 @@ func (e *Engine) MatchesRulePath(ruleType, vpath string) bool {
 	if !ok {
 		return false
 	}
-	vpath = filepath.ToSlash(filepath.Clean(vpath))
+	vpath = normalizeCheckPath(vpath)
 	for _, rule := range rules {
-		rulePath := filepath.ToSlash(filepath.Clean(strings.ReplaceAll(strings.TrimSpace(rule.Path), "\\", "/")))
-		if pathMatches(rule.Path, vpath) || pathIsBelow(vpath, rulePath) {
+		if ruleMatchesPath(rule, vpath) {
 			return true
 		}
 	}

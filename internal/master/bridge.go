@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"goftpd/internal/core"
+	"goftpd/internal/metrics"
+	"goftpd/internal/netutil"
 	"goftpd/internal/plugin"
 	"goftpd/internal/protocol"
 )
@@ -37,9 +39,7 @@ type Bridge struct {
 }
 
 func configureBridgeDataSocket(conn net.Conn) {
-	if tcpConn, ok := conn.(*net.TCPConn); ok {
-		_ = tcpConn.SetNoDelay(true)
-	}
+	netutil.ConfigureDataSocket(conn, netutil.DefaultDataSocketBufferSize)
 }
 
 type cachedReadFileResult struct {
@@ -53,7 +53,7 @@ var zipPayloadNameRE = regexp.MustCompile(`(?i)\.(zip|z\d\d)$`)
 const (
 	readFileCacheTTL          = 2 * time.Second
 	liveTransferStatsCacheTTL = 1 * time.Second
-	bridgeTransferBufferSize  = 256 * 1024
+	bridgeTransferBufferSize  = 4 * 1024 * 1024
 )
 
 var bridgeTransferBufferPool = sync.Pool{
@@ -378,6 +378,11 @@ func (b *Bridge) ListDir(dirPath string) []core.MasterFileEntry {
 	return entries
 }
 
+// zeroSizeRepairAt debounces the per-directory DB lookup below: dirPath -> last query time.
+var zeroSizeRepairAt sync.Map
+
+const zeroSizeRepairDebounce = 3 * time.Second
+
 func (b *Bridge) repairZeroSizeListEntries(dirPath string, files []*VFSFile) bool {
 	if b == nil || b.raceDB == nil || b.sm == nil || b.sm.GetVFS() == nil {
 		return false
@@ -394,16 +399,32 @@ func (b *Bridge) repairZeroSizeListEntries(dirPath string, files []*VFSFile) boo
 		return false
 	}
 
+	// During a race a directory is full of zero-size in-progress files that the
+	// DB can't repair anyway (they're not verified-present yet), and cbftp hammers
+	// LIST. A genuinely stale entry is repaired on the first lookup and then no
+	// longer reads as zero-size, so debouncing the DB query per directory keeps
+	// listings in memory during the race without missing real repairs.
+	now := time.Now()
+	if last, ok := zeroSizeRepairAt.Load(dirPath); ok {
+		if lt, ok := last.(time.Time); ok && now.Sub(lt) < zeroSizeRepairDebounce {
+			return false
+		}
+	}
+
 	records, err := b.raceDB.VerifiedPresentFiles(dirPath)
 	if err != nil {
 		log.Printf("[Bridge] race DB zero-size listing repair failed for %s: %v", dirPath, err)
 		return false
 	}
 	if len(records) == 0 {
+		// Nothing in the DB to repair these zero-size entries with (in-progress
+		// uploads): debounce so a race doesn't re-query the DB on every LIST.
+		zeroSizeRepairAt.Store(dirPath, now)
 		return false
 	}
 
 	repaired := false
+	repairedCount := 0
 	for _, f := range files {
 		if f == nil || f.IsDir || f.IsSymlink || f.Size > 0 {
 			continue
@@ -414,8 +435,22 @@ func (b *Bridge) repairZeroSizeListEntries(dirPath string, files []*VFSFile) boo
 		}
 		if b.sm.GetVFS().HydrateRaceFile(f.Path, rec.Owner, rec.Group, rec.SizeBytes, rec.DurationMs, rec.Checksum) {
 			repaired = true
+			repairedCount++
 			b.invalidateReadFileCache(f.Path)
 		}
+	}
+	if repairedCount > 0 {
+		// A file was on disk but read as size 0 in the VFS and we had to fix it
+		// from the DB: exactly the state that makes racing clients skip+retry.
+		metrics.ZeroSizeRepairs.Add(int64(repairedCount))
+	}
+	// Only debounce when nothing was actually repaired (the zero-size files are
+	// in-progress uploads). If a real stale entry WAS fixed, clear the debounce so
+	// the next listing re-checks immediately; a genuine repair is never delayed.
+	if repaired {
+		zeroSizeRepairAt.Delete(dirPath)
+	} else {
+		zeroSizeRepairAt.Store(dirPath, now)
 	}
 	return repaired
 }
@@ -542,6 +577,17 @@ func (b *Bridge) PluginListDir(dirPath string) []plugin.FileEntry {
 		})
 	}
 	return entries
+}
+
+// FindChildFoldMatch exposes the VFS case-insensitive child lookup to plugins
+// (releaseguard) so the per-MKD dupe/case/nuked check avoids building a full
+// directory listing. Accessed via optional interface, so it adds nothing to the
+// plugin MasterBridge interface.
+func (b *Bridge) FindChildFoldMatch(parentPath string, candidates []string) (string, int, bool) {
+	if b == nil || b.sm == nil {
+		return "", 0, false
+	}
+	return b.sm.GetVFS().FindChildFoldMatch(parentPath, candidates)
 }
 
 // UploadFile routes an upload from the FTP client to a slave.

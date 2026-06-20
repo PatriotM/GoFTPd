@@ -525,6 +525,7 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 		zipscript.CacheZipReleaseProgress(zipBridge(bridge), dirPath, presentCount, expected)
 		if presentCount > 0 {
 			raceDurationMs := bridge.GetRaceWallClockMilliseconds(dirPath)
+			// pzs-ng: live avg speed is the mean of racer file speeds.
 			avgSpeedMB := aggregateRaceSpeedMB(users)
 			if avgSpeedMB <= 0 {
 				avgSpeedMB = currentRaceSpeedMB(dirPath, totalBytes, bridge)
@@ -583,6 +584,7 @@ func populateUploadRaceData(bridge MasterBridge, cfg *Config, dirPath, fileName 
 		}
 		raceDurationMs = bridge.GetRaceWallClockMilliseconds(dirPath)
 		if total > 0 {
+			// pzs-ng: live avg speed is the mean of racer file speeds.
 			avgSpeedMB := aggregateRaceSpeedMB(users)
 			if avgSpeedMB <= 0 {
 				avgSpeedMB = currentRaceSpeedMB(dirPath, totalBytes, bridge)
@@ -629,6 +631,9 @@ func currentRaceSpeedMB(dirPath string, totalBytes int64, bridge MasterBridge) f
 	return (float64(totalBytes) / 1024.0 / 1024.0) / (float64(ms) / 1000.0)
 }
 
+// aggregateRaceSpeedMB returns the combined race throughput: the sum of every
+// racer's combined per-user speed. With parallel slots this is the high
+// headline number sites expect on the COMPLETE line.
 func aggregateRaceSpeedMB(users []VFSRaceUser) float64 {
 	total := 0.0
 	for _, u := range users {
@@ -1063,10 +1068,15 @@ func buildReleaseUploadPipelineState(s *Session, bridge MasterBridge, in release
 		log.Printf("[MASTER-ZS] zip diz refresh skipped for %s: %v", in.FilePath, err)
 	}
 
-	state.HadAudioInfo = zipscript.AudioInfoLooksUsable(bridge.GetDirMediaInfo(in.UploadDir))
-	state.HadMediaInfo = releaseMediaInfoLooksUsable(bridge.GetDirMediaInfo(in.MediaInfoDir))
+	uploadMediaInfo := bridge.GetDirMediaInfo(in.UploadDir)
+	mediaInfoFields := uploadMediaInfo
+	if path.Clean(in.MediaInfoDir) != path.Clean(in.UploadDir) {
+		mediaInfoFields = bridge.GetDirMediaInfo(in.MediaInfoDir)
+	}
+	state.HadAudioInfo = zipscript.AudioInfoLooksUsable(uploadMediaInfo)
+	state.HadMediaInfo = releaseMediaInfoLooksUsable(mediaInfoFields)
 
-	audioFields, err := applyAudioZipscriptChecksForDir(s, bridge, in.UploadDir, in.FilePath, in.FileName)
+	audioFields, err := applyAudioZipscriptChecksForDirWithCached(s, bridge, in.UploadDir, in.FilePath, in.FileName, uploadMediaInfo)
 	if err != nil {
 		log.Printf("[MASTER-ZS] post-upload audio check failed for %s: %v", in.FilePath, err)
 	} else {
@@ -1499,10 +1509,17 @@ func applyAudioZipscriptChecks(s *Session, bridge MasterBridge, filePath, fileNa
 }
 
 func applyAudioZipscriptChecksForDir(s *Session, bridge MasterBridge, dirPath, filePath, fileName string) (map[string]string, error) {
+	return applyAudioZipscriptChecksForDirWithCached(s, bridge, dirPath, filePath, fileName, nil)
+}
+
+func applyAudioZipscriptChecksForDirWithCached(s *Session, bridge MasterBridge, dirPath, filePath, fileName string, cached map[string]string) (map[string]string, error) {
 	if !zipscript.AudioCheckEnabled(s.Config.Zipscript, dirPath, fileName) {
 		return nil, nil
 	}
-	if cached := bridge.GetDirMediaInfo(dirPath); zipscript.AudioInfoLooksUsable(cached) {
+	if cached == nil {
+		cached = bridge.GetDirMediaInfo(dirPath)
+	}
+	if zipscript.AudioInfoLooksUsable(cached) {
 		return cached, nil
 	}
 	fields, err := bridge.ProbeMediaInfo(filePath, "", 0)

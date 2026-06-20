@@ -3,6 +3,8 @@ package core
 import (
 	"net"
 	"time"
+
+	"goftpd/internal/metrics"
 )
 
 func (s *Session) touchActivity() {
@@ -25,11 +27,12 @@ func (s *Session) beginTransferOnSlave(direction, targetPath, slaveName string, 
 	s.stateMu.Lock()
 	s.TransferDirection = direction
 	s.TransferPath = targetPath
-	s.TransferBytes = 0
+	s.TransferBytes.Store(0)
 	s.TransferStartedAt = time.Now()
 	s.TransferSlaveName = slaveName
 	s.TransferSlaveIdx = slaveIdx
 	s.stateMu.Unlock()
+	metrics.TransferBegin(direction)
 }
 
 func (s *Session) attachTransferToSlave(slaveName string, slaveIdx int32) {
@@ -46,9 +49,7 @@ func (s *Session) addTransferBytes(n int64) {
 	if s == nil || n <= 0 {
 		return
 	}
-	s.stateMu.Lock()
-	s.TransferBytes += n
-	s.stateMu.Unlock()
+	s.TransferBytes.Add(n)
 }
 
 func (s *Session) endTransfer() {
@@ -56,13 +57,22 @@ func (s *Session) endTransfer() {
 		return
 	}
 	s.stateMu.Lock()
+	dir := s.TransferDirection
+	startedAt := s.TransferStartedAt
+	bytes := s.TransferBytes.Load()
 	s.TransferDirection = ""
 	s.TransferPath = ""
-	s.TransferBytes = 0
+	s.TransferBytes.Store(0)
 	s.TransferStartedAt = time.Time{}
 	s.TransferSlaveName = ""
 	s.TransferSlaveIdx = 0
 	s.stateMu.Unlock()
+	// Several upload paths call endTransfer explicitly and again via defer.
+	// Record metrics only on the first call (when a transfer was actually
+	// active) so the gauge and latency aren't double-counted.
+	if dir != "" && !startedAt.IsZero() {
+		metrics.TransferEnd(dir, time.Since(startedAt), bytes)
+	}
 }
 
 func (s *Session) currentTransferSpeedBytes() float64 {
@@ -71,14 +81,15 @@ func (s *Session) currentTransferSpeedBytes() float64 {
 	}
 	s.stateMu.RLock()
 	defer s.stateMu.RUnlock()
-	if s.TransferDirection == "" || s.TransferStartedAt.IsZero() || s.TransferBytes <= 0 {
+	bytes := s.TransferBytes.Load()
+	if s.TransferDirection == "" || s.TransferStartedAt.IsZero() || bytes <= 0 {
 		return 0
 	}
 	seconds := time.Since(s.TransferStartedAt).Seconds()
 	if seconds <= 0 {
 		return 0
 	}
-	return float64(s.TransferBytes) / seconds
+	return float64(bytes) / seconds
 }
 
 type bandwidthTrackingConn struct {

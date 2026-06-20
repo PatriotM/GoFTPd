@@ -235,6 +235,9 @@ func (rs *RemoteSlave) FetchResponse(index string, timeout time.Duration) (inter
 		rs.pendingCmds.Delete(index)
 	}()
 
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
 	select {
 	case resp, open := <-ch:
 		if !open || resp == nil {
@@ -246,7 +249,7 @@ func (rs *RemoteSlave) FetchResponse(index string, timeout time.Duration) (inter
 		}
 		return resp, nil
 
-	case <-time.After(timeout):
+	case <-timer.C:
 		return nil, fmt.Errorf("timeout waiting for response %s from slave %s", index, rs.name)
 	}
 }
@@ -368,6 +371,9 @@ func (rs *RemoteSlave) Run(masterSlaveManager *SlaveManager) {
 			rs.routeResponse(resp.Index, obj)
 
 		case *protocol.AsyncResponseTransferStats:
+			rs.routeResponse(resp.Index, obj)
+
+		case *protocol.AsyncResponseCommandResult:
 			rs.routeResponse(resp.Index, obj)
 
 		default:

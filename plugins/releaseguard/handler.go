@@ -127,29 +127,67 @@ func (p *Plugin) ValidateMKDir(u *user.User, targetPath string) error {
 		return nil
 	}
 
-	entries := p.svc.Bridge.PluginListDir(parent)
-	for _, entry := range entries {
-		entryName := strings.TrimSpace(entry.Name)
-		if entryName == "" {
-			continue
-		}
-		if p.denyCaseConflicts && strings.EqualFold(entryName, name) && entryName != name {
-			err := fmt.Errorf("release name clashes with existing dir %q (case differs)", entryName)
-			p.emitReject(u, targetPath, name, "case_conflict", "", "", err.Error())
-			return err
-		}
-		if p.denySameNameInParent && strings.EqualFold(entryName, name) {
-			err := fmt.Errorf("release %q already exists in %s", name, parent)
-			p.emitReject(u, targetPath, name, "duplicate", "", "", err.Error())
-			return err
+	// Fast path: ask the VFS for a case-folded child match directly, avoiding a
+	// full directory listing on every MKD. Falls back to the full scan when the
+	// bridge doesn't expose the optional lookup.
+	if finder, ok := p.svc.Bridge.(interface {
+		FindChildFoldMatch(parentPath string, candidates []string) (string, int, bool)
+	}); ok {
+		if p.denyCaseConflicts || p.denySameNameInParent {
+			if existing, _, found := finder.FindChildFoldMatch(parent, []string{name}); found {
+				if p.denyCaseConflicts && existing != name {
+					err := fmt.Errorf("release name clashes with existing dir %q (case differs)", existing)
+					p.emitReject(u, targetPath, name, "case_conflict", "", "", err.Error())
+					return err
+				}
+				if p.denySameNameInParent {
+					err := fmt.Errorf("release %q already exists in %s", name, parent)
+					p.emitReject(u, targetPath, name, "duplicate", "", "", err.Error())
+					return err
+				}
+			}
 		}
 		if p.checkNukedNames {
+			candidates := make([]string, 0, len(p.nukedPrefixes))
+			prefixForCand := make([]string, 0, len(p.nukedPrefixes))
 			for _, prefix := range p.nukedPrefixes {
 				prefix = strings.TrimSpace(prefix)
-				if prefix != "" && strings.EqualFold(entryName, prefix+name) {
-					err := fmt.Errorf("release %q already exists as a nuked entry in %s", name, parent)
-					p.emitReject(u, targetPath, name, "nuked_name", "", prefix, err.Error())
-					return err
+				if prefix != "" {
+					candidates = append(candidates, prefix+name)
+					prefixForCand = append(prefixForCand, prefix)
+				}
+			}
+			if _, idx, found := finder.FindChildFoldMatch(parent, candidates); found && idx < len(prefixForCand) {
+				err := fmt.Errorf("release %q already exists as a nuked entry in %s", name, parent)
+				p.emitReject(u, targetPath, name, "nuked_name", "", prefixForCand[idx], err.Error())
+				return err
+			}
+		}
+	} else {
+		entries := p.svc.Bridge.PluginListDir(parent)
+		for _, entry := range entries {
+			entryName := strings.TrimSpace(entry.Name)
+			if entryName == "" {
+				continue
+			}
+			if p.denyCaseConflicts && strings.EqualFold(entryName, name) && entryName != name {
+				err := fmt.Errorf("release name clashes with existing dir %q (case differs)", entryName)
+				p.emitReject(u, targetPath, name, "case_conflict", "", "", err.Error())
+				return err
+			}
+			if p.denySameNameInParent && strings.EqualFold(entryName, name) {
+				err := fmt.Errorf("release %q already exists in %s", name, parent)
+				p.emitReject(u, targetPath, name, "duplicate", "", "", err.Error())
+				return err
+			}
+			if p.checkNukedNames {
+				for _, prefix := range p.nukedPrefixes {
+					prefix = strings.TrimSpace(prefix)
+					if prefix != "" && strings.EqualFold(entryName, prefix+name) {
+						err := fmt.Errorf("release %q already exists as a nuked entry in %s", name, parent)
+						p.emitReject(u, targetPath, name, "nuked_name", "", prefix, err.Error())
+						return err
+					}
 				}
 			}
 		}

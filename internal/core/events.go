@@ -426,8 +426,9 @@ func emitRaceEnd(s *Session, dirPath string, users []VFSRaceUser, groups []VFSRa
 		}
 	}
 
-	// Keep COMPLETE speed aligned with the summed racer throughput first;
-	// fall back to wall-clock throughput only when live user speeds are absent.
+	// COMPLETE speed is the summed racer throughput (matches pzs-ng's high
+	// headline number); fall back to wall-clock throughput only when live user
+	// speeds are absent.
 	raceDurationMs = chooseRaceDurationMs(raceDurationMs, users, xferMs)
 
 	avgMB := aggregateRaceSpeedMB(users)

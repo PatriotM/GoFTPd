@@ -352,13 +352,16 @@ func TestProcessRemergeAddsReportedDirectory(t *testing.T) {
 	}
 }
 
-func TestReleaseRaceWindowStartsAtMkdir(t *testing.T) {
+func TestReleaseRaceWindowStartsAtFirstPayload(t *testing.T) {
 	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60*time.Second)
+	// The mkdir only seeds the window; the race clock must not start until real
+	// data flows. The first payload (start = 2500-100 = 2400, end = 2500)
+	// defines the start, so the window is 100ms — not 1500ms from the mkdir seed.
 	sm.StartReleaseRaceWindowAt("/X265/release", 1000)
 	sm.NoteRacePayloadTransferAt("/X265/release", 100, 2500)
 
-	if got := sm.GetReleaseRaceWindowMilliseconds("/X265/release"); got != 1500 {
-		t.Fatalf("race window = %dms, want 1500ms", got)
+	if got := sm.GetReleaseRaceWindowMilliseconds("/X265/release"); got != 100 {
+		t.Fatalf("race window = %dms, want 100ms", got)
 	}
 }
 

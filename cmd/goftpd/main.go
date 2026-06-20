@@ -68,6 +68,10 @@ func main() {
 
 	// SLAVE MODE: No FTP server, just connect to master and serve files
 	if cfg.Mode == "slave" {
+		apiServer := startVFSAPIServer(cfg, nil)
+		if apiServer != nil {
+			defer apiServer.Close()
+		}
 		startSlave(cfg)
 		return
 	}
@@ -98,12 +102,13 @@ func main() {
 	copy(ticketKey[:], "goftpd-secret-session-key-32byte")
 
 	tlsConfig := &tls.Config{
-		Certificates:       []tls.Certificate{cert},
-		MinVersion:         tls.VersionTLS12,
-		MaxVersion:         tls.VersionTLS13,
-		ClientSessionCache: sharedCache,
-		SessionTicketKey:   ticketKey,
-		InsecureSkipVerify: true,
+		Certificates:                []tls.Certificate{cert},
+		MinVersion:                  tls.VersionTLS12,
+		MaxVersion:                  tls.VersionTLS13,
+		ClientSessionCache:          sharedCache,
+		SessionTicketKey:            ticketKey,
+		InsecureSkipVerify:          true,
+		DynamicRecordSizingDisabled: true,
 	}
 
 	// 5. Ensure Storage Path Exists

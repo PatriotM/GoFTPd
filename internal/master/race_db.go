@@ -9,13 +9,15 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	_ "github.com/mattn/go-sqlite3"
 	"goftpd/internal/core"
 )
 
 type RaceDB struct {
-	db *sql.DB
+	db             *sql.DB
+	releaseIDCache sync.Map
 }
 
 type ReleaseFileRecord struct {
@@ -47,6 +49,7 @@ func NewRaceDB(dbPath string) (*RaceDB, error) {
 		"PRAGMA journal_mode = WAL;",
 		"PRAGMA synchronous = NORMAL;",
 		"PRAGMA busy_timeout = 5000;",
+		"PRAGMA cache_size = -32000;",
 	}
 	for _, stmt := range pragmas {
 		if _, err := db.Exec(stmt); err != nil {
@@ -116,6 +119,11 @@ func (r *RaceDB) Close() error {
 }
 
 func (r *RaceDB) getOrCreateReleaseID(dirPath string) (int64, error) {
+	dirPath = filepath.Clean(dirPath)
+	if cached, ok := r.cachedReleaseID(dirPath); ok {
+		return cached, nil
+	}
+
 	tx, err := r.db.Begin()
 	if err != nil {
 		return 0, err
@@ -138,7 +146,49 @@ func (r *RaceDB) getOrCreateReleaseID(dirPath string) (int64, error) {
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
+	r.cacheReleaseID(dirPath, releaseID)
 	return releaseID, nil
+}
+
+func (r *RaceDB) cachedReleaseID(dirPath string) (int64, bool) {
+	if r == nil {
+		return 0, false
+	}
+	if value, ok := r.releaseIDCache.Load(filepath.Clean(dirPath)); ok {
+		if releaseID, ok := value.(int64); ok && releaseID > 0 {
+			return releaseID, true
+		}
+	}
+	return 0, false
+}
+
+func (r *RaceDB) cacheReleaseID(dirPath string, releaseID int64) {
+	if r == nil || releaseID <= 0 {
+		return
+	}
+	r.releaseIDCache.Store(filepath.Clean(dirPath), releaseID)
+}
+
+func (r *RaceDB) invalidateReleaseID(dirPath string) {
+	if r == nil {
+		return
+	}
+	r.releaseIDCache.Delete(filepath.Clean(dirPath))
+}
+
+func (r *RaceDB) invalidateReleaseIDPrefix(dirPath string) {
+	if r == nil {
+		return
+	}
+	dirPath = filepath.Clean(dirPath)
+	prefix := dirPath + string(filepath.Separator)
+	r.releaseIDCache.Range(func(key, _ interface{}) bool {
+		cachedPath, ok := key.(string)
+		if ok && (cachedPath == dirPath || strings.HasPrefix(cachedPath, prefix)) {
+			r.releaseIDCache.Delete(cachedPath)
+		}
+		return true
+	})
 }
 
 func (r *RaceDB) SaveSFV(dirPath, sfvName string, entries map[string]uint32) error {
@@ -426,6 +476,9 @@ func mergeRaceFileRecord(next, existing ReleaseFileRecord) ReleaseFileRecord {
 func (r *RaceDB) DeletePath(path string, isDir bool) error {
 	if isDir {
 		_, err := r.db.Exec(`DELETE FROM releases WHERE path = ? OR path LIKE ?`, path, path+"/%")
+		if err == nil {
+			r.invalidateReleaseIDPrefix(path)
+		}
 		return err
 	}
 
@@ -474,7 +527,11 @@ func (r *RaceDB) RenamePath(from, to string, isDir bool) error {
 				return err
 			}
 		}
-		return tx.Commit()
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		r.invalidateReleaseIDPrefix(from)
+		return nil
 	}
 
 	oldDir, oldName := filepath.Dir(from), filepath.Base(from)
@@ -545,6 +602,7 @@ func (r *RaceDB) Reconcile(vfs *VirtualFileSystem) error {
 		if _, err := r.db.Exec(`DELETE FROM releases WHERE path = ?`, dirPath); err != nil {
 			return err
 		}
+		r.invalidateReleaseID(dirPath)
 	}
 
 	return nil
@@ -627,25 +685,31 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 	}
 
 	userRows, err := r.db.Query(`
+        WITH valid_present AS (
+            SELECT p.*
+            FROM release_files p
+            JOIN release_files e
+              ON e.release_id = p.release_id
+             AND e.is_expected = 1
+             AND e.filename = p.filename
+            WHERE p.release_id = ?
+              AND p.is_present = 1
+              AND p.duration_ms > 0
+              AND p.checksum = e.expected_crc32
+        )
         SELECT
-            p.uploader,
-            p.grp,
+            uploader,
+            grp,
             COUNT(*),
-            COALESCE(SUM(p.size_bytes),0),
-            COALESCE(SUM(p.duration_ms),0),
-            COALESCE(MIN((p.updated_at * 1000) - p.duration_ms), 0),
-            COALESCE(MAX(p.updated_at * 1000), 0)
-        FROM release_files p
-        JOIN release_files e
-          ON e.release_id = p.release_id
-         AND e.is_expected = 1
-         AND e.filename = p.filename
-        WHERE p.release_id = ?
-          AND p.is_present = 1
-          AND p.duration_ms > 0
-          AND p.checksum = e.expected_crc32
-        GROUP BY p.uploader, p.grp
-        ORDER BY COALESCE(SUM(p.size_bytes),0) DESC, COUNT(*) DESC, p.uploader ASC
+            COALESCE(SUM(size_bytes),0),
+            COALESCE(SUM(duration_ms),0),
+            COALESCE(MIN((updated_at * 1000) - duration_ms), 0),
+            COALESCE(MAX(updated_at * 1000), 0),
+            COALESCE(MAX(CAST(size_bytes AS REAL) / CAST(duration_ms AS REAL)), 0),
+            COALESCE(MIN(CAST(size_bytes AS REAL) / CAST(duration_ms AS REAL)), 0)
+        FROM valid_present
+        GROUP BY uploader, grp
+        ORDER BY COALESCE(SUM(size_bytes),0) DESC, COUNT(*) DESC, uploader ASC
     `, releaseID)
 	if err != nil {
 		log.Printf("[RaceDB] user stats query failed for %s: %v", dirPath, err)
@@ -657,12 +721,16 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 	var userDurations []int64
 	var userStartMs []int64
 	var userEndMs []int64
+	var userPeakRates []float64
+	var userSlowRates []float64
 	for userRows.Next() {
 		var u core.VFSRaceUser
 		var durationMs int64
 		var startMs int64
 		var endMs int64
-		if err := userRows.Scan(&u.Name, &u.Group, &u.Files, &u.Bytes, &durationMs, &startMs, &endMs); err != nil {
+		var peakRate float64
+		var slowRate float64
+		if err := userRows.Scan(&u.Name, &u.Group, &u.Files, &u.Bytes, &durationMs, &startMs, &endMs, &peakRate, &slowRate); err != nil {
 			log.Printf("[RaceDB] user row scan failed for %s: %v", dirPath, err)
 			return nil, nil, 0, 0, 0
 		}
@@ -670,6 +738,8 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 		userDurations = append(userDurations, durationMs)
 		userStartMs = append(userStartMs, startMs)
 		userEndMs = append(userEndMs, endMs)
+		userPeakRates = append(userPeakRates, peakRate)
+		userSlowRates = append(userSlowRates, slowRate)
 	}
 	if err := userRows.Err(); err != nil {
 		log.Printf("[RaceDB] user rows iteration failed for %s: %v", dirPath, err)
@@ -681,57 +751,15 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 		u := &users[i]
 		durationMs := userDurations[i]
 		u.DurationMs = durationMs
-		if startMs, endMs := userStartMs[i], userEndMs[i]; u.Bytes > 0 && endMs > startMs {
-			u.Speed = float64(u.Bytes) / (float64(endMs-startMs) / 1000.0)
-		} else if u.Bytes > 0 && durationMs > 0 {
+		// pzs-ng: speed = bytes / sum(transfer time), excluding idle gaps
+		// between a racer's files. Wall-clock span is only a fallback.
+		if u.Bytes > 0 && durationMs > 0 {
 			u.Speed = float64(u.Bytes) / (float64(durationMs) / 1000.0)
+		} else if startMs, endMs := userStartMs[i], userEndMs[i]; u.Bytes > 0 && endMs > startMs {
+			u.Speed = float64(u.Bytes) / (float64(endMs-startMs) / 1000.0)
 		}
-		var peakBytes, peakMs sql.NullInt64
-		err := r.db.QueryRow(`
-            SELECT size_bytes, duration_ms FROM release_files
-            WHERE release_id = ?
-              AND uploader = ?
-              AND is_present = 1
-              AND EXISTS (
-                  SELECT 1 FROM release_files e
-                  WHERE e.release_id = release_files.release_id
-                    AND e.is_expected = 1
-                    AND e.filename = release_files.filename
-                    AND release_files.checksum = e.expected_crc32
-              )
-              AND duration_ms > 0
-            ORDER BY (CAST(size_bytes AS REAL) / CAST(duration_ms AS REAL)) DESC
-            LIMIT 1
-        `, releaseID, u.Name).Scan(&peakBytes, &peakMs)
-		if err != nil && err != sql.ErrNoRows {
-			log.Printf("[RaceDB] peak query failed for %s user=%s: %v", dirPath, u.Name, err)
-		}
-		if peakBytes.Valid && peakMs.Valid && peakMs.Int64 > 0 {
-			u.PeakSpeed = float64(peakBytes.Int64) / (float64(peakMs.Int64) / 1000.0)
-		}
-		var slowBytes, slowMs sql.NullInt64
-		err = r.db.QueryRow(`
-            SELECT size_bytes, duration_ms FROM release_files
-            WHERE release_id = ?
-              AND uploader = ?
-              AND is_present = 1
-              AND EXISTS (
-                  SELECT 1 FROM release_files e
-                  WHERE e.release_id = release_files.release_id
-                    AND e.is_expected = 1
-                    AND e.filename = release_files.filename
-                    AND release_files.checksum = e.expected_crc32
-              )
-              AND duration_ms > 0
-            ORDER BY (CAST(size_bytes AS REAL) / CAST(duration_ms AS REAL)) ASC
-            LIMIT 1
-        `, releaseID, u.Name).Scan(&slowBytes, &slowMs)
-		if err != nil && err != sql.ErrNoRows {
-			log.Printf("[RaceDB] slowest query failed for %s user=%s: %v", dirPath, u.Name, err)
-		}
-		if slowBytes.Valid && slowMs.Valid && slowMs.Int64 > 0 {
-			u.SlowSpeed = float64(slowBytes.Int64) / (float64(slowMs.Int64) / 1000.0)
-		}
+		u.PeakSpeed = userPeakRates[i] * 1000.0
+		u.SlowSpeed = userSlowRates[i] * 1000.0
 		if total > 0 {
 			u.Percent = (u.Files * 100) / total
 			if u.Percent > 100 {
@@ -770,11 +798,16 @@ func (r *RaceDB) GetRaceStats(dirPath string) ([]core.VFSRaceUser, []core.VFSRac
 			log.Printf("[RaceDB] group row scan failed for %s: %v", dirPath, err)
 			return nil, nil, 0, 0, 0
 		}
+		// pzs-ng: group speed = group bytes / sum(group transfer time).
+		var groupDurationMs int64
 		for _, u := range users {
 			if u.Group != g.Name {
 				continue
 			}
-			g.Speed += u.Speed
+			groupDurationMs += u.DurationMs
+		}
+		if g.Bytes > 0 && groupDurationMs > 0 {
+			g.Speed = float64(g.Bytes) / (float64(groupDurationMs) / 1000.0)
 		}
 		if total > 0 {
 			g.Percent = (g.Files * 100) / total

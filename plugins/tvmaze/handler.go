@@ -208,14 +208,14 @@ type tvmSearchResult struct {
 }
 
 func (h *Handler) doLookup(j job) {
-	title, season, episode := parseTVName(j.relname)
+	title, yearHint, season, episode := parseTVNameWithYear(j.relname)
 	if title == "" {
 		log.Printf("[TVMAZE] parseTVName returned empty title for %s, skipping", j.relname)
 		return
 	}
 	log.Printf("[TVMAZE] lookup %s (title=%q season=%d episode=%d)", j.relname, title, season, episode)
 
-	show, err := h.lookupShow(title)
+	show, err := h.lookupShow(title, yearHint)
 	if err != nil {
 		log.Printf("[TVMAZE] search %q failed: %v", title, err)
 		return
@@ -249,7 +249,27 @@ func (h *Handler) doLookup(j job) {
 	log.Printf("[TVMAZE] Wrote .tvmaze for %s", j.relname)
 }
 
-func (h *Handler) lookupShow(title string) (*tvmShow, error) {
+func (h *Handler) lookupShow(title string, yearHint int) (*tvmShow, error) {
+	var lastErr error
+	for _, query := range tvmazeLookupQueries(title) {
+		show, err := h.searchShow(query, yearHint)
+		if err == nil {
+			return show, nil
+		}
+		lastErr = fmt.Errorf("%s: %w", query, err)
+		if show, singleErr := h.singleSearchShow(query); singleErr == nil && show.ID > 0 {
+			return show, nil
+		} else if singleErr != nil {
+			lastErr = fmt.Errorf("%s: %w", query, singleErr)
+		}
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("no results")
+}
+
+func (h *Handler) searchShow(title string, yearHint int) (*tvmShow, error) {
 	q := url.QueryEscape(title)
 	searchURL := fmt.Sprintf("https://api.tvmaze.com/search/shows?q=%s", q)
 	resp, err := h.client.Get(searchURL)
@@ -271,11 +291,36 @@ func (h *Handler) lookupShow(title string) (*tvmShow, error) {
 	if len(results) == 0 {
 		return nil, fmt.Errorf("no results")
 	}
-	show := selectBestTVMazeShow(results, title)
+	show := selectBestTVMazeShow(results, title, yearHint)
 	if show == nil {
 		return nil, fmt.Errorf("no safe match")
 	}
 	return show, nil
+}
+
+func (h *Handler) singleSearchShow(title string) (*tvmShow, error) {
+	q := url.QueryEscape(title)
+	searchURL := fmt.Sprintf("https://api.tvmaze.com/singlesearch/shows?q=%s", q)
+	resp, err := h.client.Get(searchURL)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	var show tvmShow
+	if err := json.Unmarshal(body, &show); err != nil {
+		return nil, err
+	}
+	if show.ID == 0 {
+		return nil, fmt.Errorf("no results")
+	}
+	return &show, nil
 }
 
 func (h *Handler) fetchShowWithEpisodes(id int) (*tvmShow, error) {
@@ -314,6 +359,11 @@ func isTVReleaseName(rel string) bool {
 
 // parseTVName: "Kill.Blue.S01E02.1080p.WEB.H264-SKYANiME" -> ("Kill Blue", 1, 2)
 func parseTVName(rel string) (string, int, int) {
+	title, _, season, episode := parseTVNameWithYear(rel)
+	return title, season, episode
+}
+
+func parseTVNameWithYear(rel string) (string, int, int, int) {
 	if idx := strings.LastIndex(rel, "-"); idx > 0 {
 		rel = rel[:idx]
 	}
@@ -322,16 +372,26 @@ func parseTVName(rel string) (string, int, int) {
 		var s, e int
 		fmt.Sscanf(m[2], "%d", &s)
 		fmt.Sscanf(m[3], "%d", &e)
-		return strings.ReplaceAll(m[1], ".", " "), s, e
+		title, yearHint := splitTrailingLookupYear(strings.ReplaceAll(m[1], ".", " "))
+		return title, yearHint, s, e
 	}
-	re2 := regexp.MustCompile(`(?i)^(.+?)\.(S\d{1,2}|Season\.?\d+|\d{4})\.`)
+	re2 := regexp.MustCompile(`(?i)^(.+?)\.(S\d{1,2}|Season\.?\d+|(\d{4}))\.`)
 	if m := re2.FindStringSubmatch(rel); m != nil {
-		return strings.ReplaceAll(m[1], ".", " "), 0, 0
+		yearHint := 0
+		if len(m) > 3 {
+			yearHint, _ = parseLookupYear(m[3])
+		}
+		return strings.ReplaceAll(m[1], ".", " "), yearHint, 0, 0
 	}
-	return strings.ReplaceAll(rel, ".", " "), 0, 0
+	title, yearHint := splitTrailingLookupYear(strings.ReplaceAll(rel, ".", " "))
+	return title, yearHint, 0, 0
 }
 
-func selectBestTVMazeShow(results []tvmSearchResult, query string) *tvmShow {
+func selectBestTVMazeShow(results []tvmSearchResult, query string, yearHintOpt ...int) *tvmShow {
+	yearHint := 0
+	if len(yearHintOpt) > 0 {
+		yearHint = yearHintOpt[0]
+	}
 	var best *tvmShow
 	bestScore := -1
 	for i := range results {
@@ -344,12 +404,87 @@ func selectBestTVMazeShow(results []tvmSearchResult, query string) *tvmShow {
 		if results[i].Score > 0 {
 			score += int(results[i].Score * 5)
 		}
+		if yearHint > 0 && premiereYear(show.Premiered) == yearHint {
+			score += 20
+		}
 		if score > bestScore {
 			best = show
 			bestScore = score
 		}
 	}
 	return best
+}
+
+func tvmazeLookupQueries(title string) []string {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return nil
+	}
+	queries := []string{title}
+	if base, _ := splitTrailingLookupYear(title); base != "" && !sameLookupTitle(base, title) {
+		queries = append(queries, base)
+	}
+	switch normalizeLookupTitle(title) {
+	case "love island us":
+		queries = append(queries, "Love Island USA")
+	}
+	return uniqueLookupQueries(queries)
+}
+
+func uniqueLookupQueries(queries []string) []string {
+	out := make([]string, 0, len(queries))
+	seen := make(map[string]struct{}, len(queries))
+	for _, query := range queries {
+		query = strings.TrimSpace(query)
+		if query == "" {
+			continue
+		}
+		key := normalizeLookupTitle(query)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, query)
+	}
+	return out
+}
+
+func sameLookupTitle(a, b string) bool {
+	return normalizeLookupTitle(a) == normalizeLookupTitle(b)
+}
+
+func splitTrailingLookupYear(title string) (string, int) {
+	fields := strings.Fields(strings.TrimSpace(title))
+	if len(fields) < 2 {
+		return strings.TrimSpace(title), 0
+	}
+	year, ok := parseLookupYear(fields[len(fields)-1])
+	if !ok {
+		return strings.TrimSpace(title), 0
+	}
+	return strings.Join(fields[:len(fields)-1], " "), year
+}
+
+func parseLookupYear(s string) (int, bool) {
+	if len(s) != 4 {
+		return 0, false
+	}
+	var year int
+	if _, err := fmt.Sscanf(s, "%d", &year); err != nil {
+		return 0, false
+	}
+	return year, year >= 1900 && year <= 2099
+}
+
+func premiereYear(premiered string) int {
+	if len(premiered) < 4 {
+		return 0
+	}
+	year, ok := parseLookupYear(premiered[:4])
+	if !ok {
+		return 0
+	}
+	return year
 }
 
 func titleSimilarityScore(query, candidate string) int {
@@ -419,18 +554,31 @@ var lookupTitleReplacer = strings.NewReplacer(
 
 func normalizeLookupTitle(s string) string {
 	s = lookupTitleReplacer.Replace(strings.ToLower(strings.TrimSpace(s)))
+	s = strings.NewReplacer("'", "", "’", "", "`", "", "´", "").Replace(s)
 	var b strings.Builder
 	lastSpace := false
+	lastClass := 0
 	for _, r := range s {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+		class := 0
+		if r >= 'a' && r <= 'z' {
+			class = 1
+		} else if r >= '0' && r <= '9' {
+			class = 2
+		}
+		if class != 0 {
+			if !lastSpace && lastClass != 0 && class != lastClass {
+				b.WriteByte(' ')
+			}
 			b.WriteRune(r)
 			lastSpace = false
+			lastClass = class
 			continue
 		}
 		if !lastSpace {
 			b.WriteByte(' ')
 			lastSpace = true
 		}
+		lastClass = 0
 	}
 	return strings.Join(strings.Fields(b.String()), " ")
 }

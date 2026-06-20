@@ -330,7 +330,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			if err == nil {
 				if hash, ok := passwds[s.User.Name]; ok {
 					matchedHash = hash
-					passwordOK = VerifyPassword(pass, hash)
+					passwordOK = VerifyPasswordCached(s.User.Name, pass, hash)
 				}
 			}
 			if !passwordOK && s.User.Password != "" {

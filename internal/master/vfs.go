@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"goftpd/internal/core"
+	"goftpd/internal/metrics"
 	"goftpd/internal/plugin"
 	"goftpd/internal/zipscript"
 )
@@ -44,6 +45,9 @@ type VFSDirMeta struct {
 	ZipDIZChecksum      uint32
 	RequestEntries      []plugin.RequestRecord
 	RequestFillEntries  []plugin.RequestFillRecord
+
+	raceCache    *VFSRaceCache
+	zipRaceCache *VFSRaceCache
 }
 
 type VFSRaceCache struct {
@@ -137,10 +141,12 @@ func (vfs *VirtualFileSystem) AddFile(path string, file VFSFile) {
 	}
 	if vfs.isExcludedPathLocked(path) {
 		delete(vfs.files, path)
+		vfs.invalidateRaceCachesForPathLocked(path)
 		return
 	}
 	if vfs.isHiddenPathLocked(path) {
 		delete(vfs.files, path)
+		vfs.invalidateRaceCachesForPathLocked(path)
 		return
 	}
 	if vfs.protectedDirs[path] {
@@ -191,6 +197,7 @@ func (vfs *VirtualFileSystem) AddFile(path string, file VFSFile) {
 	if file.IsDir {
 		vfs.ensureChildrenBucketLocked(path)
 	}
+	vfs.invalidateRaceCachesForPathLocked(path)
 	vfs.touchAncestorsLocked(path, file.LastModified)
 	vfs.markPersistDirtyLocked()
 }
@@ -207,6 +214,7 @@ func (vfs *VirtualFileSystem) UpdateFileVerification(path string, checksum uint3
 		return false
 	}
 	file.Checksum = checksum
+	vfs.invalidateRaceCachesForPathLocked(path)
 	vfs.markPersistDirtyLocked()
 	return true
 }
@@ -227,6 +235,7 @@ func (vfs *VirtualFileSystem) UpdateFileTransferSize(path string, sizeBytes int6
 		return false
 	}
 	file.Size = sizeBytes
+	vfs.invalidateRaceCachesForPathLocked(path)
 	vfs.markPersistDirtyLocked()
 	return true
 }
@@ -242,6 +251,7 @@ func (vfs *VirtualFileSystem) ScrubReleaseRaceMetadata(rootPath, owner, group st
 	owner = strings.TrimSpace(owner)
 	group = strings.TrimSpace(group)
 	changed := false
+	affectedDirs := make(map[string]struct{})
 	for filePath, file := range vfs.files {
 		if file == nil {
 			continue
@@ -249,20 +259,31 @@ func (vfs *VirtualFileSystem) ScrubReleaseRaceMetadata(rootPath, owner, group st
 		if filePath != rootPath && !strings.HasPrefix(filePath, rootPath+"/") {
 			continue
 		}
+		fileChanged := false
 		if owner != "" && file.Owner != owner {
 			file.Owner = owner
-			changed = true
+			fileChanged = true
 		}
 		if group != "" && file.Group != group {
 			file.Group = group
-			changed = true
+			fileChanged = true
 		}
 		if !file.IsDir && file.XferTime != 0 {
 			file.XferTime = 0
+			fileChanged = true
+		}
+		if fileChanged {
 			changed = true
+			affectedDirs[cleanVFSPath(filepath.Dir(filePath))] = struct{}{}
 		}
 	}
 	if changed {
+		// Only the scrubbed subtree's race stats changed — invalidate just those
+		// directories instead of wiping every dir's cache (which would force a
+		// full recompute on the next listing of every release on the site).
+		for dir := range affectedDirs {
+			vfs.invalidateRaceCacheLocked(dir)
+		}
 		vfs.markPersistDirtyLocked()
 	}
 }
@@ -326,6 +347,7 @@ func (vfs *VirtualFileSystem) AddSymlink(linkPath, targetPath string) {
 	if isDir {
 		vfs.ensureChildrenBucketLocked(linkPath)
 	}
+	vfs.invalidateRaceCachesForPathLocked(linkPath)
 	vfs.touchAncestorsLocked(linkPath, time.Now().Unix())
 	vfs.markPersistDirtyLocked()
 }
@@ -420,6 +442,10 @@ func (vfs *VirtualFileSystem) PurgeUnseenSubtree(slaveName, rootPath string) {
 	}
 }
 
+// remergePurgeRecencyGraceSec protects files modified within this many seconds
+// from snapshot-based pruning, covering uploads that land during a remerge.
+const remergePurgeRecencyGraceSec int64 = 120
+
 // PurgeMissingChildren removes stale direct children for a remerged directory
 // immediately, using the directory snapshot reported by the slave.
 func (vfs *VirtualFileSystem) PurgeMissingChildren(slaveName, dirPath string, present map[string]struct{}, protectedSubtrees []string) {
@@ -432,6 +458,7 @@ func (vfs *VirtualFileSystem) PurgeMissingChildren(slaveName, dirPath string, pr
 		return
 	}
 
+	nowUnix := time.Now().Unix()
 	changed := false
 	for childPath := range childPaths {
 		file := vfs.files[childPath]
@@ -445,6 +472,13 @@ func (vfs *VirtualFileSystem) PurgeMissingChildren(slaveName, dirPath string, pr
 			continue
 		}
 		if isProtectedRemergeChild(childPath, protectedSubtrees) {
+			continue
+		}
+		// Don't purge a child that was just created/modified: a concurrent upload
+		// may have added it after the slave snapshotted this directory, so it is
+		// missing from the snapshot but legitimately present. If it is genuinely
+		// gone, the next remerge (past the grace window) will reconcile it.
+		if file.LastModified > 0 && nowUnix-file.LastModified < remergePurgeRecencyGraceSec {
 			continue
 		}
 		changed = vfs.deletePathLocked(childPath) || changed
@@ -592,10 +626,12 @@ func (vfs *VirtualFileSystem) deletePathLocked(path string) bool {
 	if len(removed) == 0 {
 		return false
 	}
+	vfs.invalidateRaceCachesForPathLocked(path)
 	if children := vfs.children[parent]; children != nil {
 		delete(children, path)
 	}
 	for _, removedPath := range removed {
+		vfs.invalidateRaceCachesForPathLocked(removedPath)
 		delete(vfs.children, removedPath)
 		if removedPath == path {
 			continue
@@ -633,7 +669,7 @@ func (vfs *VirtualFileSystem) ListDirectory(dirPath string) []*VFSFile {
 		if vfs.isHiddenPathLocked(childPath) {
 			continue
 		}
-		if cleanVFSPath(filepath.Dir(childPath)) != dirPath {
+		if !isDirectVFSChildPath(dirPath, childPath) {
 			continue
 		}
 		if file := vfs.files[childPath]; file != nil {
@@ -642,6 +678,19 @@ func (vfs *VirtualFileSystem) ListDirectory(dirPath string) []*VFSFile {
 	}
 
 	return results
+}
+
+func isDirectVFSChildPath(parent, child string) bool {
+	if parent == "/" {
+		rest := strings.TrimPrefix(child, "/")
+		return rest != "" && !strings.Contains(rest, "/")
+	}
+	prefix := parent + "/"
+	if !strings.HasPrefix(child, prefix) {
+		return false
+	}
+	rest := strings.TrimPrefix(child, prefix)
+	return rest != "" && !strings.Contains(rest, "/")
 }
 
 func (vfs *VirtualFileSystem) GetReleaseStatus(dirPath string) (core.ReleaseStatus, bool) {
@@ -837,8 +886,15 @@ func (vfs *VirtualFileSystem) HydrateRaceFile(path, owner, group string, sizeByt
 }
 
 func isWeakMetadataValue(value string) bool {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "", "goftpd", "ftp", "root", "0":
+	value = strings.TrimSpace(value)
+	switch {
+	case value == "", value == "0":
+		return true
+	case len(value) == 3 && strings.EqualFold(value, "ftp"):
+		return true
+	case len(value) == 4 && strings.EqualFold(value, "root"):
+		return true
+	case len(value) == 6 && strings.EqualFold(value, "goftpd"):
 		return true
 	default:
 		return false
@@ -1069,24 +1125,17 @@ func (vfs *VirtualFileSystem) SearchDirs(query string, limit int) []VFSSearchRes
 			break
 		}
 		dirPath := filepath.ToSlash(filepath.Clean(dir.Path))
-		prefix := strings.TrimRight(dirPath, "/") + "/"
 		res := VFSSearchResult{
 			Path:    dirPath,
 			ModTime: dir.LastModified,
 		}
-		for _, f := range vfs.files {
-			if f == nil || f.IsDir {
-				continue
-			}
-			filePath := filepath.ToSlash(filepath.Clean(f.Path))
-			if !strings.HasPrefix(filePath, prefix) {
-				continue
-			}
-			res.Files++
-			res.Bytes += f.Size
-			if f.LastModified > res.ModTime {
-				res.ModTime = f.LastModified
-			}
+		// Walk only this directory's subtree via the children index instead of
+		// rescanning every file in the VFS for each matched directory.
+		cf, cb, cm := vfs.subtreeFileStatsLocked(cleanVFSPath(dir.Path))
+		res.Files += cf
+		res.Bytes += cb
+		if cm > res.ModTime {
+			res.ModTime = cm
 		}
 		if res.ModTime <= 0 {
 			res.ModTime = now
@@ -1094,6 +1143,59 @@ func (vfs *VirtualFileSystem) SearchDirs(query string, limit int) []VFSSearchRes
 		results = append(results, res)
 	}
 	return results
+}
+
+// subtreeFileStatsLocked sums file count, bytes and newest mtime under dirPath
+// by recursively walking the children index (O(subtree)), avoiding a full
+// vfs.files scan per directory. Directory symlinks are not followed, so the
+// walk cannot loop. Caller must hold vfs.mu.
+func (vfs *VirtualFileSystem) subtreeFileStatsLocked(dirPath string) (files int, bytes int64, modTime int64) {
+	for childPath := range vfs.children[dirPath] {
+		f := vfs.files[childPath]
+		if f == nil {
+			continue
+		}
+		if f.IsDir {
+			if !f.IsSymlink {
+				cf, cb, cm := vfs.subtreeFileStatsLocked(childPath)
+				files += cf
+				bytes += cb
+				if cm > modTime {
+					modTime = cm
+				}
+			}
+			continue
+		}
+		files++
+		bytes += f.Size
+		if f.LastModified > modTime {
+			modTime = f.LastModified
+		}
+	}
+	return files, bytes, modTime
+}
+
+// FindChildFoldMatch returns the base name of the first direct child of
+// parentPath whose name case-folds to one of candidates, plus the index of the
+// matched candidate. It walks the children index directly (no directory-listing
+// allocation), so releaseguard's per-MKD dupe/case/nuked check is a tight map
+// scan under a read lock instead of building and copying the whole section.
+func (vfs *VirtualFileSystem) FindChildFoldMatch(parentPath string, candidates []string) (string, int, bool) {
+	if len(candidates) == 0 {
+		return "", 0, false
+	}
+	parentPath = cleanVFSPath(parentPath)
+	vfs.mu.RLock()
+	defer vfs.mu.RUnlock()
+	for childPath := range vfs.children[parentPath] {
+		base := filepath.Base(childPath)
+		for i, cand := range candidates {
+			if strings.EqualFold(base, cand) {
+				return base, i, true
+			}
+		}
+	}
+	return "", 0, false
 }
 
 // Count returns the number of entries in the VFS
@@ -1362,6 +1464,7 @@ func (vfs *VirtualFileSystem) setSFVData(dirPath string, sfvName string, sfvChec
 	meta.SFVName = strings.TrimSpace(filepath.Base(sfvName))
 	meta.SFVChecksum = sfvChecksum
 	meta.SFVAllowWithoutFile = allowWithoutFile
+	vfs.invalidateRaceCacheLocked(dirPath)
 	vfs.markPersistDirtyLocked()
 }
 
@@ -1385,6 +1488,7 @@ func (vfs *VirtualFileSystem) CacheZipExpectedParts(dirPath string, expected int
 		if meta := vfs.dirMeta[dirPath]; meta != nil {
 			meta.ZipExpectedParts = 0
 			meta.ZipDIZChecksum = 0
+			vfs.invalidateRaceCacheLocked(dirPath)
 			if meta.SFVEntries == nil && len(meta.RequestEntries) == 0 && len(meta.RequestFillEntries) == 0 {
 				delete(vfs.dirMeta, dirPath)
 			}
@@ -1399,6 +1503,7 @@ func (vfs *VirtualFileSystem) CacheZipExpectedParts(dirPath string, expected int
 	}
 	meta.ZipExpectedParts = expected
 	meta.ZipDIZChecksum = dizChecksum
+	vfs.invalidateRaceCacheLocked(dirPath)
 	vfs.markPersistDirtyLocked()
 }
 
@@ -1410,6 +1515,7 @@ func (vfs *VirtualFileSystem) clearZipMetaLocked(dirPath string) {
 	}
 	meta.ZipExpectedParts = 0
 	meta.ZipDIZChecksum = 0
+	vfs.invalidateRaceCacheLocked(dirPath)
 	if meta.SFVEntries == nil && len(meta.RequestEntries) == 0 && len(meta.RequestFillEntries) == 0 {
 		delete(vfs.dirMeta, dirPath)
 	}
@@ -1498,8 +1604,49 @@ func (vfs *VirtualFileSystem) GetRaceStats(dirPath string) (users []RaceUserStat
 
 // GetRaceStatsFiltered computes race stats directly from VFS state.
 func (vfs *VirtualFileSystem) GetRaceStatsFiltered(dirPath string, excludeKeys map[string]bool) (users []RaceUserStat, groups []RaceGroupStat, totalBytes int64, present int, total int) {
+	dirPath = cleanVFSPath(dirPath)
+	if len(excludeKeys) == 0 {
+		vfs.mu.RLock()
+		cache := vfs.cachedRaceStateLocked(dirPath)
+		if cache != nil {
+			users = append(users, cache.Users...)
+			groups = append(groups, cache.Groups...)
+			totalBytes = cache.TotalBytes
+			present = cache.Present
+			total = cache.Total
+			vfs.mu.RUnlock()
+			return
+		}
+		// Cache miss: compute under the READ lock, like the filtered path below.
+		// The compute is read-only. Holding the global WRITE lock here used to
+		// freeze every other VFS op (CWD/ResolvePath, other listings) for the
+		// whole computation, and since the race cache is invalidated on every
+		// upload, that serialized the entire VFS during a race. Readers don't
+		// block each other, so concurrent recompute is fine.
+		computeVersion := vfs.persistVersion
+		cache = vfs.computeRaceStateFilteredLocked(dirPath, nil)
+		vfs.mu.RUnlock()
+		if cache != nil {
+			users = append(users, cache.Users...)
+			groups = append(groups, cache.Groups...)
+			totalBytes = cache.TotalBytes
+			present = cache.Present
+			total = cache.Total
+			// Publish for the next reader with a brief write lock: just a pointer
+			// store, never held across the computation. If any VFS write happened
+			// after our read-lock snapshot, skip publishing to avoid caching stale
+			// stats.
+			vfs.mu.Lock()
+			if meta := vfs.dirMeta[dirPath]; vfs.persistVersion == computeVersion && meta != nil && meta.raceCache == nil && vfs.sfvMetaValidLocked(dirPath, meta) {
+				meta.raceCache = cloneRaceCache(cache)
+			}
+			vfs.mu.Unlock()
+		}
+		return
+	}
+
 	vfs.mu.RLock()
-	cache := vfs.computeRaceStateFilteredLocked(filepath.Clean(dirPath), excludeKeys)
+	cache := vfs.computeRaceStateFilteredLocked(dirPath, excludeKeys)
 	if cache == nil {
 		vfs.mu.RUnlock()
 		return
@@ -1520,8 +1667,42 @@ func (vfs *VirtualFileSystem) GetZipRaceStats(dirPath string) (users []RaceUserS
 
 // GetZipRaceStatsFiltered computes ZIP release stats, excluding currently open payloads.
 func (vfs *VirtualFileSystem) GetZipRaceStatsFiltered(dirPath string, excludeKeys map[string]bool) (users []RaceUserStat, groups []RaceGroupStat, totalBytes int64, present int, total int) {
+	dirPath = cleanVFSPath(dirPath)
+	if len(excludeKeys) == 0 {
+		vfs.mu.RLock()
+		cache := vfs.cachedZipRaceStateLocked(dirPath)
+		if cache != nil {
+			users = append(users, cache.Users...)
+			groups = append(groups, cache.Groups...)
+			totalBytes = cache.TotalBytes
+			present = cache.Present
+			total = cache.Total
+			vfs.mu.RUnlock()
+			return
+		}
+		// Cache miss: compute under the READ lock (the filtered ZIP path below
+		// already does, so the compute is read-only). Avoids taking the global
+		// write lock per miss, which serialized the VFS during races.
+		computeVersion := vfs.persistVersion
+		cache = vfs.computeZipRaceStateFilteredLocked(dirPath, nil)
+		vfs.mu.RUnlock()
+		if cache != nil {
+			users = append(users, cache.Users...)
+			groups = append(groups, cache.Groups...)
+			totalBytes = cache.TotalBytes
+			present = cache.Present
+			total = cache.Total
+			vfs.mu.Lock()
+			if meta := vfs.dirMeta[dirPath]; vfs.persistVersion == computeVersion && meta != nil && meta.zipRaceCache == nil {
+				meta.zipRaceCache = cloneRaceCache(cache)
+			}
+			vfs.mu.Unlock()
+		}
+		return
+	}
+
 	vfs.mu.RLock()
-	cache := vfs.computeZipRaceStateFilteredLocked(filepath.Clean(dirPath), excludeKeys)
+	cache := vfs.computeZipRaceStateFilteredLocked(dirPath, excludeKeys)
 	if cache == nil {
 		vfs.mu.RUnlock()
 		return
@@ -1539,6 +1720,36 @@ func raceFileKey(name string) string {
 	name = strings.TrimSpace(filepath.ToSlash(name))
 	name = strings.TrimPrefix(name, "./")
 	return strings.ToLower(name)
+}
+
+func (vfs *VirtualFileSystem) cachedRaceStateLocked(dirPath string) *VFSRaceCache {
+	meta := vfs.dirMeta[dirPath]
+	if !vfs.sfvMetaValidLocked(dirPath, meta) {
+		return nil
+	}
+	return cloneRaceCache(meta.raceCache)
+}
+
+func (vfs *VirtualFileSystem) cachedZipRaceStateLocked(dirPath string) *VFSRaceCache {
+	meta := vfs.dirMeta[dirPath]
+	if meta == nil {
+		return nil
+	}
+	return cloneRaceCache(meta.zipRaceCache)
+}
+
+func cloneRaceCache(cache *VFSRaceCache) *VFSRaceCache {
+	if cache == nil {
+		return nil
+	}
+	out := *cache
+	if len(cache.Users) > 0 {
+		out.Users = append([]RaceUserStat(nil), cache.Users...)
+	}
+	if len(cache.Groups) > 0 {
+		out.Groups = append([]RaceGroupStat(nil), cache.Groups...)
+	}
+	return &out
 }
 
 func (vfs *VirtualFileSystem) ensureChildrenBucketLocked(dirPath string) {
@@ -1672,6 +1883,7 @@ func (vfs *VirtualFileSystem) rebuildChildrenLocked() {
 		children[parent][path] = struct{}{}
 	}
 	vfs.children = children
+	vfs.clearAllRaceCachesLocked()
 }
 
 func (vfs *VirtualFileSystem) computeRaceStateFilteredLocked(dirPath string, excludeKeys map[string]bool) *VFSRaceCache {
@@ -1680,6 +1892,12 @@ func (vfs *VirtualFileSystem) computeRaceStateFilteredLocked(dirPath string, exc
 	if !vfs.sfvMetaValidLocked(dirPath, meta) {
 		return nil
 	}
+
+	t0 := time.Now()
+	defer func() {
+		metrics.RaceComputes.Inc()
+		metrics.RaceComputeTime.Observe(time.Since(t0))
+	}()
 
 	userMap := make(map[string]*RaceUserStat)
 	groupMap := make(map[string]*RaceGroupStat)
@@ -1767,6 +1985,10 @@ func (vfs *VirtualFileSystem) computeRaceStateFilteredLocked(dirPath string, exc
 
 	cache.Users = make([]RaceUserStat, 0, len(userMap))
 	for _, us := range userMap {
+		// Per-user speed = combined throughput over the racer's active span
+		// (first file start -> last file end). Parallel upload slots overlap, so
+		// this reflects ALL slots combined: the high per-user number glftpd
+		// shows. Sum of per-file transfer time is only a fallback.
 		if startMs, endMs := userStartMs[us.Name], userEndMs[us.Name]; us.Bytes > 0 && endMs > startMs {
 			us.Speed = float64(us.Bytes) / (float64(endMs-startMs) / 1000.0)
 		} else if us.Bytes > 0 && us.DurationMs > 0 {
@@ -1792,11 +2014,11 @@ func (vfs *VirtualFileSystem) computeRaceStateFilteredLocked(dirPath string, exc
 		if cache.Total > 0 {
 			gs.Percent = (gs.Files * 100) / cache.Total
 		}
+		// Group speed = sum of its racers' combined throughputs.
 		for _, us := range cache.Users {
-			if us.Group != gs.Name {
-				continue
+			if us.Group == gs.Name {
+				gs.Speed += us.Speed
 			}
-			gs.Speed += us.Speed
 		}
 		cache.Groups = append(cache.Groups, *gs)
 	}
@@ -1898,6 +2120,10 @@ func (vfs *VirtualFileSystem) computeZipRaceStateFilteredLocked(dirPath string, 
 
 	cache.Users = make([]RaceUserStat, 0, len(userMap))
 	for _, us := range userMap {
+		// Per-user speed = combined throughput over the racer's active span
+		// (first file start -> last file end). Parallel upload slots overlap, so
+		// this reflects ALL slots combined: the high per-user number glftpd
+		// shows. Sum of per-file transfer time is only a fallback.
 		if startMs, endMs := userStartMs[us.Name], userEndMs[us.Name]; us.Bytes > 0 && endMs > startMs {
 			us.Speed = float64(us.Bytes) / (float64(endMs-startMs) / 1000.0)
 		} else if us.Bytes > 0 && us.DurationMs > 0 {
@@ -1923,6 +2149,7 @@ func (vfs *VirtualFileSystem) computeZipRaceStateFilteredLocked(dirPath string, 
 		if cache.Total > 0 {
 			gs.Percent = (gs.Files * 100) / cache.Total
 		}
+		// Group speed = sum of its racers' combined throughputs.
 		for _, us := range cache.Users {
 			if us.Group == gs.Name {
 				gs.Speed += us.Speed
@@ -1995,4 +2222,28 @@ func (vfs *VirtualFileSystem) hasZipArchiveLocked(dirPath string) bool {
 
 func (vfs *VirtualFileSystem) markPersistDirtyLocked() {
 	vfs.persistVersion++
+}
+
+func (vfs *VirtualFileSystem) invalidateRaceCachesForPathLocked(path string) {
+	path = cleanVFSPath(path)
+	vfs.invalidateRaceCacheLocked(cleanVFSPath(filepath.Dir(path)))
+	vfs.invalidateRaceCacheLocked(path)
+}
+
+func (vfs *VirtualFileSystem) invalidateRaceCacheLocked(dirPath string) {
+	dirPath = cleanVFSPath(dirPath)
+	if meta := vfs.dirMeta[dirPath]; meta != nil {
+		meta.raceCache = nil
+		meta.zipRaceCache = nil
+	}
+}
+
+func (vfs *VirtualFileSystem) clearAllRaceCachesLocked() {
+	for _, meta := range vfs.dirMeta {
+		if meta == nil {
+			continue
+		}
+		meta.raceCache = nil
+		meta.zipRaceCache = nil
+	}
 }

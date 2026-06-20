@@ -17,6 +17,26 @@ func TestExtractMovieTitleYear(t *testing.T) {
 	}
 }
 
+func TestExtractMovieTitleYearNumericTitles(t *testing.T) {
+	cases := []struct {
+		rel       string
+		wantTitle string
+		wantYear  int
+	}{
+		{"Blade.Runner.2049.2017.1080p.BluRay.x264-GROUP", "Blade Runner 2049", 2017},
+		{"2012.2009.1080p.BluRay.x264-GROUP", "2012", 2009},
+		{"1917.2019.2160p.UHD.BluRay.x265-GROUP", "1917", 2019},
+		{"1922.2017.1080p.NF.WEB-DL.x264-GROUP", "1922", 2017},
+		{"The.Matrix.1999.1080p.BluRay.x264-GROUP", "The Matrix", 1999},
+	}
+	for _, c := range cases {
+		title, year := extractMovieTitleYear(c.rel)
+		if title != c.wantTitle || year != c.wantYear {
+			t.Fatalf("extractMovieTitleYear(%q) = %q, %d; want %q, %d", c.rel, title, year, c.wantTitle, c.wantYear)
+		}
+	}
+}
+
 func TestSelectBestIMDBTitleRejectsYearMismatch(t *testing.T) {
 	titles := []imdbTitle{{
 		ID:           "tt1457767",

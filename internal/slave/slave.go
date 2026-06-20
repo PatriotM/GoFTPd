@@ -22,6 +22,7 @@ import (
 	"time"
 	"unicode"
 
+	"goftpd/internal/metrics"
 	"goftpd/internal/protocol"
 )
 
@@ -29,8 +30,8 @@ const (
 	socketTimeout             = 10 * time.Second
 	actualTimeout             = 60 * time.Second
 	diskStatusInterval        = 15 * time.Second
-	minTransferBufferSize     = 32 * 1024
-	defaultTransferBufferSize = 256 * 1024
+	minTransferBufferSize     = 1024 * 1024
+	defaultTransferBufferSize = 4 * 1024 * 1024
 	remergeEntryYieldEvery    = 128
 )
 
@@ -47,6 +48,8 @@ type Slave struct {
 	tlsEnabled         bool
 	tlsCert            string
 	tlsKey             string
+	tlsServerConfig    *tls.Config
+	tlsServerConfigErr error
 	bindIP             string
 	transferBufferSize int
 	freeSpaceMB        int
@@ -86,6 +89,24 @@ func (s *Slave) writeObjectNoActivity(obj interface{}) error {
 		s.lastWriteTime.Store(time.Now().UnixMilli())
 	}
 	return err
+}
+
+// writeStatusObject sends a best-effort progress update. It never blocks: if the
+// shared write stream is busy (another transfer's update, a completion message,
+// or remerge data is being written), the update is skipped instead of queued.
+// Progress updates are advisory, so dropping one under load is harmless — and it
+// keeps the transfer copy loop from stalling on writeMu contention while making
+// sure transfer-complete messages (which fire the client's 226) aren't delayed
+// behind a backlog of per-second status writes.
+func (s *Slave) writeStatusObject(obj interface{}) {
+	if !s.writeMu.TryLock() {
+		metrics.StatusDrops.Inc()
+		return
+	}
+	defer s.writeMu.Unlock()
+	if err := s.stream.WriteObject(obj); err == nil {
+		s.lastWriteTime.Store(time.Now().UnixMilli())
+	}
 }
 
 // SlaveConfig holds slave configuration loaded from YAML
@@ -128,6 +149,7 @@ func NewSlave(cfg SlaveConfig) *Slave {
 	if bufferSize < minTransferBufferSize {
 		bufferSize = minTransferBufferSize
 	}
+	tlsServerConfig, tlsServerConfigErr := loadTLSServerConfig(cfg.TLSCert, cfg.TLSKey)
 	return &Slave{
 		name:               cfg.Name,
 		masterHost:         cfg.MasterHost,
@@ -138,12 +160,22 @@ func NewSlave(cfg SlaveConfig) *Slave {
 		tlsEnabled:         cfg.TLSEnabled,
 		tlsCert:            cfg.TLSCert,
 		tlsKey:             cfg.TLSKey,
+		tlsServerConfig:    tlsServerConfig,
+		tlsServerConfigErr: tlsServerConfigErr,
 		bindIP:             cfg.BindIP,
 		timeout:            timeout,
 		transferBufferSize: bufferSize,
 		freeSpaceMB:        cfg.FreeSpaceMB,
 		debug:              cfg.Debug,
 	}
+}
+
+func loadTLSServerConfig(certPath, keyPath string) (*tls.Config, error) {
+	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		return nil, err
+	}
+	return &tls.Config{Certificates: []tls.Certificate{cert}, DynamicRecordSizingDisabled: true}, nil
 }
 
 func normalizeMountedRoots(configured []MountedRoot, legacy []string) []MountedRoot {
@@ -386,6 +418,23 @@ func (s *Slave) getTransferBufferSize() int {
 		return defaultTransferBufferSize
 	}
 	return s.transferBufferSize
+}
+
+func (s *Slave) serverTLSConfig() (*tls.Config, error) {
+	if s == nil {
+		return nil, fmt.Errorf("missing slave")
+	}
+	if s.tlsServerConfig != nil {
+		return s.tlsServerConfig, nil
+	}
+	if s.tlsServerConfigErr != nil {
+		return nil, s.tlsServerConfigErr
+	}
+	cfg, err := loadTLSServerConfig(s.tlsCert, s.tlsKey)
+	if err != nil {
+		return nil, err
+	}
+	return cfg, nil
 }
 
 // Boot connects to master, performs handshake, sends disk status, then enters command loop.
@@ -1203,6 +1252,7 @@ func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
 	totalDirs := 0
 	sentDirs := 0
 
+	var scanErr error
 	for _, target := range scanTargets {
 		scanRoot := target.scanRoot
 
@@ -1221,6 +1271,7 @@ func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
 				return &protocol.AsyncResponseError{Index: ac.Index, Message: "remerge stopped"}
 			}
 			log.Printf("[Slave] Remerge root %s stopped: %v", target.root.Path, err)
+			scanErr = err
 		}
 		totalFiles += counts.totalFiles
 		totalDirs += counts.totalDirs
@@ -1230,6 +1281,13 @@ func (s *Slave) handleRemerge(ac *protocol.AsyncCommand) interface{} {
 	}
 
 	log.Printf("[Slave] Remerge complete: %d files, %d dirs across %d sent directories", totalFiles, totalDirs, sentDirs)
+	if scanErr != nil {
+		// A root failed to scan completely (I/O error, went offline mid-walk).
+		// Report incomplete so the master keeps the directory snapshots we did
+		// send but SKIPS the final PurgeUnseen — otherwise files under the
+		// unscanned area would be wrongly removed from the index.
+		return &protocol.AsyncResponseError{Index: ac.Index, Message: fmt.Sprintf("remerge incomplete: %v", scanErr)}
+	}
 	return &protocol.AsyncResponse{Index: ac.Index}
 }
 
@@ -1293,8 +1351,8 @@ func (s *Slave) scanRemergeDirectory(target scanTarget, dir string, excludePaths
 			IsSymlink:    info.Mode()&os.ModeSymlink != 0,
 			Size:         info.Size(),
 			LastModified: info.ModTime().Unix(),
-			Owner:        getFileOwner(info),
-			Group:        getFileGroup(info),
+			Owner:        defaultFileOwner,
+			Group:        defaultFileGroup,
 		}
 		if inode.IsSymlink {
 			if linkTarget, err := os.Readlink(fullPath); err == nil {
@@ -1390,7 +1448,11 @@ func normalizeExcludeVFSPaths(paths []string) []string {
 }
 
 func isExcludedVFSPath(p string, excluded []string) bool {
-	p = path.Clean("/" + strings.TrimSpace(filepath.ToSlash(p)))
+	if strings.TrimSpace(p) != p || !strings.HasPrefix(p, "/") || strings.Contains(p, "\\") ||
+		strings.Contains(p, "//") || strings.Contains(p, "/./") || strings.Contains(p, "/../") ||
+		strings.HasSuffix(p, "/.") || strings.HasSuffix(p, "/..") {
+		p = path.Clean("/" + strings.TrimSpace(filepath.ToSlash(p)))
+	}
 	if p == "/" || p == "." || p == "" {
 		return false
 	}
@@ -1432,7 +1494,9 @@ func (s *Slave) handleSFVFile(ac *protocol.AsyncCommand) interface{} {
 		h := crc32.NewIEEE()
 		h.Write(data)
 
-		log.Printf("[Slave] Parsed SFV %s: %d entries", sfvPath, len(entries))
+		if s.debug {
+			log.Printf("[Slave] Parsed SFV %s: %d entries", sfvPath, len(entries))
+		}
 		return &protocol.AsyncResponseSFVInfo{
 			Index:    ac.Index,
 			SFVName:  filepath.Base(sfvPath),
