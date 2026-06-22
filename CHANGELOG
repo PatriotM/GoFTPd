@@ -42,9 +42,15 @@ Other fixes
 - Removed the always-0 [Speed] field from SITE STAT.
 
 Display
-- MP3/FLAC info on CWD is now rendered as an 80-column box.
+- MP3, FLAC, IMDB and TVMaze info on CWD are now CP437 boxes at one shared width
+  matching the race-stats banner.
 - The CWD race-stats banner now uses a compact "R A C E S T A T S" title.
 - The GoFTPd ASCII art moved to the login MOTD.
+
+Plugins
+- spacekeeper: refuse min-age rules when a release has no mod time, re-check
+  live slave free space during reclaim, bound concurrent archive moves, and log
+  rejected rule configs.
 
 1.1.0b
 ------

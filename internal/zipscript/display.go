@@ -100,10 +100,19 @@ func boxCenter(s string, w int) string {
 	return strings.Repeat(" ", left) + string(r) + strings.Repeat(" ", w-len(r)-left)
 }
 
-// BuildAudioInfoBox renders the MP3/FLAC tag info as an 80-column CP437 box for
-// the CWD banner (the compact one-liner from BuildAudioInfoLines is kept for the
-// STOR announce).
-func BuildAudioInfoBox(dirPath string, fields map[string]string) []string {
+// boxRight right-aligns s into a w-wide cell.
+func boxRight(s string, w int) string {
+	r := []rune(s)
+	if len(r) >= w {
+		return string(r[:w])
+	}
+	return strings.Repeat(" ", w-len(r)) + string(r)
+}
+
+// BoxInnerWidth matches the CWD race-stats banner.
+const BoxInnerWidth = 70
+
+func BuildAudioInfoBox(dirPath string, fields map[string]string, version string) []string {
 	if len(fields) == 0 {
 		return nil
 	}
@@ -114,9 +123,9 @@ func BuildAudioInfoBox(dirPath string, fields map[string]string) []string {
 	var title string
 	switch section {
 	case "MP3":
-		title = "m p 3   i n f o"
+		title = "M P 3   I N F O"
 	case "FLAC":
-		title = "f l a c   i n f o"
+		title = "F L A C   I N F O"
 	default:
 		return nil
 	}
@@ -125,25 +134,19 @@ func BuildAudioInfoBox(dirPath string, fields map[string]string) []string {
 	genre := AudioDisplayField(fields, "genre", "g_genre")
 	year := NormalizeAudioYearForStatus(AudioDisplayField(fields, "year", "g_recordeddate", "g_recorded_date"))
 
-	const lw = 38            // left column width
-	const rw = 39            // right column width
-	const full = lw + 1 + rw // 78 inner columns
+	const full = BoxInnerWidth // 70 inner columns
+	const lw = 34              // left column width
+	const rw = full - 1 - lw   // 35 right column width
 
-	lines := []string{
+	return []string{
 		bxTL + strings.Repeat(bxH, full) + bxTR,
-		bxV + boxText("", full) + bxV,
 		bxV + boxCenter(title, full) + bxV,
-		bxV + boxText("", full) + bxV,
+		bxV + boxRight("GoFTPd v"+version+" ", full) + bxV,
 		bxLT + strings.Repeat(bxH, lw) + bxTT + strings.Repeat(bxH, rw) + bxRT,
-		bxV + boxText("   Artist  : "+artist, lw) + bxV + boxText(" Genre : "+genre, rw) + bxV,
-		bxV + boxText("   Album   : "+album, lw) + bxV + boxText(" Year  : "+year, rw) + bxV,
+		bxV + boxText("  Artist : "+artist, lw) + bxV + boxText(" Genre : "+genre, rw) + bxV,
+		bxV + boxText("  Album  : "+album, lw) + bxV + boxText(" Year  : "+year, rw) + bxV,
 		bxBL + strings.Repeat(bxH, lw) + bxBT + strings.Repeat(bxH, rw) + bxBR,
 	}
-	// Leading space so the line renders as "250- <box>" rather than "250-<box>".
-	for i := range lines {
-		lines[i] = " " + lines[i]
-	}
-	return lines
 }
 
 func BuildAudioInfoLines(dirPath string, fields map[string]string, isStor bool) []string {

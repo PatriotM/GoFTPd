@@ -51,8 +51,9 @@ type Handler struct {
 	stopCh          chan struct{}
 	wg              sync.WaitGroup
 
-	mu       sync.Mutex
-	inflight map[string]time.Time
+	mu            sync.Mutex
+	inflight      map[string]time.Time
+	archiveActive int
 }
 
 func New() *Handler {
@@ -158,7 +159,13 @@ func (h *Handler) applyDeleteRule(rule rule, state plugin.SlaveState, now time.T
 	}
 	estimatedFree := currentFree
 	actions := 0
-	for estimatedFree < rule.TargetFreeBytes && actions < rule.MaxActions {
+	for actions < rule.MaxActions {
+		if real := h.currentFreeBytes(rule, estimatedFree); real > estimatedFree {
+			estimatedFree = real
+		}
+		if estimatedFree >= rule.TargetFreeBytes {
+			break
+		}
 		cand, ok := h.findOldestCandidate(rule, now, activeTransfers)
 		if !ok {
 			if actions == 0 {
@@ -195,7 +202,16 @@ func (h *Handler) applyArchiveRule(rule rule, state plugin.SlaveState, now time.
 	}
 	estimatedFree := currentFree
 	actions := 0
-	for estimatedFree < rule.TargetFreeBytes && actions < rule.MaxActions {
+	for actions < rule.MaxActions {
+		if real := h.currentFreeBytes(rule, estimatedFree); real > estimatedFree {
+			estimatedFree = real
+		}
+		if estimatedFree >= rule.TargetFreeBytes {
+			break
+		}
+		if h.archiveInFlight() >= rule.MaxActions {
+			break
+		}
 		cand, ok := h.findOldestCandidate(rule, now, activeTransfers)
 		if !ok {
 			if actions == 0 {
@@ -210,6 +226,12 @@ func (h *Handler) applyArchiveRule(rule rule, state plugin.SlaveState, now time.
 		estimatedFree += cand.Bytes
 		actions++
 	}
+}
+
+func (h *Handler) archiveInFlight() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.archiveActive
 }
 
 func (h *Handler) archiveCandidate(fromPath, toDir, toName, targetSlave string) error {
@@ -234,10 +256,18 @@ func (h *Handler) startArchiveJob(rule rule, state plugin.SlaveState, cand candi
 	destDir := archiveDestinationDir(rule, cand.ModTime)
 	destName := path.Base(cand.Path)
 	targetPlan, targetErr := h.chooseArchiveTarget(rule, cand)
+	h.mu.Lock()
+	h.archiveActive++
+	h.mu.Unlock()
 	h.wg.Add(1)
 	go func() {
 		defer h.wg.Done()
 		defer h.unmarkInflight(cand.Path)
+		defer func() {
+			h.mu.Lock()
+			h.archiveActive--
+			h.mu.Unlock()
+		}()
 
 		err := fmt.Errorf("archive disabled")
 		if h.enableArchive {
@@ -471,8 +501,13 @@ func (h *Handler) evaluateCandidate(rule rule, dirPath string, modTime int64, no
 	if h.isInflight(dirPath) {
 		return candidate{}, false
 	}
-	if rule.MinAge > 0 && modTime > 0 && now.Sub(time.Unix(modTime, 0)) < rule.MinAge {
-		return candidate{}, false
+	if rule.MinAge > 0 {
+		if modTime <= 0 {
+			return candidate{}, false
+		}
+		if now.Sub(time.Unix(modTime, 0)) < rule.MinAge {
+			return candidate{}, false
+		}
 	}
 	if rule.SkipActiveRaces && hasActiveTransferUnder(dirPath, activeTransfers) {
 		return candidate{}, false
@@ -637,18 +672,22 @@ func parseRules(raw interface{}) []rule {
 			MaxActions:            intValue(cfg, "max_actions_per_cycle", 10),
 		}
 		if r.Name == "" || r.Slave == "" || len(r.Paths) == 0 {
+			log.Printf("[spacekeeper] ignoring rule %q: name, slave and paths are required", r.Name)
 			continue
 		}
 		switch r.Action {
 		case "delete_oldest":
 			if r.TriggerFreeBytes <= 0 || r.TargetFreeBytes <= r.TriggerFreeBytes {
+				log.Printf("[spacekeeper] ignoring rule %q: need trigger_free > 0 and target_free > trigger_free", r.Name)
 				continue
 			}
 		case "archive_oldest":
 			if r.Destination == "" || r.TriggerFreeBytes <= 0 || r.TargetFreeBytes <= r.TriggerFreeBytes {
+				log.Printf("[spacekeeper] ignoring rule %q: archive needs destination, trigger_free > 0 and target_free > trigger_free", r.Name)
 				continue
 			}
 		default:
+			log.Printf("[spacekeeper] ignoring rule %q: unknown action %q (use delete_oldest or archive_oldest)", r.Name, r.Action)
 			continue
 		}
 		if r.MaxActions < 1 {
@@ -657,6 +696,18 @@ func parseRules(raw interface{}) []rule {
 		out = append(out, r)
 	}
 	return out
+}
+
+func (h *Handler) currentFreeBytes(rule rule, fallback int64) int64 {
+	if h.svc == nil || h.svc.ListSlaveStates == nil {
+		return fallback
+	}
+	for _, st := range h.svc.ListSlaveStates() {
+		if strings.EqualFold(strings.TrimSpace(st.Name), strings.TrimSpace(rule.Slave)) {
+			return effectiveFreeBytes(rule, st)
+		}
+	}
+	return fallback
 }
 
 func effectiveFreeBytes(rule rule, state plugin.SlaveState) int64 {
