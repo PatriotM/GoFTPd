@@ -2,7 +2,6 @@ package core
 
 import (
 	"bufio"
-	"bytes"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha1"
@@ -264,9 +263,6 @@ func AddGroupToFile(groupName string, desc string, gid int) error {
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	if err := backupAuthFileDash(groupPath, existing, mode); err != nil {
-		return err
-	}
 
 	buf := existing
 	if len(buf) > 0 && buf[len(buf)-1] != '\n' {
@@ -308,9 +304,6 @@ func RemoveGroupFromFile(groupName string) error {
 	}
 	if !removed {
 		return nil
-	}
-	if err := backupAuthFileDash(groupPath, existing, mode); err != nil {
-		return err
 	}
 	return atomicWriteFile(groupPath, []byte(strings.Join(kept, "\n")), mode)
 }
@@ -510,9 +503,7 @@ func RenameUserInPasswd(oldUsername, newUsername, path string) error {
 }
 
 func writeAuthFileWithDashBackup(path string, existing, next []byte, mode os.FileMode) error {
-	if err := backupAuthFileDash(path, existing, mode); err != nil {
-		return err
-	}
+	_ = existing
 	return atomicWriteFile(path, next, mode)
 }
 
@@ -549,41 +540,6 @@ func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	if err := os.Rename(tmp, path); err != nil {
-		return err
-	}
-	cleanup = false
-	return nil
-}
-
-func backupAuthFileDash(path string, existing []byte, mode os.FileMode) error {
-	if len(bytes.TrimSpace(existing)) == 0 {
-		return nil
-	}
-	backupPath := path + "-"
-	dir := filepath.Dir(backupPath)
-	file, err := os.CreateTemp(dir, "."+filepath.Base(backupPath)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpPath := file.Name()
-	cleanup := true
-	defer func() {
-		if cleanup {
-			_ = os.Remove(tmpPath)
-		}
-	}()
-	if _, err := file.Write(existing); err != nil {
-		_ = file.Close()
-		return err
-	}
-	if err := file.Chmod(mode); err != nil {
-		_ = file.Close()
-		return err
-	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpPath, backupPath); err != nil {
 		return err
 	}
 	cleanup = false

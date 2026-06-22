@@ -76,7 +76,7 @@ func TestAddUserToPasswdPreservesExistingFields(t *testing.T) {
 	}
 }
 
-func TestAddUserToPasswdCreatesDashBackup(t *testing.T) {
+func TestAddUserToPasswdDoesNotCreateDashBackup(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
 	passwdPath := filepath.Join(dir, "passwd")
@@ -89,12 +89,17 @@ func TestAddUserToPasswdCreatesDashBackup(t *testing.T) {
 		t.Fatalf("AddUserToPasswd() error = %v", err)
 	}
 
-	backup, err := os.ReadFile(passwdPath + "-")
-	if err != nil {
-		t.Fatalf("ReadFile(passwd-) error = %v", err)
+	if _, err := os.Stat(passwdPath + "-"); !os.IsNotExist(err) {
+		t.Fatalf("legacy passwd- backup exists or stat failed: %v", err)
 	}
-	if string(backup) != original {
-		t.Fatalf("passwd- = %q, want original %q", string(backup), original)
+	data, err := os.ReadFile(passwdPath)
+	if err != nil {
+		t.Fatalf("ReadFile(passwd) error = %v", err)
+	}
+	got := strings.TrimSpace(string(data))
+	want := "Finity:newhash:123:456:glftpd:/glroot:/bin/bash"
+	if got != want {
+		t.Fatalf("passwd line = %q, want %q", got, want)
 	}
 }
 
@@ -118,7 +123,7 @@ func TestAddUserToPasswdUsesStableDefaultsForNewUsers(t *testing.T) {
 	}
 }
 
-func TestAddGroupToFileCreatesDashBackup(t *testing.T) {
+func TestAddGroupToFileDoesNotCreateDashBackup(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
 	oldwd, err := os.Getwd()
@@ -141,12 +146,17 @@ func TestAddGroupToFileCreatesDashBackup(t *testing.T) {
 		t.Fatalf("AddGroupToFile() error = %v", err)
 	}
 
-	backup, err := os.ReadFile(filepath.Join("etc", "group-"))
-	if err != nil {
-		t.Fatalf("ReadFile(group-) error = %v", err)
+	if _, err := os.Stat(filepath.Join("etc", "group-")); !os.IsNotExist(err) {
+		t.Fatalf("legacy group- backup exists or stat failed: %v", err)
 	}
-	if string(backup) != original {
-		t.Fatalf("group- = %q, want original %q", string(backup), original)
+	data, err := os.ReadFile(filepath.Join("etc", "group"))
+	if err != nil {
+		t.Fatalf("ReadFile(group) error = %v", err)
+	}
+	got := string(data)
+	want := original + "iND:iND:300:\n"
+	if got != want {
+		t.Fatalf("group = %q, want %q", got, want)
 	}
 }
 

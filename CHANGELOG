@@ -17,6 +17,10 @@ Performance
 Data integrity
 - passwd, etc/group, and per-group files are now written atomically (temp file
   + rename); group saves are mutex-guarded.
+- Consolidated all auth-state backups into one `backup/` folder of timestamped
+  snapshots (pruned to the recent window), replacing the backups that were
+  scattered as `etc/passwd-`, `etc/users-/`, per-write `.backup` copies, etc.
+  Atomic writes already prevent torn files, so the per-write copies were dropped.
 
 NUKE / UNNUKE
 - UNNUKE restores the credits removed at nuke time via the new `nukees_data`
@@ -51,6 +55,8 @@ Plugins
 - spacekeeper: refuse min-age rules when a release has no mod time, re-check
   live slave free space during reclaim, bound concurrent archive moves, and log
   rejected rule configs.
+- bnc: added per-target `display_host` so a status check can connect over
+  loopback while still announcing the public address.
 
 1.1.0b
 ------

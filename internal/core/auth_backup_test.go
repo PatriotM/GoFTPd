@@ -3,6 +3,7 @@ package core
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 )
 
@@ -24,12 +25,33 @@ func TestAuthStateBackupOnceCreatesDaemonBackups(t *testing.T) {
 		t.Fatalf("authStateBackupOnce() error = %v", err)
 	}
 
-	assertFile(t, filepath.Join("etc", "passwd-"), "Finity:hash:100:300:0:/site:/bin/false\n")
-	assertFile(t, filepath.Join("etc", "group-"), "iND::300:\n")
-	assertFile(t, filepath.Join("etc", "permissions.yml-"), "rules: []\n")
-	assertFile(t, filepath.Join("etc", "affils.yml-"), "affils: []\n")
-	assertFile(t, filepath.Join("etc", "users-", "Finity"), "USER test\nGROUP iND 0\n")
-	assertFile(t, filepath.Join("etc", "groups-", "iND"), "GROUP iND\n")
+	snap := latestBackupDir(t)
+	assertFile(t, filepath.Join(snap, "etc", "passwd"), "Finity:hash:100:300:0:/site:/bin/false\n")
+	assertFile(t, filepath.Join(snap, "etc", "group"), "iND::300:\n")
+	assertFile(t, filepath.Join(snap, "etc", "permissions.yml"), "rules: []\n")
+	assertFile(t, filepath.Join(snap, "etc", "affils.yml"), "affils: []\n")
+	assertFile(t, filepath.Join(snap, "etc", "users", "Finity"), "USER test\nGROUP iND 0\n")
+	assertFile(t, filepath.Join(snap, "etc", "groups", "iND"), "GROUP iND\n")
+}
+
+// latestBackupDir returns the newest snapshot directory under backupRootDir.
+func latestBackupDir(t *testing.T) string {
+	t.Helper()
+	entries, err := os.ReadDir(backupRootDir)
+	if err != nil {
+		t.Fatalf("ReadDir(%s) error = %v", backupRootDir, err)
+	}
+	var dirs []string
+	for _, e := range entries {
+		if e.IsDir() {
+			dirs = append(dirs, e.Name())
+		}
+	}
+	if len(dirs) == 0 {
+		t.Fatalf("no backup snapshot created under %s", backupRootDir)
+	}
+	sort.Strings(dirs)
+	return filepath.Join(backupRootDir, dirs[len(dirs)-1])
 }
 
 func mustMkdir(t *testing.T, path string) {

@@ -73,12 +73,8 @@ func TestLoadAndSavePreservesImportedUserfileFields(t *testing.T) {
 	if err := u.Save(); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
-	backup, err := os.ReadFile(filepath.Join("etc", "users", ".backup", "Finity"))
-	if err != nil {
-		t.Fatalf("ReadFile(backup) error = %v", err)
-	}
-	if string(backup) != input {
-		t.Fatalf("backup did not preserve pre-save userfile\n%s", string(backup))
+	if _, err := os.Stat(filepath.Join("etc", "users", ".backup", "Finity")); !os.IsNotExist(err) {
+		t.Fatalf("legacy per-write backup exists or stat failed: %v", err)
 	}
 	if u.UploadSlots != 10 {
 		t.Fatalf("UploadSlots = %d, want 10 derived from LOGINS", u.UploadSlots)
