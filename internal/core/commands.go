@@ -412,7 +412,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			s.IsLogged = true
 			s.PendingUser = ""
 			s.PendingReason = ""
-			fmt.Fprintf(s.Conn, "230-Welcome to GoFTPd, %s!\r\n", s.User.Name)
+			s.emitLoginMOTD()
 			fmt.Fprintf(s.Conn, "230-Tagline: %s\r\n", s.User.Tagline)
 
 			s.showGlobalStats("230", false)

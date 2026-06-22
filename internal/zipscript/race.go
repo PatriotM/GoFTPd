@@ -131,12 +131,7 @@ func RenderRaceStats(w io.Writer, users []RaceUserStat, groups []RaceGroupStat, 
 
 	width := 70
 	raw(w, line(cpTL, cpHZ, cpTR, width))
-	text(w, "   ____       _____ _____ ____     _  ", width)
-	text(w, "  / ___| ___ |  ___|_   _|  _ \\ __| | ", width)
-	text(w, " | |  _ / _ \\| |_    | | | |_) / _` | ", width)
-	text(w, " | |_| | (_) |  _|   | | |  __/ (_| | ", width)
-	text(w, "  \\____|\\___/|_|     |_| |_|   \\__,_| ", width)
-	text(w, fmt.Sprintf(" You are using GoFTPd v%s ", version), width)
+	renderRaceTitle(w, version, width)
 	raw(w, sep(cpLT, cpTD, cpRT, 28, 11, 8, 11, 8))
 	row(w, "Users", "Files", "Size", "Speed", "%")
 	raw(w, sep(cpLT, cpCR, cpRT, 28, 11, 8, 11, 8))
@@ -164,13 +159,34 @@ func RenderRaceStats(w io.Writer, users []RaceUserStat, groups []RaceGroupStat, 
 func RenderRaceHeader(w io.Writer, version string) {
 	width := 70
 	raw(w, line(cpTL, cpHZ, cpTR, width))
-	text(w, "   ____       _____ _____ ____     _  ", width)
-	text(w, "  / ___| ___ |  ___|_   _|  _ \\ __| | ", width)
-	text(w, " | |  _ / _ \\| |_    | | | |_) / _` | ", width)
-	text(w, " | |_| | (_) |  _|   | | |  __/ (_| | ", width)
-	text(w, "  \\____|\\___/|_|     |_| |_|   \\__,_| ", width)
-	text(w, fmt.Sprintf(" You are using GoFTPd v%s ", version), width)
+	renderRaceTitle(w, version, width)
 	raw(w, line(cpBL, cpHZ, cpBR, width))
+}
+
+func renderRaceTitle(w io.Writer, version string, width int) {
+	textCenter(w, "R A C E S T A T S", width)
+	textRight(w, fmt.Sprintf("GoFTPd v%s ", version), width)
+}
+
+func textCenter(w io.Writer, s string, width int) {
+	if len(s) > width {
+		s = s[:width]
+	}
+	left := (width - len(s)) / 2
+	padded := strings.Repeat(" ", left) + s + strings.Repeat(" ", width-len(s)-left)
+	buf := append([]byte{cpVT}, []byte(padded)...)
+	buf = append(buf, cpVT, '\r', '\n')
+	w.Write(buf)
+}
+
+func textRight(w io.Writer, s string, width int) {
+	if len(s) > width {
+		s = s[:width]
+	}
+	padded := strings.Repeat(" ", width-len(s)) + s
+	buf := append([]byte{cpVT}, []byte(padded)...)
+	buf = append(buf, cpVT, '\r', '\n')
+	w.Write(buf)
 }
 
 func RenderFTPReplyBlock(w io.Writer, code int, finalLine string, render func(io.Writer)) {

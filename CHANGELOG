@@ -1,6 +1,51 @@
 GoFTPd Changelog
 ================
 
+1.2.0
+-----
+
+Performance
+- Let Linux TCP autotuning manage data-socket buffers by default, with
+  `ForceDataSocketBuffers` available for tuned hosts.
+- Set TCP_NODELAY on FTP control connections to reduce small-response latency.
+- Added TLS session resumption for outbound data connections.
+- Race timing now starts at the first real payload file; .sfv/.nfo files no
+  longer seed the race window.
+- Scoped slave remerges (MarkSubtreeUnseen/PurgeUnseenSubtree) walk the children
+  index instead of scanning the full VFS map.
+
+Data integrity
+- passwd, etc/group, and per-group files are now written atomically (temp file
+  + rename); group saves are mutex-guarded.
+
+NUKE / UNNUKE
+- UNNUKE restores the credits removed at nuke time via the new `nukees_data`
+  history column.
+- Legacy nuke records restore with the recorded multiplier, defaulting to x1
+  when unknown.
+- Lifetime nuke stats are decremented for the restored nuke instead of reset.
+- Nuke/unnuke rename and credit handling now avoid stranded penalties or double
+  restores on rename failure.
+- Fixed local-mode absolute-target path handling and unchecked stat casts.
+
+SITE command fixes
+- CHMOD validates the mode and reports filesystem errors.
+- SITE USER now requires siteop to view other accounts.
+- GRPDEL rewrites etc/group so deleted groups no longer reappear on restart.
+- SELFIP is available to authenticated non-siteop users again.
+- GADMIN can revoke admin and validates group existence/membership; CHGRP and
+  CHPGRP reject nonexistent groups.
+
+Other fixes
+- User loading honors a non-default `passwd_file` for UID/GID lookup.
+- Credit accrual is overflow-safe.
+- Removed the always-0 [Speed] field from SITE STAT.
+
+Display
+- MP3/FLAC info on CWD is now rendered as an 80-column box.
+- The CWD race-stats banner now uses a compact "R A C E S T A T S" title.
+- The GoFTPd ASCII art moved to the login MOTD.
+
 1.1.0b
 ------
 
