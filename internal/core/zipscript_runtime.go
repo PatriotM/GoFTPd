@@ -397,7 +397,6 @@ func handleMasterUploadSFVStatusAndCleanup(s *Session, bridge MasterBridge, uplo
 
 	zipscript.WriteUploadSFVStatus(s.Conn, checksum, expectedCRC, true, fileSize)
 	if checksum == expectedCRC && checksum != 0 {
-		clearMasterSFVMissingMarker(bridge, uploadDir, fileName)
 		return false
 	}
 

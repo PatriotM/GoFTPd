@@ -13,6 +13,8 @@ Performance
   longer seed the race window.
 - Scoped slave remerges (MarkSubtreeUnseen/PurgeUnseenSubtree) walk the children
   index instead of scanning the full VFS map.
+- Per-file -MISSING marker cleanup now runs in the post-upload path instead of
+  blocking the upload 226 response.
 
 Data integrity
 - passwd, etc/group, and per-group files are now written atomically (temp file
