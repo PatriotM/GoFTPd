@@ -28,6 +28,7 @@ type NukeHistoryEntry struct {
 	TotalBytes           int64
 	TotalCreditsRemoved  int64
 	Nukees               string
+	NukeesData           string // JSON map user->{bytes,credits} removed, for exact unnuke
 	Status               string
 	UnnukedBy            string
 	UnnukedAt            int64
@@ -91,6 +92,7 @@ CREATE TABLE IF NOT EXISTS nukes (
     total_bytes INTEGER NOT NULL DEFAULT 0,
     total_credits_removed INTEGER NOT NULL DEFAULT 0,
     nukees TEXT NOT NULL DEFAULT '',
+    nukees_data TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'active',
     unnuked_by TEXT NOT NULL DEFAULT '',
     unnuked_at INTEGER NOT NULL DEFAULT 0,
@@ -107,6 +109,13 @@ CREATE INDEX IF NOT EXISTS idx_nukes_nuked_at ON nukes(nuked_at DESC);
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("init nuke db schema: %w", err)
+	}
+	// Additive migration for DBs created before nukees_data existed. ADD COLUMN
+	// on an existing table errors with "duplicate column name"; ignore only that.
+	if _, err := db.Exec(`ALTER TABLE nukes ADD COLUMN nukees_data TEXT NOT NULL DEFAULT ''`); err != nil &&
+		!strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+		db.Close()
+		return nil, fmt.Errorf("migrate nuke db nukees_data: %w", err)
 	}
 	return &NukeHistoryDB{db: db, debug: debug}, nil
 }
@@ -132,12 +141,12 @@ func (n *NukeHistoryDB) RecordNuke(entry NukeHistoryEntry) error {
 	_, err := n.db.Exec(`
 		INSERT INTO nukes(
 			original_path, current_path, release_name, multiplier, reason, nuked_by,
-			nuked_at, users_affected, total_bytes, total_credits_removed, nukees, status
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			nuked_at, users_affected, total_bytes, total_credits_removed, nukees, nukees_data, status
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, cleanNukePath(entry.OriginalPath), cleanNukePath(entry.CurrentPath), strings.TrimSpace(entry.ReleaseName),
 		entry.Multiplier, strings.TrimSpace(entry.Reason), strings.TrimSpace(entry.NukedBy), entry.NukedAt,
 		entry.UsersAffected, entry.TotalBytes, entry.TotalCreditsRemoved, strings.TrimSpace(entry.Nukees),
-		strings.TrimSpace(entry.Status))
+		strings.TrimSpace(entry.NukeesData), strings.TrimSpace(entry.Status))
 	return err
 }
 
@@ -150,7 +159,7 @@ func (n *NukeHistoryDB) FindActiveByPath(dirPath string) (*NukeHistoryEntry, err
 	dirPath = cleanNukePath(dirPath)
 	row := n.db.QueryRow(`
 		SELECT id, original_path, current_path, release_name, multiplier, reason, nuked_by,
-		       nuked_at, users_affected, total_bytes, total_credits_removed, nukees, status,
+		       nuked_at, users_affected, total_bytes, total_credits_removed, nukees, nukees_data, status,
 		       unnuked_by, unnuked_at, restored_path, total_credits_restored
 		FROM nukes
 		WHERE status = 'active' AND (current_path = ? OR original_path = ?)
@@ -205,7 +214,7 @@ func (n *NukeHistoryDB) List(filter string, limit int) ([]NukeHistoryEntry, erro
 	filter = strings.ToLower(strings.TrimSpace(filter))
 	query := `
 		SELECT id, original_path, current_path, release_name, multiplier, reason, nuked_by,
-		       nuked_at, users_affected, total_bytes, total_credits_removed, nukees, status,
+		       nuked_at, users_affected, total_bytes, total_credits_removed, nukees, nukees_data, status,
 		       unnuked_by, unnuked_at, restored_path, total_credits_restored
 		FROM nukes
 	`
@@ -231,7 +240,7 @@ func (n *NukeHistoryDB) List(filter string, limit int) ([]NukeHistoryEntry, erro
 		if err := rows.Scan(
 			&entry.ID, &entry.OriginalPath, &entry.CurrentPath, &entry.ReleaseName, &entry.Multiplier,
 			&entry.Reason, &entry.NukedBy, &entry.NukedAt, &entry.UsersAffected, &entry.TotalBytes,
-			&entry.TotalCreditsRemoved, &entry.Nukees, &entry.Status, &entry.UnnukedBy,
+			&entry.TotalCreditsRemoved, &entry.Nukees, &entry.NukeesData, &entry.Status, &entry.UnnukedBy,
 			&entry.UnnukedAt, &entry.RestoredPath, &entry.TotalCreditsRestored,
 		); err != nil {
 			return nil, err
@@ -249,7 +258,7 @@ func scanNukeHistoryEntry(row *sql.Row) (*NukeHistoryEntry, error) {
 	err := row.Scan(
 		&entry.ID, &entry.OriginalPath, &entry.CurrentPath, &entry.ReleaseName, &entry.Multiplier,
 		&entry.Reason, &entry.NukedBy, &entry.NukedAt, &entry.UsersAffected, &entry.TotalBytes,
-		&entry.TotalCreditsRemoved, &entry.Nukees, &entry.Status, &entry.UnnukedBy,
+		&entry.TotalCreditsRemoved, &entry.Nukees, &entry.NukeesData, &entry.Status, &entry.UnnukedBy,
 		&entry.UnnukedAt, &entry.RestoredPath, &entry.TotalCreditsRestored,
 	)
 	if err == sql.ErrNoRows {

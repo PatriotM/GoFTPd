@@ -1,7 +1,9 @@
 package core
 
 import (
+	"encoding/json"
 	"fmt"
+	"math"
 	"path"
 	"sort"
 	"strings"
@@ -9,6 +11,36 @@ import (
 
 	"goftpd/internal/user"
 )
+
+// NukeeRecord is what was actually taken from one user by a nuke, so an unnuke
+// can restore exactly that, even when the penalty exceeded the user's balance.
+type NukeeRecord struct {
+	Bytes   int64 `json:"b"`
+	Credits int64 `json:"c"`
+}
+
+func EncodeNukeeRecords(m map[string]NukeeRecord) string {
+	if len(m) == 0 {
+		return ""
+	}
+	data, err := json.Marshal(m)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+func DecodeNukeeRecords(s string) map[string]NukeeRecord {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	var m map[string]NukeeRecord
+	if err := json.Unmarshal([]byte(s), &m); err != nil {
+		return nil
+	}
+	return m
+}
 
 type NukeUserStat struct {
 	User  string
@@ -24,6 +56,7 @@ type NukeResult struct {
 	UserStats           []NukeUserStat
 	UsersAffected       int
 	TotalCreditsRemoved int64
+	NukeeRecords        map[string]NukeeRecord
 }
 
 func VFSUploaderBytes(entries []MasterFileEntry) map[string]int64 {
@@ -128,17 +161,54 @@ func FormatNukees(stats []NukeUserStat, excludes []string) string {
 	return strings.Join(parts, ", ")
 }
 
-func ApplyNukeCredits(groupMap map[string]int, uploaderBytes map[string]int64, multiplier int) int64 {
+func nukeCreditPenalty(bytes int64, ratio int, multiplier int) int64 {
+	if bytes <= 0 || ratio <= 0 || multiplier <= 0 {
+		return 0
+	}
+	r := int64(ratio)
+	m := int64(multiplier)
+	if bytes > math.MaxInt64/r {
+		return math.MaxInt64
+	}
+	base := bytes * r
+	if base > math.MaxInt64/m {
+		return math.MaxInt64
+	}
+	return base * m
+}
+
+func saturatingCreditAdd(current, delta int64) int64 {
+	if delta <= 0 {
+		return current
+	}
+	if current > math.MaxInt64-delta {
+		return math.MaxInt64
+	}
+	return current + delta
+}
+
+func clampCreditRemoval(balance, penalty int64) int64 {
+	if balance <= 0 || penalty <= 0 {
+		return 0
+	}
+	if penalty > balance {
+		return balance
+	}
+	return penalty
+}
+
+func ApplyNukeCredits(groupMap map[string]int, uploaderBytes map[string]int64, multiplier int) (int64, map[string]NukeeRecord) {
 	now := time.Now().Unix()
 	totalNuked := int64(0)
+	records := make(map[string]NukeeRecord, len(uploaderBytes))
 	for username, bytes := range uploaderBytes {
 		var nukedCredits int64
 		if _, err := user.MutateAndSave(username, groupMap, func(u *user.User) error {
-			nukedCredits = bytes * int64(u.Ratio) * int64(multiplier)
+			penalty := nukeCreditPenalty(bytes, u.Ratio, multiplier)
+			// Record what was actually removed (penalty clamped to the balance) so
+			// the unnuke restores exactly this much, not a recomputed amount.
+			nukedCredits = clampCreditRemoval(u.Credits, penalty)
 			u.Credits -= nukedCredits
-			if u.Credits < 0 {
-				u.Credits = 0
-			}
 			u.NukeStat.Meta = now
 			u.NukeStat.Files++
 			u.NukeStat.Bytes += bytes
@@ -146,24 +216,62 @@ func ApplyNukeCredits(groupMap map[string]int, uploaderBytes map[string]int64, m
 		}); err != nil {
 			continue
 		}
-		totalNuked += nukedCredits
+		totalNuked = saturatingCreditAdd(totalNuked, nukedCredits)
+		records[username] = NukeeRecord{Bytes: bytes, Credits: nukedCredits}
 	}
-	return totalNuked
+	return totalNuked, records
 }
 
-func ApplyUnnukeCredits(groupMap map[string]int, uploaderBytes map[string]int64, maxMultiplier int) int64 {
+// ApplyUnnukeCredits restores exactly what was removed, using the per-user
+// records captured at nuke time. Lifetime nuke stats have only THIS nuke's
+// contribution subtracted (the old code wiped the whole struct).
+func ApplyUnnukeCredits(groupMap map[string]int, records map[string]NukeeRecord) int64 {
 	totalRestored := int64(0)
-	for username, bytes := range uploaderBytes {
-		var restored int64
+	for username, rec := range records {
 		if _, err := user.MutateAndSave(username, groupMap, func(u *user.User) error {
-			restored = bytes * int64(u.Ratio) * int64(maxMultiplier)
-			u.Credits += restored
-			u.NukeStat = user.StatLine{}
+			u.Credits = saturatingCreditAdd(u.Credits, rec.Credits)
+			if u.NukeStat.Files > 0 {
+				u.NukeStat.Files--
+			}
+			u.NukeStat.Bytes -= rec.Bytes
+			if u.NukeStat.Bytes < 0 {
+				u.NukeStat.Bytes = 0
+			}
 			return nil
 		}); err != nil {
 			continue
 		}
-		totalRestored += restored
+		totalRestored = saturatingCreditAdd(totalRestored, rec.Credits)
+	}
+	return totalRestored
+}
+
+// ApplyUnnukeCreditsRecompute is the fallback for nukes recorded before per-user
+// records existed: it recomputes the restore from current ratios using the
+// actual nuke multiplier (never the max). Not perfectly exact if a user's ratio
+// or balance changed since the nuke, but no longer over-restores at max x.
+func ApplyUnnukeCreditsRecompute(groupMap map[string]int, uploaderBytes map[string]int64, multiplier int) int64 {
+	if multiplier <= 0 {
+		multiplier = 1
+	}
+	totalRestored := int64(0)
+	for username, bytes := range uploaderBytes {
+		var restored int64
+		if _, err := user.MutateAndSave(username, groupMap, func(u *user.User) error {
+			restored = nukeCreditPenalty(bytes, u.Ratio, multiplier)
+			u.Credits = saturatingCreditAdd(u.Credits, restored)
+			if u.NukeStat.Files > 0 {
+				u.NukeStat.Files--
+			}
+			u.NukeStat.Bytes -= bytes
+			if u.NukeStat.Bytes < 0 {
+				u.NukeStat.Bytes = 0
+			}
+			return nil
+		}); err != nil {
+			continue
+		}
+		totalRestored = saturatingCreditAdd(totalRestored, restored)
 	}
 	return totalRestored
 }
@@ -187,9 +295,15 @@ func PerformSystemNuke(bridge MasterBridge, groupMap map[string]int, dirPath str
 		return nil, fmt.Errorf("directory is already nuked: %s", dirPath)
 	}
 	uploaderBytes := DirUploaderBytes(bridge, dirPath)
-	totalNuked := ApplyNukeCredits(groupMap, uploaderBytes, multiplier)
+	totalNuked, records := ApplyNukeCredits(groupMap, uploaderBytes, multiplier)
 	newName := nukedPrefix + releaseName
-	bridge.RenameFile(dirPath, path.Dir(dirPath), newName)
+	if err := bridge.RenameFile(dirPath, path.Dir(dirPath), newName); err != nil {
+		// Rename failed: undo the credit penalty so we don't leave users docked
+		// for a release that was never marked nuked (which would also let a retry
+		// double-penalize).
+		ApplyUnnukeCredits(groupMap, records)
+		return nil, fmt.Errorf("failed to rename %s for nuke: %w", dirPath, err)
+	}
 	return &NukeResult{
 		DirPath:             dirPath,
 		NewPath:             path.Join(path.Dir(dirPath), newName),
@@ -199,5 +313,6 @@ func PerformSystemNuke(bridge MasterBridge, groupMap map[string]int, dirPath str
 		UserStats:           BuildNukeUserStats(uploaderBytes),
 		UsersAffected:       len(uploaderBytes),
 		TotalCreditsRemoved: totalNuked,
+		NukeeRecords:        records,
 	}, nil
 }

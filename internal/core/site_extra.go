@@ -45,6 +45,13 @@ func (s *Session) HandleSiteUser(args []string) bool {
 		fmt.Fprintf(s.Conn, "550 User %s not found.\r\n", args[0])
 		return false
 	}
+	// Only siteops (flag 1) may inspect another user's account; everyone else is
+	// limited to their own. Without this any logged-in user could read anyone's
+	// credits, ratio, stats and IPs.
+	if !strings.EqualFold(u.Name, s.User.Name) && !s.User.HasFlag("1") {
+		fmt.Fprintf(s.Conn, "550 Access denied.\r\n")
+		return false
+	}
 	groups := make([]string, 0, len(u.Groups))
 	for group, admin := range u.Groups {
 		if admin == 1 {

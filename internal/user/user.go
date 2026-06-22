@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"os"
 	pathpkg "path"
 	"path/filepath"
@@ -217,13 +218,26 @@ func LoadTemplate(name, templatePath string, groupMap map[string]int) (*User, er
 	return loadUserFile(name, templatePath, groupMap)
 }
 
+// passwdFilePath is where loadUserFile reads UID/GID from. Defaults to the
+// conventional location; the daemon overrides it from config at startup via
+// SetPasswdFilePath so a non-default passwd_file is honored (previously this was
+// hardcoded, giving wrong UID/GID and a cache keyed to the wrong file).
+var passwdFilePath = "etc/passwd"
+
+// SetPasswdFilePath points user loading at the configured passwd file.
+func SetPasswdFilePath(p string) {
+	if p = strings.TrimSpace(p); p != "" {
+		passwdFilePath = p
+	}
+}
+
 func loadUserFile(name, path string, groupMap map[string]int) (*User, error) {
 	path = filepath.Clean(path)
 	userStamp, err := statFileStamp(path)
 	if err != nil {
 		return nil, err
 	}
-	passwdStamp := optionalFileStamp("etc/passwd")
+	passwdStamp := optionalFileStamp(passwdFilePath)
 	if u, ok := cachedUser(name, path, userStamp, passwdStamp); ok {
 		applyGroupMap(u, groupMap)
 		return u, nil
@@ -249,7 +263,7 @@ func loadUserFile(name, path string, groupMap map[string]int) (*User, error) {
 	u.FileModTime = userStamp.modTimeUnixNano / int64(time.Second)
 
 	// Load UID/GID from passwd file
-	if passwdData, err := os.ReadFile("etc/passwd"); err == nil {
+	if passwdData, err := os.ReadFile(passwdFilePath); err == nil {
 		lines := strings.Split(string(passwdData), "\n")
 		for _, line := range lines {
 			line = strings.TrimSpace(line)
@@ -976,6 +990,27 @@ func (u *User) ResetTransferStatPeriodsIfDue(now time.Time) bool {
 	return changed
 }
 
+func saturatingCreditGain(bytes int64, ratio int) int64 {
+	if bytes <= 0 || ratio <= 0 {
+		return 0
+	}
+	r := int64(ratio)
+	if bytes > math.MaxInt64/r {
+		return math.MaxInt64
+	}
+	return bytes * r
+}
+
+func saturatingCreditAdd(current, delta int64) int64 {
+	if delta <= 0 {
+		return current
+	}
+	if current > math.MaxInt64-delta {
+		return math.MaxInt64
+	}
+	return current + delta
+}
+
 // UpdateStatsWithCredits increments throughput metrics and optionally applies
 // ratio credits. Free sections such as speedtest still count traffic, but do
 // not add upload credits or charge download credits.
@@ -1004,7 +1039,7 @@ func (u *User) UpdateStatsWithCredits(bytes int64, isUpload bool, applyCredits b
 		current.MonthUp.Bytes += bytes
 
 		if applyCredits && current.Ratio > 0 {
-			current.Credits += (bytes * int64(current.Ratio))
+			current.Credits = saturatingCreditAdd(current.Credits, saturatingCreditGain(bytes, current.Ratio))
 		}
 	} else {
 		current.AllDn.Files++
