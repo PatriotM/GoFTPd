@@ -388,14 +388,48 @@ func (vfs *VirtualFileSystem) MarkSubtreeUnseen(slaveName, rootPath string) {
 	defer vfs.mu.Unlock()
 
 	rootPath = cleanVFSPath(rootPath)
-	for path, file := range vfs.files {
+	vfs.resetProtectedDirsLocked()
+	for _, path := range vfs.collectSubtreePathsLocked(rootPath) {
 		if vfs.protectedDirs[path] {
-			file.Seen = true
-			file.SlaveName = ""
 			continue
 		}
-		if file.SlaveName == slaveName && (path == rootPath || strings.HasPrefix(path, rootPath+"/")) {
+		if file := vfs.files[path]; file != nil && file.SlaveName == slaveName {
 			file.Seen = false
+		}
+	}
+}
+
+// collectSubtreePathsLocked returns rootPath plus every descendant path by
+// walking the children index, so scoped remerge ops cost O(subtree) instead of
+// scanning the whole file map under the write lock. Paths are gathered into a
+// slice up front so callers may safely delete during iteration.
+func (vfs *VirtualFileSystem) collectSubtreePathsLocked(rootPath string) []string {
+	out := []string{rootPath}
+	stack := []string{rootPath}
+	for len(stack) > 0 {
+		dir := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		for childPath := range vfs.children[dir] {
+			out = append(out, childPath)
+			if _, isDir := vfs.children[childPath]; isDir {
+				stack = append(stack, childPath)
+			}
+		}
+	}
+	return out
+}
+
+// resetProtectedDirsLocked keeps protected dirs marked seen and slave-agnostic so
+// a remerge never flags or purges them. Iterates the (small) protected set rather
+// than every file.
+func (vfs *VirtualFileSystem) resetProtectedDirsLocked() {
+	for path, protected := range vfs.protectedDirs {
+		if !protected {
+			continue
+		}
+		if file := vfs.files[path]; file != nil {
+			file.Seen = true
+			file.SlaveName = ""
 		}
 	}
 }
@@ -426,14 +460,14 @@ func (vfs *VirtualFileSystem) PurgeUnseenSubtree(slaveName, rootPath string) {
 	defer vfs.mu.Unlock()
 
 	rootPath = cleanVFSPath(rootPath)
+	vfs.resetProtectedDirsLocked()
 	changed := false
-	for path, file := range vfs.files {
+	for _, path := range vfs.collectSubtreePathsLocked(rootPath) {
 		if vfs.protectedDirs[path] {
-			file.Seen = true
-			file.SlaveName = ""
 			continue
 		}
-		if file.SlaveName == slaveName && !file.Seen && (path == rootPath || strings.HasPrefix(path, rootPath+"/")) {
+		file := vfs.files[path]
+		if file != nil && file.SlaveName == slaveName && !file.Seen {
 			changed = vfs.deletePathLocked(path) || changed
 		}
 	}

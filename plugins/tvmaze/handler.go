@@ -584,57 +584,22 @@ func normalizeLookupTitle(s string) string {
 }
 
 func formatTVMazeFile(show *tvmShow, ep *tvmEpisode, version string) string {
-	var b strings.Builder
-	bar := fmt.Sprintf("======================== TVMAZE INFO v%s ========================", version)
-	fmt.Fprintf(&b, "%s\n\n", bar)
-
-	fmt.Fprintf(&b, " Title........: %s\n", show.Name)
-	if ep != nil {
-		fmt.Fprintf(&b, " Episode......: S%02dE%02d - %s\n", ep.Season, ep.Number, ep.Name)
-	}
 	premiered := show.Premiered
 	if len(premiered) >= 4 {
 		premiered = premiered[:4]
-	}
-	if premiered != "" {
-		fmt.Fprintf(&b, " Premiered....: %s\n", premiered)
-	}
-	fmt.Fprintf(&b, " -\n")
-
-	if show.Externals.IMDB != "" {
-		fmt.Fprintf(&b, " IMDB Link....: https://www.imdb.com/title/%s/\n", show.Externals.IMDB)
-	} else {
-		fmt.Fprintf(&b, " IMDB Link....: NA\n")
-	}
-	if show.URL != "" {
-		fmt.Fprintf(&b, " TVMaze Link..: %s\n", show.URL)
-	}
-	if ep != nil && ep.URL != "" {
-		fmt.Fprintf(&b, " Episode Link.: %s\n", ep.URL)
-	}
-	if len(show.Genres) > 0 {
-		fmt.Fprintf(&b, " Genre........: %s\n", strings.Join(show.Genres, ", "))
-	}
-	if show.Type != "" {
-		fmt.Fprintf(&b, " Type.........: %s\n", show.Type)
 	}
 	rating := "NA"
 	if show.Rating.Average > 0 {
 		rating = fmt.Sprintf("%.1f", show.Rating.Average)
 	}
-	fmt.Fprintf(&b, " User Rating..: %s\n", rating)
-	fmt.Fprintf(&b, " -\n")
-
 	country := show.Network.Country.Code
 	if country == "" {
 		country = "NA"
 	}
-	fmt.Fprintf(&b, " Country......: %s\n", country)
 	language := show.Language
 	if language == "" {
 		language = "NA"
 	}
-	fmt.Fprintf(&b, " Language.....: %s\n", language)
 	network := show.Network.Name
 	if network == "" {
 		network = show.WebChannel.Name
@@ -642,17 +607,10 @@ func formatTVMazeFile(show *tvmShow, ep *tvmEpisode, version string) string {
 	if network == "" {
 		network = "NA"
 	}
-	fmt.Fprintf(&b, " Network......: %s\n", network)
 	status := show.Status
 	if status == "" {
 		status = "NA"
 	}
-	fmt.Fprintf(&b, " Status.......: %s\n", status)
-	if ep != nil && ep.Airdate != "" {
-		fmt.Fprintf(&b, " Airdate......: %s\n", ep.Airdate)
-	}
-	fmt.Fprintf(&b, " -\n")
-
 	plot := ""
 	if ep != nil && ep.Summary != "" {
 		plot = ep.Summary
@@ -663,14 +621,163 @@ func formatTVMazeFile(show *tvmShow, ep *tvmEpisode, version string) string {
 	if plot == "" {
 		plot = "NA"
 	}
-	fmt.Fprintf(&b, " Plot.........: %s\n", wrapPlot(plot, 70))
-	fmt.Fprintf(&b, "\n%s\n", bar)
-	return b.String()
+
+	bx := newInfoBox("T V M A Z E   I N F O", version)
+	bx.field("Title", show.Name)
+	if ep != nil {
+		bx.field("Episode", fmt.Sprintf("S%02dE%02d - %s", ep.Season, ep.Number, ep.Name))
+	}
+	if premiered != "" {
+		bx.field("Premiered", premiered)
+	}
+	bx.sep()
+	if show.Externals.IMDB != "" {
+		bx.field("IMDB Link", "https://www.imdb.com/title/"+show.Externals.IMDB+"/")
+	} else {
+		bx.field("IMDB Link", "NA")
+	}
+	if show.URL != "" {
+		bx.field("TVMaze Link", show.URL)
+	}
+	if ep != nil && ep.URL != "" {
+		bx.field("Episode Link", ep.URL)
+	}
+	if len(show.Genres) > 0 {
+		bx.field("Genre", strings.Join(show.Genres, ", "))
+	}
+	if show.Type != "" {
+		bx.field("Type", show.Type)
+	}
+	bx.field("User Rating", rating)
+	bx.sep()
+	bx.field("Country", country)
+	bx.field("Language", language)
+	bx.field("Network", network)
+	bx.field("Status", status)
+	if ep != nil && ep.Airdate != "" {
+		bx.field("Airdate", ep.Airdate)
+	}
+	bx.sep()
+	bx.fieldWrapped("Plot", plot)
+	return bx.render()
 }
 
 // =============================================================================
 // Helpers (kept local so each plugin is self-contained)
 // =============================================================================
+
+const (
+	boxTL = "\xDA"
+	boxTR = "\xBF"
+	boxBL = "\xC0"
+	boxBR = "\xD9"
+	boxH  = "\xC4"
+	boxV  = "\xB3"
+	boxLT = "\xC3"
+	boxRT = "\xB4"
+)
+
+const (
+	boxInnerWidth = 70
+	boxLabelWidth = 16
+)
+
+type infoBox struct{ lines []string }
+
+func newInfoBox(title, version string) *infoBox {
+	b := &infoBox{}
+	b.lines = append(b.lines,
+		boxTL+strings.Repeat(boxH, boxInnerWidth)+boxTR,
+		boxV+boxCenterCell(title, boxInnerWidth)+boxV,
+		boxV+boxRightCell("GoFTPd v"+version+" ", boxInnerWidth)+boxV,
+		boxLT+strings.Repeat(boxH, boxInnerWidth)+boxRT,
+	)
+	return b
+}
+
+func (b *infoBox) row(s string)              { b.lines = append(b.lines, boxV+boxTextCell(s, boxInnerWidth)+boxV) }
+func (b *infoBox) sep()                      { b.lines = append(b.lines, boxLT+strings.Repeat(boxH, boxInnerWidth)+boxRT) }
+func (b *infoBox) field(label, value string) { b.row(boxLabel(label) + value) }
+
+func (b *infoBox) fieldWrapped(label, value string) {
+	indent := strings.Repeat(" ", boxLabelWidth)
+	for i, w := range wrapWords(value, boxInnerWidth-boxLabelWidth) {
+		if i == 0 {
+			b.row(boxLabel(label) + w)
+		} else {
+			b.row(indent + w)
+		}
+	}
+}
+
+func (b *infoBox) render() string {
+	b.lines = append(b.lines, boxBL+strings.Repeat(boxH, boxInnerWidth)+boxBR)
+	return strings.Join(b.lines, "\n") + "\n"
+}
+
+func boxLabel(label string) string {
+	prefix := " " + label
+	dots := boxLabelWidth - len(prefix) - 2
+	if dots < 1 {
+		dots = 1
+	}
+	return prefix + strings.Repeat(".", dots) + ": "
+}
+
+func boxTextCell(s string, w int) string {
+	r := []rune(s)
+	if len(r) > w {
+		return string(r[:w])
+	}
+	return string(r) + strings.Repeat(" ", w-len(r))
+}
+
+func boxCenterCell(s string, w int) string {
+	r := []rune(s)
+	if len(r) >= w {
+		return string(r[:w])
+	}
+	l := (w - len(r)) / 2
+	return strings.Repeat(" ", l) + string(r) + strings.Repeat(" ", w-len(r)-l)
+}
+
+func boxRightCell(s string, w int) string {
+	r := []rune(s)
+	if len(r) >= w {
+		return string(r[:w])
+	}
+	return strings.Repeat(" ", w-len(r)) + string(r)
+}
+
+func wrapWords(s string, width int) []string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return []string{""}
+	}
+	if width < 1 {
+		width = 1
+	}
+	var out []string
+	line := ""
+	for _, w := range strings.Fields(s) {
+		switch {
+		case line == "":
+			line = w
+		case len(line)+1+len(w) > width:
+			out = append(out, line)
+			line = w
+		default:
+			line += " " + w
+		}
+	}
+	if line != "" {
+		out = append(out, line)
+	}
+	if len(out) == 0 {
+		out = []string{""}
+	}
+	return out
+}
 
 func matchSection(section string, allowed []string) bool {
 	if section == "" || len(allowed) == 0 {

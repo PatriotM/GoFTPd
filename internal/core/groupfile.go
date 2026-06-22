@@ -5,16 +5,21 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
+// groupConfigMu serializes writes to etc/groups/<name> so a concurrent SITE edit
+// can't interleave with a save and produce a truncated file.
+var groupConfigMu sync.Mutex
+
 type GroupFile struct {
-	Name            string
-	Slots           int
-	LeechSlots      int
-	AllotmentSlots  int
-	MaxAllotment    int64
-	GroupNFO        string
-	Simult          int
+	Name           string
+	Slots          int
+	LeechSlots     int
+	AllotmentSlots int
+	MaxAllotment   int64
+	GroupNFO       string
+	Simult         int
 }
 
 func LoadGroupConfig(name string) (*GroupFile, error) {
@@ -80,15 +85,21 @@ func (g *GroupFile) Save() error {
 		return fmt.Errorf("group name is empty")
 	}
 	path := filepath.Join("etc", "groups", g.Name)
-	file, err := os.Create(path)
-	if err != nil {
+
+	mode := os.FileMode(0644)
+	if st, err := os.Stat(path); err == nil {
+		mode = st.Mode().Perm()
+	} else if !os.IsNotExist(err) {
 		return err
 	}
-	defer file.Close()
 
-	fmt.Fprintf(file, "GROUP %s\n", g.Name)
-	fmt.Fprintf(file, "SLOTS %d %d %d %d\n", g.Slots, g.LeechSlots, g.AllotmentSlots, g.MaxAllotment)
-	fmt.Fprintf(file, "GROUPNFO %s\n", strings.TrimSpace(g.GroupNFO))
-	fmt.Fprintf(file, "SIMULT %d\n", g.Simult)
-	return nil
+	var b strings.Builder
+	fmt.Fprintf(&b, "GROUP %s\n", g.Name)
+	fmt.Fprintf(&b, "SLOTS %d %d %d %d\n", g.Slots, g.LeechSlots, g.AllotmentSlots, g.MaxAllotment)
+	fmt.Fprintf(&b, "GROUPNFO %s\n", strings.TrimSpace(g.GroupNFO))
+	fmt.Fprintf(&b, "SIMULT %d\n", g.Simult)
+
+	groupConfigMu.Lock()
+	defer groupConfigMu.Unlock()
+	return atomicWriteFile(path, []byte(b.String()), mode)
 }

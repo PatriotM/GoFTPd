@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"goftpd/internal/timeutil"
+	"goftpd/internal/user"
 	"goftpd/internal/versionfile"
 	"goftpd/internal/zipscript"
 	"gopkg.in/yaml.v3"
@@ -254,6 +255,8 @@ func LoadConfig(filePath string) (*Config, error) {
 		return nil, err
 	}
 	cfg.configPath = filePath
+	// Honor a non-default passwd_file when loading users (UID/GID lookup).
+	user.SetPasswdFilePath(cfg.PasswdFile)
 	return cfg, nil
 }
 

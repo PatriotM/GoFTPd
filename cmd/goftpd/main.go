@@ -513,6 +513,13 @@ func main() {
 			if err != nil {
 				continue
 			}
+			// Disable Nagle on the control channel. Without this, small FTP
+			// responses (150/226/227) interact with the client's delayed ACKs and
+			// stall for hundreds of ms each, which compounds across a single
+			// listing's handshake sequence into multi-second browse latency.
+			if tcp, ok := conn.(*net.TCPConn); ok {
+				_ = tcp.SetNoDelay(true)
+			}
 			go core.HandleSession(conn, tlsConfig, cfg, aclEngine, dupeChecker)
 		}
 	}()

@@ -13,9 +13,18 @@ func (s *Session) HandleSiteChmod(args []string) bool {
 		fmt.Fprintf(s.Conn, "501 Usage: SITE CHMOD <mode> <file>\r\n")
 		return false
 	}
-	mode, _ := strconv.ParseUint(args[0], 8, 32)
+	mode, err := strconv.ParseUint(args[0], 8, 32)
+	if err != nil {
+		fmt.Fprintf(s.Conn, "501 Invalid mode (use octal, e.g. 755).\r\n")
+		return false
+	}
 	fullPath := filepath.Join(s.Config.StoragePath, s.CurrentDir, args[1])
-	os.Chmod(fullPath, os.FileMode(mode))
+	// Note: in master/slave mode the file lives on a slave, so a chmod on the
+	// master path will fail and correctly report 550 rather than a false success.
+	if err := os.Chmod(fullPath, os.FileMode(mode)); err != nil {
+		fmt.Fprintf(s.Conn, "550 CHMOD failed: %v\r\n", err)
+		return false
+	}
 	fmt.Fprintf(s.Conn, "200 SITE CHMOD successful.\r\n")
 	return false
 }

@@ -304,7 +304,11 @@ func (s *Session) HandleSiteGrpDel(args []string) bool {
 		return false
 	}
 	groupName := args[0]
-	os.Remove(filepath.Join("etc", "groups", groupName))
+	_ = os.Remove(filepath.Join("etc", "groups", groupName))
+	if err := RemoveGroupFromFile(groupName); err != nil {
+		fmt.Fprintf(s.Conn, "550 Failed to remove group from etc/group: %v\r\n", err)
+		return false
+	}
 	delete(s.GroupMap, groupName)
 	fmt.Fprintf(s.Conn, "200 Group %s deleted.\r\n", groupName)
 	s.emitUserChange("GRPDEL", "group", groupName, "", "", "", "")
@@ -334,6 +338,10 @@ func (s *Session) HandleSiteChGrp(args []string) bool {
 			delete(targetUser.Groups, grp)
 			removed = append(removed, grp)
 		} else {
+			if _, ok := s.GroupMap[grp]; !ok {
+				fmt.Fprintf(s.Conn, "550 Group %s does not exist.\r\n", grp)
+				return false
+			}
 			targetUser.Groups[grp] = 0
 			added = append(added, grp)
 		}
@@ -437,11 +445,14 @@ func (s *Session) HandleSiteChPGrp(args []string) bool {
 		fmt.Fprintf(s.Conn, "550 User not found.\r\n")
 		return false
 	}
+	gid, ok := s.GroupMap[args[1]]
+	if !ok {
+		fmt.Fprintf(s.Conn, "550 Group %s does not exist.\r\n", args[1])
+		return false
+	}
 	oldPrimary := targetUser.PrimaryGroup
 	targetUser.PrimaryGroup = args[1]
-	if gid, ok := s.GroupMap[args[1]]; ok {
-		targetUser.GID = gid
-	}
+	targetUser.GID = gid
 	if err := targetUser.Save(); err != nil {
 		fmt.Fprintf(s.Conn, "550 Failed to save primary group for %s: %v\r\n", args[0], err)
 		return false
@@ -465,14 +476,34 @@ func (s *Session) HandleSiteGAdmin(args []string) bool {
 		fmt.Fprintf(s.Conn, "550 User not found.\r\n")
 		return false
 	}
+	if _, ok := s.GroupMap[args[0]]; !ok {
+		fmt.Fprintf(s.Conn, "550 Group %s does not exist.\r\n", args[0])
+		return false
+	}
+	// The user must actually belong to the group before being made its admin;
+	// previously this silently added them to an arbitrary group as admin.
+	_, isMember := targetUser.Groups[args[0]]
+	if !isMember && !strings.EqualFold(targetUser.PrimaryGroup, args[0]) {
+		fmt.Fprintf(s.Conn, "550 %s is not a member of group %s.\r\n", targetUser.Name, args[0])
+		return false
+	}
+	// Toggle: grant gadmin if not set, revoke it (keeping membership) if already set.
 	oldAdmin := targetUser.Groups[args[0]]
-	targetUser.Groups[args[0]] = 1
+	newAdmin := 1
+	if oldAdmin == 1 {
+		newAdmin = 0
+	}
+	targetUser.Groups[args[0]] = newAdmin
 	if err := targetUser.Save(); err != nil {
 		fmt.Fprintf(s.Conn, "550 Failed to save gadmin for %s: %v\r\n", args[1], err)
 		return false
 	}
-	fmt.Fprintf(s.Conn, "200 Gadmin set.\r\n")
-	s.emitUserChange("GADMIN", "user", targetUser.Name, "group_admin", fmt.Sprintf("%d", oldAdmin), args[0], "")
+	verb := "granted"
+	if newAdmin == 0 {
+		verb = "revoked"
+	}
+	fmt.Fprintf(s.Conn, "200 Gadmin %s for %s on group %s.\r\n", verb, targetUser.Name, args[0])
+	s.emitUserChange("GADMIN", "user", targetUser.Name, "group_admin", fmt.Sprintf("%d", oldAdmin), fmt.Sprintf("%s=%d", args[0], newAdmin), "")
 	return false
 }
 
@@ -915,10 +946,9 @@ func (s *Session) HandleSiteDelIP(args []string) bool {
 }
 
 func (s *Session) HandleSiteSelfIP(args []string) bool {
-	if !s.User.HasFlag("1") {
-		fmt.Fprintf(s.Conn, "550 Access denied.\r\n")
-		return false
-	}
+	// No flag gate: SELFIP is self-service and authenticates the caller with the
+	// target account's own password below (authenticateSelfIPUser). Requiring the
+	// siteop flag made it unusable for the ordinary users it exists for.
 	if len(args) < 3 {
 		fmt.Fprintf(s.Conn, "501 Usage: SITE SELFIP <LIST|ADD|DEL|CHG> <user> <pass> [args]\r\n")
 		return false

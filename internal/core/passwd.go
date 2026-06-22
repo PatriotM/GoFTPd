@@ -268,15 +268,51 @@ func AddGroupToFile(groupName string, desc string, gid int) error {
 		return err
 	}
 
-	file, err := os.OpenFile(groupPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	buf := existing
+	if len(buf) > 0 && buf[len(buf)-1] != '\n' {
+		buf = append(buf, '\n')
+	}
+	buf = append(buf, []byte(fmt.Sprintf("%s:%s:%d:\n", groupName, desc, gid))...)
+	return atomicWriteFile(groupPath, buf, mode)
+}
+
+// RemoveGroupFromFile drops a group line from etc/group, rewriting the file
+// atomically. Without this, GRPDEL only removed the per-group config file and
+// the group reappeared from etc/group on the next restart/login.
+func RemoveGroupFromFile(groupName string) error {
+	const groupPath = "etc/group"
+	passwdFileMu.Lock()
+	defer passwdFileMu.Unlock()
+
+	mode := os.FileMode(0644)
+	if st, err := os.Stat(groupPath); err == nil {
+		mode = st.Mode().Perm()
+	} else if os.IsNotExist(err) {
+		return nil
+	} else {
+		return err
+	}
+	existing, err := os.ReadFile(groupPath)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
-
-	line := fmt.Sprintf("%s:%s:%d:\n", groupName, desc, gid)
-	_, err = file.WriteString(line)
-	return err
+	lines := strings.Split(string(existing), "\n")
+	kept := make([]string, 0, len(lines))
+	removed := false
+	for _, line := range lines {
+		if strings.HasPrefix(line, groupName+":") {
+			removed = true
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if !removed {
+		return nil
+	}
+	if err := backupAuthFileDash(groupPath, existing, mode); err != nil {
+		return err
+	}
+	return atomicWriteFile(groupPath, []byte(strings.Join(kept, "\n")), mode)
 }
 
 // Password and user management functions
@@ -477,7 +513,46 @@ func writeAuthFileWithDashBackup(path string, existing, next []byte, mode os.Fil
 	if err := backupAuthFileDash(path, existing, mode); err != nil {
 		return err
 	}
-	return os.WriteFile(path, next, 0600)
+	return atomicWriteFile(path, next, mode)
+}
+
+// atomicWriteFile writes data to path via a same-dir temp file + rename so a
+// crash or a concurrent reader never sees a torn/truncated file. The previous
+// implementation used os.WriteFile (truncate-in-place), which could corrupt or
+// lose the entire passwd/group file on an ill-timed crash.
+func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmp)
+		}
+	}()
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Chmod(mode); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
 }
 
 func backupAuthFileDash(path string, existing []byte, mode os.FileMode) error {

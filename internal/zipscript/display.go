@@ -66,6 +66,89 @@ func AudioDisplayField(values map[string]string, keys ...string) string {
 	return value
 }
 
+// box-drawing characters (CP437 single bytes), the classic glftpd/pzs-ng
+// announce styling that scene FTP clients render.
+const (
+	bxTL = "\xDA" // top-left
+	bxTR = "\xBF" // top-right
+	bxBL = "\xC0" // bottom-left
+	bxBR = "\xD9" // bottom-right
+	bxH  = "\xC4" // horizontal
+	bxV  = "\xB3" // vertical
+	bxLT = "\xC3" // left T
+	bxRT = "\xB4" // right T
+	bxTT = "\xC2" // top T
+	bxBT = "\xC1" // bottom T
+)
+
+// boxText left-aligns s into a w-wide cell (rune-aware truncate/pad).
+func boxText(s string, w int) string {
+	r := []rune(s)
+	if len(r) > w {
+		return string(r[:w])
+	}
+	return string(r) + strings.Repeat(" ", w-len(r))
+}
+
+// boxCenter centers s in a w-wide cell.
+func boxCenter(s string, w int) string {
+	r := []rune(s)
+	if len(r) >= w {
+		return string(r[:w])
+	}
+	left := (w - len(r)) / 2
+	return strings.Repeat(" ", left) + string(r) + strings.Repeat(" ", w-len(r)-left)
+}
+
+// boxRight right-aligns s into a w-wide cell.
+func boxRight(s string, w int) string {
+	r := []rune(s)
+	if len(r) >= w {
+		return string(r[:w])
+	}
+	return strings.Repeat(" ", w-len(r)) + string(r)
+}
+
+// BoxInnerWidth matches the CWD race-stats banner.
+const BoxInnerWidth = 70
+
+func BuildAudioInfoBox(dirPath string, fields map[string]string, version string) []string {
+	if len(fields) == 0 {
+		return nil
+	}
+	section := strings.ToUpper(strings.Trim(path.Clean(dirPath), "/"))
+	if idx := strings.Index(section, "/"); idx >= 0 {
+		section = section[:idx]
+	}
+	var title string
+	switch section {
+	case "MP3":
+		title = "M P 3   I N F O"
+	case "FLAC":
+		title = "F L A C   I N F O"
+	default:
+		return nil
+	}
+	artist := AudioDisplayField(fields, "artist", "g_performer", "g_album_performer")
+	album := AudioDisplayField(fields, "album", "g_album")
+	genre := AudioDisplayField(fields, "genre", "g_genre")
+	year := NormalizeAudioYearForStatus(AudioDisplayField(fields, "year", "g_recordeddate", "g_recorded_date"))
+
+	const full = BoxInnerWidth // 70 inner columns
+	const lw = 34              // left column width
+	const rw = full - 1 - lw   // 35 right column width
+
+	return []string{
+		bxTL + strings.Repeat(bxH, full) + bxTR,
+		bxV + boxCenter(title, full) + bxV,
+		bxV + boxRight("GoFTPd v"+version+" ", full) + bxV,
+		bxLT + strings.Repeat(bxH, lw) + bxTT + strings.Repeat(bxH, rw) + bxRT,
+		bxV + boxText("  Artist : "+artist, lw) + bxV + boxText(" Genre : "+genre, rw) + bxV,
+		bxV + boxText("  Album  : "+album, lw) + bxV + boxText(" Year  : "+year, rw) + bxV,
+		bxBL + strings.Repeat(bxH, lw) + bxBT + strings.Repeat(bxH, rw) + bxBR,
+	}
+}
+
 func BuildAudioInfoLines(dirPath string, fields map[string]string, isStor bool) []string {
 	if len(fields) == 0 {
 		return nil

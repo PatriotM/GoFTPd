@@ -912,7 +912,7 @@ func emitCWDAudioInfo(s *Session, bridge MasterBridge, dirPath string) {
 	if !zipscript.ShowAudioInfoOnCWDForDir(s.Config.Zipscript, dirPath, fields) {
 		return
 	}
-	emitPrefixedCommentLines(s.Conn, "250", zipscript.BuildAudioInfoLines(dirPath, fields, false))
+	emitPrefixedCommentLines(s.Conn, "250", zipscript.BuildAudioInfoBox(dirPath, fields, s.Config.Version))
 }
 
 func maybeBootstrapCWDAudioInfo(s *Session, bridge MasterBridge, dirPath string) (map[string]string, bool) {

@@ -412,7 +412,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 			s.IsLogged = true
 			s.PendingUser = ""
 			s.PendingReason = ""
-			fmt.Fprintf(s.Conn, "230-Welcome to GoFTPd, %s!\r\n", s.User.Name)
+			s.emitLoginMOTD()
 			fmt.Fprintf(s.Conn, "230-Tagline: %s\r\n", s.User.Tagline)
 
 			s.showGlobalStats("230", false)
@@ -2371,8 +2371,6 @@ func (s *Session) showGlobalStats(code string, final bool) {
 		}
 		freeSpaceMB = (stat.Bavail * uint64(stat.Bsize)) / 1024 / 1024
 	}
-	siteSpeedMiB := 0.0
-
 	ulGiB := 0.0
 	dlGiB := 0.0
 	creditsGiB := 0.0
@@ -2387,8 +2385,10 @@ func (s *Session) showGlobalStats(code string, final bool) {
 		}
 	}
 
-	fmt.Fprintf(s.Conn, "%s- [Ul: %.1fGiB] [Dl: %.1fGiB] [Speed: %.2fMiB/s] [Free: %dMB]\r\n",
-		code, ulGiB, dlGiB, siteSpeedMiB, freeSpaceMB)
+	// (Removed the always-0.00 [Speed] field rather than keep misreporting; there
+	// is no live aggregate-speed source wired here.)
+	fmt.Fprintf(s.Conn, "%s- [Ul: %.1fGiB] [Dl: %.1fGiB] [Free: %dMB]\r\n",
+		code, ulGiB, dlGiB, freeSpaceMB)
 
 	if final {
 		fmt.Fprintf(s.Conn, "%s  [Credits: %.1fGiB] [Ratio: %s]\r\n",

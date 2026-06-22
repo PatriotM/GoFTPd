@@ -432,7 +432,7 @@ func (t *Transfer) acceptPassiveConn() error {
 	defer conn.SetDeadline(time.Time{})
 
 	if t.sslClientMode {
-		tlsConn := tls.Client(conn, &tls.Config{InsecureSkipVerify: true, DynamicRecordSizingDisabled: true})
+		tlsConn := tls.Client(conn, dataClientTLSConfig(conn))
 		if err := tlsConn.Handshake(); err != nil {
 			conn.Close()
 			return fmt.Errorf("TLS client handshake failed: %v", err)
@@ -485,7 +485,7 @@ func (t *Transfer) connectActive() error {
 	defer conn.SetDeadline(time.Time{})
 
 	if t.sslClientMode {
-		tlsConn := tls.Client(conn, &tls.Config{InsecureSkipVerify: true, DynamicRecordSizingDisabled: true})
+		tlsConn := tls.Client(conn, dataClientTLSConfig(conn))
 		if err := tlsConn.Handshake(); err != nil {
 			conn.Close()
 			return fmt.Errorf("TLS client handshake failed: %v", err)
@@ -506,6 +506,31 @@ func (t *Transfer) connectActive() error {
 	}
 	t.conn = tlsConn
 	return nil
+}
+
+// dataClientSessionCache is shared across all outbound data connections so the
+// many files in one release can resume TLS instead of doing a full handshake
+// (ECDSA verify + extra round-trips) every time. It's safe to share process-wide
+// because entries are keyed per peer (see dataClientTLSConfig).
+var dataClientSessionCache = tls.NewLRUClientSessionCache(512)
+
+// dataClientTLSConfig builds the client TLS config for an outbound data channel.
+// ServerName is set to the peer IP purely to give the session cache a stable key
+// across the peer's changing passive ports. Go omits IP literals from the SNI
+// extension, so nothing extra is sent on the wire. Resumption is best-effort: if
+// the peer doesn't issue tickets, the handshake falls back to a full one.
+func dataClientTLSConfig(conn net.Conn) *tls.Config {
+	cfg := &tls.Config{
+		InsecureSkipVerify:          true,
+		DynamicRecordSizingDisabled: true,
+		ClientSessionCache:          dataClientSessionCache,
+	}
+	if conn != nil {
+		if host, _, err := net.SplitHostPort(conn.RemoteAddr().String()); err == nil && host != "" {
+			cfg.ServerName = host
+		}
+	}
+	return cfg
 }
 
 func (t *Transfer) configureDataSocket(conn net.Conn) {

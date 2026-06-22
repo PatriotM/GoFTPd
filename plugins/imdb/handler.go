@@ -433,51 +433,30 @@ func absInt(n int) int {
 }
 
 func formatIMDBFile(t *imdbTitle, version string) string {
-	var b strings.Builder
-	bar := fmt.Sprintf("======================== IMDB INFO v%s =========================", version)
-	fmt.Fprintf(&b, "%s\n\n", bar)
-
-	fmt.Fprintf(&b, " Title........: %s\n", t.PrimaryTitle)
-	if t.OriginalTitle != "" && t.OriginalTitle != t.PrimaryTitle {
-		fmt.Fprintf(&b, " Original.....: %s\n", t.OriginalTitle)
-	}
 	year := "NA"
 	if t.StartYear > 0 {
 		year = fmt.Sprintf("%d", t.StartYear)
-	}
-	fmt.Fprintf(&b, " Year.........: %s\n", year)
-	fmt.Fprintf(&b, " -\n")
-
-	if t.ID != "" {
-		fmt.Fprintf(&b, " IMDB Link....: https://www.imdb.com/title/%s/\n", t.ID)
 	}
 	genres := "NA"
 	if len(t.Genres) > 0 {
 		genres = strings.Join(t.Genres, ", ")
 	}
-	fmt.Fprintf(&b, " Genre........: %s\n", genres)
 	rating := "NA"
 	if t.Rating.AggregateRating > 0 {
 		rating = fmt.Sprintf("%.1f/10 (%d votes)", t.Rating.AggregateRating, t.Rating.VoteCount)
 	}
-	fmt.Fprintf(&b, " Rating.......: %s\n", rating)
 	meta := "NA"
 	if t.Metacritic.Score > 0 {
 		meta = fmt.Sprintf("%d", t.Metacritic.Score)
 	}
-	fmt.Fprintf(&b, " Metacritic...: %s\n", meta)
 	runtime := "NA"
 	if t.RuntimeSecs > 0 {
 		runtime = fmt.Sprintf("%d min", t.RuntimeSecs/60)
 	}
-	fmt.Fprintf(&b, " Runtime......: %s\n", runtime)
-	fmt.Fprintf(&b, " -\n")
-
 	director := "NA"
 	if len(t.Directors) > 0 {
 		director = t.Directors[0].DisplayName
 	}
-	fmt.Fprintf(&b, " Director.....: %s\n", director)
 	stars := "NA"
 	if len(t.Stars) > 0 {
 		names := make([]string, 0, 3)
@@ -489,31 +468,159 @@ func formatIMDBFile(t *imdbTitle, version string) string {
 		}
 		stars = strings.Join(names, ", ")
 	}
-	fmt.Fprintf(&b, " Stars........: %s\n", stars)
 	country := "NA"
 	if len(t.OriginCountries) > 0 {
 		country = t.OriginCountries[0].Name
 	}
-	fmt.Fprintf(&b, " Country......: %s\n", country)
 	language := "NA"
 	if len(t.SpokenLanguages) > 0 {
 		language = t.SpokenLanguages[0].Name
 	}
-	fmt.Fprintf(&b, " Language.....: %s\n", language)
-	fmt.Fprintf(&b, " -\n")
-
 	plot := t.Plot
 	if plot == "" {
 		plot = "NA"
 	}
-	fmt.Fprintf(&b, " Plot.........: %s\n", wrapPlot(plot, 70))
-	fmt.Fprintf(&b, "\n%s\n", bar)
-	return b.String()
+
+	bx := newInfoBox("I M D B   I N F O", version)
+	bx.field("Title", t.PrimaryTitle)
+	if t.OriginalTitle != "" && t.OriginalTitle != t.PrimaryTitle {
+		bx.field("Original", t.OriginalTitle)
+	}
+	bx.field("Year", year)
+	bx.sep()
+	if t.ID != "" {
+		bx.field("IMDB Link", "https://www.imdb.com/title/"+t.ID+"/")
+	}
+	bx.field("Genre", genres)
+	bx.field("Rating", rating)
+	bx.field("Metacritic", meta)
+	bx.field("Runtime", runtime)
+	bx.sep()
+	bx.field("Director", director)
+	bx.field("Stars", stars)
+	bx.field("Country", country)
+	bx.field("Language", language)
+	bx.sep()
+	bx.fieldWrapped("Plot", plot)
+	return bx.render()
 }
 
 // =============================================================================
 // Helpers (self-contained per plugin)
 // =============================================================================
+
+const (
+	boxTL = "\xDA"
+	boxTR = "\xBF"
+	boxBL = "\xC0"
+	boxBR = "\xD9"
+	boxH  = "\xC4"
+	boxV  = "\xB3"
+	boxLT = "\xC3"
+	boxRT = "\xB4"
+)
+
+const (
+	boxInnerWidth = 70
+	boxLabelWidth = 16
+)
+
+type infoBox struct{ lines []string }
+
+func newInfoBox(title, version string) *infoBox {
+	b := &infoBox{}
+	b.lines = append(b.lines,
+		boxTL+strings.Repeat(boxH, boxInnerWidth)+boxTR,
+		boxV+boxCenterCell(title, boxInnerWidth)+boxV,
+		boxV+boxRightCell("GoFTPd v"+version+" ", boxInnerWidth)+boxV,
+		boxLT+strings.Repeat(boxH, boxInnerWidth)+boxRT,
+	)
+	return b
+}
+
+func (b *infoBox) row(s string)              { b.lines = append(b.lines, boxV+boxTextCell(s, boxInnerWidth)+boxV) }
+func (b *infoBox) sep()                      { b.lines = append(b.lines, boxLT+strings.Repeat(boxH, boxInnerWidth)+boxRT) }
+func (b *infoBox) field(label, value string) { b.row(boxLabel(label) + value) }
+
+func (b *infoBox) fieldWrapped(label, value string) {
+	indent := strings.Repeat(" ", boxLabelWidth)
+	for i, w := range wrapWords(value, boxInnerWidth-boxLabelWidth) {
+		if i == 0 {
+			b.row(boxLabel(label) + w)
+		} else {
+			b.row(indent + w)
+		}
+	}
+}
+
+func (b *infoBox) render() string {
+	b.lines = append(b.lines, boxBL+strings.Repeat(boxH, boxInnerWidth)+boxBR)
+	return strings.Join(b.lines, "\n") + "\n"
+}
+
+func boxLabel(label string) string {
+	prefix := " " + label
+	dots := boxLabelWidth - len(prefix) - 2
+	if dots < 1 {
+		dots = 1
+	}
+	return prefix + strings.Repeat(".", dots) + ": "
+}
+
+func boxTextCell(s string, w int) string {
+	r := []rune(s)
+	if len(r) > w {
+		return string(r[:w])
+	}
+	return string(r) + strings.Repeat(" ", w-len(r))
+}
+
+func boxCenterCell(s string, w int) string {
+	r := []rune(s)
+	if len(r) >= w {
+		return string(r[:w])
+	}
+	l := (w - len(r)) / 2
+	return strings.Repeat(" ", l) + string(r) + strings.Repeat(" ", w-len(r)-l)
+}
+
+func boxRightCell(s string, w int) string {
+	r := []rune(s)
+	if len(r) >= w {
+		return string(r[:w])
+	}
+	return strings.Repeat(" ", w-len(r)) + string(r)
+}
+
+func wrapWords(s string, width int) []string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return []string{""}
+	}
+	if width < 1 {
+		width = 1
+	}
+	var out []string
+	line := ""
+	for _, w := range strings.Fields(s) {
+		switch {
+		case line == "":
+			line = w
+		case len(line)+1+len(w) > width:
+			out = append(out, line)
+			line = w
+		default:
+			line += " " + w
+		}
+	}
+	if line != "" {
+		out = append(out, line)
+	}
+	if len(out) == 0 {
+		out = []string{""}
+	}
+	return out
+}
 
 func matchSection(section string, allowed []string) bool {
 	if section == "" || len(allowed) == 0 {

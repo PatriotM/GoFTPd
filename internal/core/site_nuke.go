@@ -13,9 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
-	"time"
-
-	"goftpd/internal/user"
 )
 
 func (s *Session) HandleSiteNuke(args []string) bool {
@@ -59,7 +56,10 @@ func (s *Session) HandleSiteNuke(args []string) bool {
 		fmt.Fprintf(s.Conn, "550 Insufficient flags.\r\n")
 		return false
 	}
-	fullPath := filepath.Join(s.Config.StoragePath, s.CurrentDir, target)
+	// Use the resolved targetPath (honors an absolute /-target), the same path
+	// the ACL was checked against, not CurrentDir+target, which would nuke the
+	// wrong dir for absolute targets.
+	fullPath := filepath.Join(s.Config.StoragePath, targetPath)
 	dirName := filepath.Base(fullPath)
 
 	// Scan files and collect uploader info
@@ -83,46 +83,18 @@ func (s *Session) HandleSiteNuke(args []string) bool {
 		}
 
 		// Get file owner
-		stat := info.Sys().(*syscall.Stat_t)
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok {
+			continue
+		}
 		username := GetUsernameByUID(int(stat.Uid), s.Config)
 		uploaderBytes[username] += info.Size()
 	}
 
-	// Apply nuke to each uploader
-	now := time.Now().Unix()
-	totalNuked := int64(0)
 	nukeeLine := FormatNukees(BuildNukeUserStats(uploaderBytes), []string{"goftpd", s.User.Name})
 
-	for username, bytes := range uploaderBytes {
-		var nukedCredits int64
-		var ratio int
-		var timesNuked int64
-		if _, err := user.MutateAndSave(username, s.GroupMap, func(u *user.User) error {
-			// User normally gets: bytes * ratio. Nuke removes that times multiplier.
-			ratio = u.Ratio
-			baseCredits := bytes * int64(u.Ratio)
-			nukedCredits = baseCredits * int64(multiplier)
-			u.Credits -= nukedCredits
-			if u.Credits < 0 {
-				u.Credits = 0
-			}
-			u.NukeStat.Meta = now
-			u.NukeStat.Files++
-			u.NukeStat.Bytes += bytes
-			timesNuked = u.NukeStat.Files
-			return nil
-		}); err != nil {
-			continue
-		}
-		if s.Config.Debug {
-			log.Printf("[NUKE] Updated %s: -%d credits (ratio %d), %d times nuked",
-				username, nukedCredits, ratio, timesNuked)
-		}
-
-		totalNuked += nukedCredits
-	}
-
-	// Rename directory
+	// Rename first so a failed rename never leaves users penalized for a dir that
+	// wasn't actually nuked (which a retry would then double-penalize).
 	newName := fmt.Sprintf("[NUKED]-%s", dirName)
 	newPath := filepath.Join(filepath.Dir(fullPath), newName)
 	newSitePath := path.Join(path.Dir(targetPath), newName)
@@ -131,6 +103,9 @@ func (s *Session) HandleSiteNuke(args []string) bool {
 		fmt.Fprintf(s.Conn, "550 Rename failed: %v\r\n", err)
 		return false
 	}
+
+	// Apply the penalty, recording exactly what was removed from each user.
+	totalNuked, nukeeRecords := ApplyNukeCredits(s.GroupMap, uploaderBytes, multiplier)
 	if db, err := GetNukeHistoryDB(s.Config.Debug); err == nil {
 		if err := db.RecordNuke(NukeHistoryEntry{
 			OriginalPath:        targetPath,
@@ -143,6 +118,7 @@ func (s *Session) HandleSiteNuke(args []string) bool {
 			TotalBytes:          SumBytes(uploaderBytes),
 			TotalCreditsRemoved: totalNuked,
 			Nukees:              nukeeLine,
+			NukeesData:          EncodeNukeeRecords(nukeeRecords),
 		}); err != nil && s.Config.Debug {
 			log.Printf("[NUKE-DB] record local nuke failed for %s: %v", targetPath, err)
 		}
@@ -178,12 +154,13 @@ func (s *Session) HandleSiteUnnuke(args []string) bool {
 	if !strings.HasPrefix(targetPath, "/") {
 		targetPath = path.Join(s.CurrentDir, targetPath)
 	}
-	aclPath := path.Join(s.Config.ACLBasePath, path.Clean(targetPath))
+	targetPath = path.Clean(targetPath)
+	aclPath := path.Join(s.Config.ACLBasePath, targetPath)
 	if !s.ACLEngine.CanPerform(s.User, "UNNUKE", aclPath) {
 		fmt.Fprintf(s.Conn, "550 Insufficient flags.\r\n")
 		return false
 	}
-	fullPath := filepath.Join(s.Config.StoragePath, s.CurrentDir, target)
+	fullPath := filepath.Join(s.Config.StoragePath, targetPath)
 	dirName := filepath.Base(fullPath)
 
 	// Check if directory is nuked
@@ -214,44 +191,36 @@ func (s *Session) HandleSiteUnnuke(args []string) bool {
 			continue
 		}
 
-		stat := info.Sys().(*syscall.Stat_t)
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok {
+			continue
+		}
 		username := GetUsernameByUID(int(stat.Uid), s.Config)
 		uploaderBytes[username] += info.Size()
 	}
 
-	// Restore credits to each uploader
-	totalRestored := int64(0)
-	restoreMultiplier := s.Config.NukeMaxMultiplier
+	var storedRecords map[string]NukeeRecord
+	restoreMultiplier := 0
 	if db, err := GetNukeHistoryDB(s.Config.Debug); err == nil {
-		if entry, err := db.FindActiveByPath(targetPath); err == nil && entry != nil && entry.Multiplier > 0 {
+		if entry, err := db.FindActiveByPath(targetPath); err == nil && entry != nil {
 			restoreMultiplier = entry.Multiplier
+			storedRecords = DecodeNukeeRecords(entry.NukeesData)
 		}
 	}
 
-	for username, bytes := range uploaderBytes {
-		var nukedCredits int64
-		var ratio int
-		if _, err := user.MutateAndSave(username, s.GroupMap, func(u *user.User) error {
-			ratio = u.Ratio
-			baseCredits := bytes * int64(u.Ratio)
-			nukedCredits = baseCredits * int64(restoreMultiplier)
-			u.Credits += nukedCredits
-			u.NukeStat = user.StatLine{}
-			return nil
-		}); err != nil {
-			continue
-		}
-		if s.Config.Debug {
-			log.Printf("[UNNUKE] Restored %s: +%d credits (ratio %d)", username, nukedCredits, ratio)
-		}
-
-		totalRestored += nukedCredits
-	}
-
-	// Rename directory back
+	// Rename back first; restore credits only after the state transition succeeds.
 	if err := os.Rename(fullPath, newPath); err != nil {
 		fmt.Fprintf(s.Conn, "550 Rename failed: %v\r\n", err)
 		return false
+	}
+
+	var totalRestored int64
+	if len(storedRecords) > 0 {
+		totalRestored = ApplyUnnukeCredits(s.GroupMap, storedRecords)
+	} else {
+		// Pre-records nuke or DB miss: recompute at the actual multiplier (never the
+		// configured max), defaulting to x1 when unknown so we can't over-restore.
+		totalRestored = ApplyUnnukeCreditsRecompute(s.GroupMap, uploaderBytes, restoreMultiplier)
 	}
 	if db, err := GetNukeHistoryDB(s.Config.Debug); err == nil {
 		if _, err := db.MarkUnnuked(targetPath, path.Join(path.Dir(targetPath), originalName), s.User.Name, totalRestored); err != nil && !errors.Is(err, sql.ErrNoRows) && s.Config.Debug {
@@ -381,6 +350,7 @@ func (s *Session) handleSiteNukeVFS(bridge MasterBridge, target string, multipli
 			TotalBytes:          SumBytes(uploaderBytes),
 			TotalCreditsRemoved: result.TotalCreditsRemoved,
 			Nukees:              nukeeLine,
+			NukeesData:          EncodeNukeeRecords(result.NukeeRecords),
 		}); err != nil && s.Config.Debug {
 			log.Printf("[NUKE-DB] record master nuke failed for %s: %v", dirPath, err)
 		}
@@ -395,7 +365,7 @@ func (s *Session) handleSiteNukeVFS(bridge MasterBridge, target string, multipli
 		"nukees":     nukeeLine,
 	})
 	fmt.Fprintf(s.Conn, "200 Nuked %s: x%d multiplier, %d MB, %d users affected, %d credits removed. Reason: %s\r\n",
-		dirPath, multiplier, BytesToMB(SumBytes(VFSUploaderBytes(bridge.ListDir(result.NewPath)))), result.UsersAffected, result.TotalCreditsRemoved, reason)
+		dirPath, multiplier, BytesToMB(SumBytes(uploaderBytes)), result.UsersAffected, result.TotalCreditsRemoved, reason)
 	return false
 }
 
@@ -416,15 +386,34 @@ func (s *Session) handleSiteUnnukeVFS(bridge MasterBridge, target string) bool {
 	}
 
 	uploaderBytes := DirUploaderBytes(bridge, dirPath)
-	restoreMultiplier := s.Config.NukeMaxMultiplier
+	var storedRecords map[string]NukeeRecord
+	restoreMultiplier := 0
 	if db, err := GetNukeHistoryDB(s.Config.Debug); err == nil {
-		if entry, err := db.FindActiveByPath(dirPath); err == nil && entry != nil && entry.Multiplier > 0 {
+		if entry, err := db.FindActiveByPath(dirPath); err == nil && entry != nil {
 			restoreMultiplier = entry.Multiplier
+			storedRecords = DecodeNukeeRecords(entry.NukeesData)
 		}
 	}
-	totalRestored := ApplyUnnukeCredits(s.GroupMap, uploaderBytes, restoreMultiplier)
+
+	// Rename first: only restore credits once the state transition has actually
+	// happened, so a failed rename can never leave users credited for a still-nuked
+	// dir (which a retry would then double-credit).
 	originalName := strings.TrimPrefix(dirName, "[NUKED]-")
-	bridge.RenameFile(dirPath, path.Dir(dirPath), originalName)
+	if err := bridge.RenameFile(dirPath, path.Dir(dirPath), originalName); err != nil {
+		fmt.Fprintf(s.Conn, "550 Unnuke rename failed: %v\r\n", err)
+		return false
+	}
+
+	var totalRestored int64
+	if len(storedRecords) > 0 {
+		// Exact inverse: restore precisely what was removed.
+		totalRestored = ApplyUnnukeCredits(s.GroupMap, storedRecords)
+	} else {
+		// Pre-records nuke (or DB miss): recompute at the actual multiplier, never
+		// the configured max. Defaults to x1 when the multiplier is unknown so we
+		// can't over-restore.
+		totalRestored = ApplyUnnukeCreditsRecompute(s.GroupMap, uploaderBytes, restoreMultiplier)
+	}
 
 	newPath := path.Join(path.Dir(dirPath), originalName)
 	if db, err := GetNukeHistoryDB(s.Config.Debug); err == nil {
