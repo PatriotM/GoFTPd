@@ -383,6 +383,11 @@ func createMasterSFVMissingMarker(cfg *Config, bridge MasterBridge, dirPath, fil
 	}
 }
 
+func isZeroByteCriticalFile(fileName string) bool {
+	l := strings.ToLower(strings.TrimSpace(fileName))
+	return strings.HasSuffix(l, ".sfv") || strings.HasSuffix(l, ".nfo") || strings.HasSuffix(l, ".diz")
+}
+
 func handleMasterUploadSFVStatusAndCleanup(s *Session, bridge MasterBridge, uploadDir, filePath, fileName string, checksum uint32, fileSize int64) bool {
 	if s == nil || s.Config == nil || bridge == nil || strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
 		return false

@@ -645,7 +645,7 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		dirName := path.Base(targetPath)
 
 		// Decide whether the new dir participates in dupe-checking. Skip:
-		//  - section dirs (parent = root) — e.g. /TV-1080P, /X265, /MP3
+		//  - section dirs (parent = root), e.g. /TV-1080P, /X265, /MP3
 		//  - known scene subfolders that exist inside many releases
 		parent := path.Dir(targetPath)
 		isSectionDir := parent == "/" || parent == "."
@@ -1646,11 +1646,19 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				}
 				s.endTransfer()
 
-				if fileSize == 0 && zipscript.ShouldDeleteZeroByteForDir(s.Config.Zipscript, uploadDir) {
-					bridge.DeleteFile(filePath)
-					log.Printf("[MASTER-ZS] Deleted 0-byte file: %s", filePath)
-					fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
-					return false
+				if fileSize == 0 {
+					if isZeroByteCriticalFile(fileName) {
+						bridge.DeleteFile(filePath)
+						log.Printf("[MASTER-ZS] Rejected 0-byte critical file %s; requesting re-upload", filePath)
+						fmt.Fprintf(s.Conn, "550 Empty %s rejected, please re-upload.\r\n", fileName)
+						return false
+					}
+					if zipscript.ShouldDeleteZeroByteForDir(s.Config.Zipscript, uploadDir) {
+						bridge.DeleteFile(filePath)
+						log.Printf("[MASTER-ZS] Deleted 0-byte file: %s", filePath)
+						fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
+						return false
+					}
 				}
 				if handleMasterUploadSFVStatusAndCleanup(s, bridge, uploadDir, filePath, fileName, checksum, fileSize) {
 					return false
@@ -1737,11 +1745,19 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 				}
 				s.endTransfer()
 
-				if fileSize == 0 && zipscript.ShouldDeleteZeroByteForDir(s.Config.Zipscript, uploadDir) {
-					bridge.DeleteFile(filePath)
-					log.Printf("[MASTER-ZS] Deleted 0-byte file: %s", filePath)
-					fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
-					return false
+				if fileSize == 0 {
+					if isZeroByteCriticalFile(fileName) {
+						bridge.DeleteFile(filePath)
+						log.Printf("[MASTER-ZS] Rejected 0-byte critical file %s; requesting re-upload", filePath)
+						fmt.Fprintf(s.Conn, "550 Empty %s rejected, please re-upload.\r\n", fileName)
+						return false
+					}
+					if zipscript.ShouldDeleteZeroByteForDir(s.Config.Zipscript, uploadDir) {
+						bridge.DeleteFile(filePath)
+						log.Printf("[MASTER-ZS] Deleted 0-byte file: %s", filePath)
+						fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
+						return false
+					}
 				}
 				if handleMasterUploadSFVStatusAndCleanup(s, bridge, uploadDir, filePath, fileName, checksum, fileSize) {
 					return false
@@ -1864,10 +1880,17 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 		if restOffset > 0 {
 			fileSize += restOffset
 		}
-		if fileSize == 0 && zipscript.ShouldDeleteZeroByteForDir(s.Config.Zipscript, uploadDir) {
-			_ = os.Remove(localPath)
-			fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
-			return false
+		if fileSize == 0 {
+			if isZeroByteCriticalFile(fileName) {
+				_ = os.Remove(localPath)
+				fmt.Fprintf(s.Conn, "550 Empty %s rejected, please re-upload.\r\n", fileName)
+				return false
+			}
+			if zipscript.ShouldDeleteZeroByteForDir(s.Config.Zipscript, uploadDir) {
+				_ = os.Remove(localPath)
+				fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
+				return false
+			}
 		}
 		if badZip, err := zipscript.LocalCheckUploadedZipIntegrity(s.Config.Zipscript, uploadDir, localPath, fileName); err != nil && s.Config.Debug {
 			log.Printf("[LOCAL-ZS] zip integrity check skipped for %s: %v", uploadPath, err)
