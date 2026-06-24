@@ -1562,6 +1562,14 @@ func ensureUploadDirsForEvent(s *Session, bridge MasterBridge, uploadDir string)
 		releaseDir = path.Dir(releaseDir)
 	}
 	needNew := !bridge.FileExists(releaseDir)
+	if needNew && s.Config.PluginManager != nil {
+		// Mirror the explicit-MKD releaseguard check. Without this a STOR could
+		// silently auto-create a banned release dir that an explicit MKD just
+		// blocked (cbftp often falls through to STOR after a 550 on MKD).
+		if err := s.Config.PluginManager.ValidateMKDir(s.User, releaseDir); err != nil {
+			return err
+		}
+	}
 	owner := "GoFTPd"
 	group := "GoFTPd"
 	if s.User != nil {

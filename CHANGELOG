@@ -24,6 +24,9 @@ Data integrity
   even while a concurrent duplicate upload still shows it as "uploading", so a
   finished release no longer flaps to incomplete or leaves a stale -MISSING
   marker.
+- REQUEST/REQFILL metadata is now flushed to disk immediately so REQTOP fill
+  counters survive daemon restarts instead of depending on the periodic VFS
+  save loop.
 - Fixed intermittent missing .sfv (and .nfo/.diz) on goftpd->goftpd FXP races:
   a 0-byte critical file is now rejected (so the racer re-uploads) instead of
   being silently deleted with a 226.
@@ -62,6 +65,9 @@ Display
 - The GoFTPd ASCII art moved to the login MOTD.
 
 Plugins
+- releaseguard: a banned release can no longer slip in via STOR. An upload that
+  auto-creates the release dir now runs the same releaseguard check as an
+  explicit MKD, so a 550-on-MKD can't be bypassed by uploading into the dir.
 - spacekeeper: refuse min-age rules when a release has no mod time, re-check
   live slave free space during reclaim, bound concurrent archive moves, and log
   rejected rule configs.

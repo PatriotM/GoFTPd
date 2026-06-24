@@ -2381,7 +2381,13 @@ func (b *Bridge) SetRequestData(dirPath string, requests []plugin.RequestRecord,
 	if b == nil || b.sm == nil || b.sm.GetVFS() == nil {
 		return
 	}
-	b.sm.GetVFS().SetRequestData(dirPath, requests, fills)
+	vfs := b.sm.GetVFS()
+	vfs.SetRequestData(dirPath, requests, fills)
+	if b.sm.running.Load() {
+		if err := vfs.SaveToDisk(vfsFilePath); err != nil {
+			log.Printf("[Bridge] Error saving request metadata for %s: %v", dirPath, err)
+		}
+	}
 }
 
 func (b *Bridge) GetVerifiedSFVPresentFiles(dirPath string) map[string]bool {

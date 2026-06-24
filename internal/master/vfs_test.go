@@ -1,6 +1,7 @@
 package master
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -897,6 +898,41 @@ func TestVFSRequestMetadataRoundTrip(t *testing.T) {
 	requests, fills = vfs.GetRequestData("/REQUESTS")
 	if requests[0].By != "alice" || fills[0].FilledBy != "dave" {
 		t.Fatalf("expected metadata copies, got requests=%+v fills=%+v", requests, fills)
+	}
+}
+
+func TestVFSRequestMetadataSurvivesDiskRoundTrip(t *testing.T) {
+	filePath := filepath.Join(t.TempDir(), "vfs.dat")
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/REQUESTS", VFSFile{IsDir: true, Seen: true})
+	vfs.SetRequestData("/REQUESTS",
+		[]plugin.RequestRecord{{
+			Release: "Some.Release-TEST",
+			By:      "alice",
+			Mode:    "gl",
+			Date:    "2026-05-18 18:00",
+		}},
+		[]plugin.RequestFillRecord{{
+			Release:     "Other.Release-TEST",
+			RequestedBy: "carol",
+			FilledBy:    "dave",
+			Date:        "2026-05-18 18:05",
+		}},
+	)
+	if err := vfs.SaveToDisk(filePath); err != nil {
+		t.Fatalf("SaveToDisk failed: %v", err)
+	}
+
+	loaded := NewVirtualFileSystem()
+	if err := loaded.LoadFromDisk(filePath); err != nil {
+		t.Fatalf("LoadFromDisk failed: %v", err)
+	}
+	requests, fills := loaded.GetRequestData("/REQUESTS")
+	if len(requests) != 1 || requests[0].Release != "Some.Release-TEST" || requests[0].By != "alice" {
+		t.Fatalf("unexpected loaded request metadata %+v", requests)
+	}
+	if len(fills) != 1 || fills[0].Release != "Other.Release-TEST" || fills[0].FilledBy != "dave" {
+		t.Fatalf("unexpected loaded fill metadata %+v", fills)
 	}
 }
 
