@@ -326,10 +326,6 @@ func (t *Transfer) SendFile(path string, position int64, expectedPeer string) pr
 	firstMinCheck := true
 	lastMinCheck := time.Now()
 	associatedUpload := t.findAssociatedUpload(path)
-	var zeroByteWaitUntil time.Time
-	if position == 0 && isCriticalMetadataPath(path) {
-		zeroByteWaitUntil = time.Now().Add(2 * time.Second)
-	}
 
 	// Snapshot transfer settings once to pick the copy strategy. The zero-copy
 	// sendfile(2) fast path is only valid for plaintext, unthrottled downloads:
@@ -386,10 +382,6 @@ func (t *Transfer) SendFile(path string, position int64, expectedPeer string) pr
 		if err != nil {
 			if err == io.EOF {
 				if associatedUpload == nil || associatedUpload.isFinished() {
-					if t.transferred.Load() == 0 && !zeroByteWaitUntil.IsZero() && time.Now().Before(zeroByteWaitUntil) {
-						time.Sleep(transferPollTick)
-						continue
-					}
 					break
 				}
 				time.Sleep(transferPollTick)
@@ -412,11 +404,6 @@ func (t *Transfer) SendFile(path string, position int64, expectedPeer string) pr
 		Checksum:      0,
 		Finished:      true,
 	}
-}
-
-func isCriticalMetadataPath(filePath string) bool {
-	name := strings.ToLower(strings.TrimSpace(path.Base(filePath)))
-	return strings.HasSuffix(name, ".sfv") || strings.HasSuffix(name, ".nfo") || strings.HasSuffix(name, ".diz")
 }
 
 func (t *Transfer) acceptPassiveConn() error {

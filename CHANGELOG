@@ -19,11 +19,14 @@ Performance
 Data integrity
 - passwd, etc/group, and per-group files are now written atomically (temp file
   + rename); group saves are mutex-guarded.
+- Fixed stuck "incomplete" releases when two racers/cbftp instances hit the same
+  release: a file whose checksum already matches the SFV now counts as present
+  even while a concurrent duplicate upload still shows it as "uploading", so a
+  finished release no longer flaps to incomplete or leaves a stale -MISSING
+  marker.
 - Fixed intermittent missing .sfv (and .nfo/.diz) on goftpd->goftpd FXP races:
   a 0-byte critical file is now rejected (so the racer re-uploads) instead of
-  being silently deleted with a 226, and the source side waits briefly for a
-  just-received file to become visible before serving it, so it no longer hands
-  the destination an empty SFV.
+  being silently deleted with a 226.
 - Consolidated all auth-state backups into one `backup/` folder of timestamped
   snapshots (pruned to the recent window), replacing the backups that were
   scattered as `etc/passwd-`, `etc/users-/`, per-write `.backup` copies, etc.

@@ -278,7 +278,7 @@ func (vfs *VirtualFileSystem) ScrubReleaseRaceMetadata(rootPath, owner, group st
 		}
 	}
 	if changed {
-		// Only the scrubbed subtree's race stats changed — invalidate just those
+		// Only the scrubbed subtree's race stats changed; invalidate just those
 		// directories instead of wiping every dir's cache (which would force a
 		// full recompute on the next listing of every release on the site).
 		for dir := range affectedDirs {
@@ -862,14 +862,15 @@ func (vfs *VirtualFileSystem) getVerifiedSFVPresentFilesLocked(dirPath string, e
 	verified := make(map[string]bool, len(meta.SFVEntries))
 	for sfvFile, expectedCRC := range meta.SFVEntries {
 		key := raceFileKey(sfvFile)
-		if excludeKeys[key] {
-			continue
-		}
 		f := presentFiles[key]
 		if f == nil {
 			continue
 		}
-		if expectedCRC != 0 && f.Checksum != expectedCRC {
+		if expectedCRC != 0 && f.Checksum == expectedCRC {
+			verified[key] = true
+			continue
+		}
+		if excludeKeys[key] || (expectedCRC != 0 && f.Checksum != expectedCRC) {
 			continue
 		}
 		verified[key] = true
