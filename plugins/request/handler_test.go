@@ -1,8 +1,11 @@
 package request
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -140,6 +143,48 @@ func TestReqFillRecoversExistingRequestDirWithoutMetadata(t *testing.T) {
 	p.HandleSiteCommand(ctx, "REQTOP", nil)
 	if !ctx.hasReply("alice - 1 fill(s)") {
 		t.Fatalf("expected REQTOP to show filler, got %#v", ctx.replies)
+	}
+}
+
+func TestRequestStateFileHydratesFillStats(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "request_state.json")
+	bridge := newRequestTestBridge()
+	p := New()
+	p.svc = &plugin.Services{Bridge: bridge}
+	p.stateFile = statePath
+
+	ctx := &requestTestCtx{user: "alice", group: "iND", flags: "1"}
+	p.HandleSiteCommand(ctx, "REQUEST", []string{"Saved.Release-TEST"})
+	bridge.files["/REQUESTS/REQ-Saved.Release-TEST/file.rar"] = []byte("data")
+	p.HandleSiteCommand(ctx, "REQFILL", []string{"Saved.Release-TEST"})
+
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("expected request state file: %v", err)
+	}
+	var state requestStateFile
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatalf("decode request state: %v", err)
+	}
+	if len(state.Fills) != 1 || state.Fills[0].FilledBy != "alice" {
+		t.Fatalf("unexpected saved fill state %+v", state.Fills)
+	}
+
+	loadedBridge := newRequestTestBridge()
+	loaded := New()
+	loaded.svc = &plugin.Services{Bridge: loadedBridge}
+	loaded.stateFile = statePath
+	if err := loaded.hydrateRequestState(); err != nil {
+		t.Fatalf("hydrate request state: %v", err)
+	}
+	if len(loadedBridge.fillData) != 1 || loadedBridge.fillData[0].FilledBy != "alice" {
+		t.Fatalf("expected fill metadata to hydrate, got %+v", loadedBridge.fillData)
+	}
+
+	loadedCtx := &requestTestCtx{user: "siteop", group: "iND", flags: "1"}
+	loaded.HandleSiteCommand(loadedCtx, "REQTOP", nil)
+	if !loadedCtx.hasReply("alice - 1 fill(s)") {
+		t.Fatalf("expected REQTOP to show hydrated filler, got %#v", loadedCtx.replies)
 	}
 }
 

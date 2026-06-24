@@ -660,9 +660,10 @@ plugins:
     #   SITE REQDEL <number|Release.Name-GRP>
     #   SITE REQWIPE <number|Release.Name-GRP>
     # Enabling the plugin creates this base directory on startup.
-    # Request list and REQTOP fill counters are stored in VFS metadata on that
-    # request root, not in .requests/.reqfills text files.
+    # Request list and REQTOP fill counters are cached in VFS metadata and
+    # mirrored to a readable JSON state file.
     # Optional in plugins/request/config.yml:
+    #   state_file: "userdata/request_state.json"
     #   storage_slave: "LOCAL"  # keep request metadata and REQ-/FILLED-* dirs on one slave
     config_file: "plugins/request/config.yml"
   releaseguard:

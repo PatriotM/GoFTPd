@@ -24,9 +24,9 @@ Data integrity
   even while a concurrent duplicate upload still shows it as "uploading", so a
   finished release no longer flaps to incomplete or leaves a stale -MISSING
   marker.
-- REQUEST/REQFILL metadata is now flushed to disk immediately so REQTOP fill
-  counters survive daemon restarts instead of depending on the periodic VFS
-  save loop.
+- REQUEST/REQFILL metadata is now flushed to disk immediately and mirrored to a
+  readable JSON state file so REQTOP fill counters survive daemon restarts
+  instead of depending on the periodic VFS save loop.
 - Fixed intermittent missing .sfv (and .nfo/.diz) on goftpd->goftpd FXP races:
   a 0-byte critical file is now rejected (so the racer re-uploads) instead of
   being silently deleted with a 226.

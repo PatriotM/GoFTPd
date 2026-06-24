@@ -1,9 +1,12 @@
 package request
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,6 +32,7 @@ type Plugin struct {
 	reqTopLimit               int
 	proxyUsers                []string
 	storageSlave              string
+	stateFile                 string
 	sitename                  string
 	debug                     bool
 	stopCh                    chan struct{}
@@ -49,6 +53,15 @@ type requestFillEntry struct {
 	FilledBy    string
 	Date        string
 }
+
+type requestStateFile struct {
+	Version  int                        `json:"version"`
+	Dir      string                     `json:"dir"`
+	Requests []plugin.RequestRecord     `json:"requests"`
+	Fills    []plugin.RequestFillRecord `json:"fills"`
+}
+
+const defaultRequestStateFile = "userdata/request_state.json"
 
 func New() *Plugin {
 	return &Plugin{
@@ -94,6 +107,11 @@ func (p *Plugin) Init(svc *plugin.Services, cfg map[string]interface{}) error {
 	if s := stringConfig(cfg, "storage_slave", ""); strings.TrimSpace(s) != "" {
 		p.storageSlave = strings.TrimSpace(s)
 	}
+	if s := stringConfig(cfg, "state_file", ""); strings.TrimSpace(s) != "" {
+		p.stateFile = strings.TrimSpace(s)
+	} else {
+		p.stateFile = defaultRequestStateFile
+	}
 	if s := stringConfig(cfg, "sitename", ""); strings.TrimSpace(s) != "" {
 		p.sitename = strings.TrimSpace(s)
 	}
@@ -117,6 +135,9 @@ func (p *Plugin) Init(svc *plugin.Services, cfg map[string]interface{}) error {
 	}
 	if b, ok := boolConfig(cfg["debug"]); ok {
 		p.debug = b
+	}
+	if err := p.hydrateRequestState(); err != nil {
+		log.Printf("[REQUEST] could not load request state from %s: %v", p.stateFile, err)
 	}
 	go p.ensureBaseDirOnStartup()
 	return nil
@@ -593,8 +614,7 @@ func (p *Plugin) saveFillStats(entries []requestFillEntry) error {
 			Date:        strings.TrimSpace(entry.Date),
 		})
 	}
-	p.svc.Bridge.SetRequestData(p.dir, requests, fills)
-	return nil
+	return p.setRequestData(requests, fills)
 }
 
 func (p *Plugin) ensureRequestDir(ctx plugin.SiteContext, release, ownerOverride string) error {
@@ -636,8 +656,170 @@ func (p *Plugin) saveRequests(entries []requestEntry) error {
 		})
 	}
 	_, fills := p.svc.Bridge.GetRequestData(p.dir)
+	return p.setRequestData(requests, fills)
+}
+
+func (p *Plugin) hydrateRequestState() error {
+	if p == nil || p.svc == nil || p.svc.Bridge == nil || strings.TrimSpace(p.stateFile) == "" {
+		return nil
+	}
+
+	fileRequests, fileFills, found, err := p.loadRequestStateFile()
+	if err != nil {
+		return err
+	}
+	vfsRequests, vfsFills := p.svc.Bridge.GetRequestData(p.dir)
+	requests := mergeRequestRecords(fileRequests, vfsRequests)
+	fills := mergeRequestFillRecords(fileFills, vfsFills)
+	if !found && len(requests) == 0 && len(fills) == 0 {
+		return nil
+	}
 	p.svc.Bridge.SetRequestData(p.dir, requests, fills)
+	return p.saveRequestStateFile(requests, fills)
+}
+
+func (p *Plugin) setRequestData(requests []plugin.RequestRecord, fills []plugin.RequestFillRecord) error {
+	p.svc.Bridge.SetRequestData(p.dir, requests, fills)
+	return p.saveRequestStateFile(requests, fills)
+}
+
+func (p *Plugin) loadRequestStateFile() ([]plugin.RequestRecord, []plugin.RequestFillRecord, bool, error) {
+	if strings.TrimSpace(p.stateFile) == "" {
+		return nil, nil, false, nil
+	}
+	data, err := os.ReadFile(p.stateFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil, false, nil
+		}
+		return nil, nil, false, err
+	}
+	var state requestStateFile
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, nil, true, err
+	}
+	if state.Dir != "" && cleanAbs(state.Dir) != cleanAbs(p.dir) {
+		return nil, nil, true, fmt.Errorf("state file belongs to %s, plugin dir is %s", state.Dir, p.dir)
+	}
+	return copyRequestRecords(state.Requests), copyRequestFillRecords(state.Fills), true, nil
+}
+
+func (p *Plugin) saveRequestStateFile(requests []plugin.RequestRecord, fills []plugin.RequestFillRecord) error {
+	if strings.TrimSpace(p.stateFile) == "" {
+		return nil
+	}
+	state := requestStateFile{
+		Version:  1,
+		Dir:      cleanAbs(p.dir),
+		Requests: copyRequestRecords(requests),
+		Fills:    copyRequestFillRecords(fills),
+	}
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+
+	dir := filepath.Dir(p.stateFile)
+	if dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return err
+		}
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(p.stateFile)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, p.stateFile); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
 	return nil
+}
+
+func copyRequestRecords(in []plugin.RequestRecord) []plugin.RequestRecord {
+	if len(in) == 0 {
+		return nil
+	}
+	return append([]plugin.RequestRecord(nil), in...)
+}
+
+func copyRequestFillRecords(in []plugin.RequestFillRecord) []plugin.RequestFillRecord {
+	if len(in) == 0 {
+		return nil
+	}
+	return append([]plugin.RequestFillRecord(nil), in...)
+}
+
+func mergeRequestRecords(primary []plugin.RequestRecord, secondary []plugin.RequestRecord) []plugin.RequestRecord {
+	out := make([]plugin.RequestRecord, 0, len(primary)+len(secondary))
+	seen := make(map[string]int, len(primary)+len(secondary))
+	add := func(record plugin.RequestRecord, replace bool) {
+		record.Release = strings.TrimSpace(record.Release)
+		if record.Release == "" {
+			return
+		}
+		record.By = firstNonEmpty(record.By, "unknown")
+		record.Mode = firstNonEmpty(record.Mode, "gl")
+		record.For = strings.TrimSpace(record.For)
+		record.Date = strings.TrimSpace(record.Date)
+		key := strings.ToLower(record.Release)
+		if idx, ok := seen[key]; ok {
+			if replace {
+				out[idx] = record
+			}
+			return
+		}
+		seen[key] = len(out)
+		out = append(out, record)
+	}
+	for _, record := range primary {
+		add(record, false)
+	}
+	for _, record := range secondary {
+		add(record, true)
+	}
+	return out
+}
+
+func mergeRequestFillRecords(primary []plugin.RequestFillRecord, secondary []plugin.RequestFillRecord) []plugin.RequestFillRecord {
+	out := make([]plugin.RequestFillRecord, 0, len(primary)+len(secondary))
+	seen := make(map[string]struct{}, len(primary)+len(secondary))
+	add := func(record plugin.RequestFillRecord) {
+		record.Release = strings.TrimSpace(record.Release)
+		record.RequestedBy = firstNonEmpty(record.RequestedBy, "unknown")
+		record.FilledBy = firstNonEmpty(record.FilledBy, "unknown")
+		record.Date = strings.TrimSpace(record.Date)
+		if record.Release == "" || record.FilledBy == "" {
+			return
+		}
+		key := strings.ToLower(record.Release) + "\x00" +
+			strings.ToLower(record.RequestedBy) + "\x00" +
+			strings.ToLower(record.FilledBy) + "\x00" +
+			record.Date
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, record)
+	}
+	for _, record := range primary {
+		add(record)
+	}
+	for _, record := range secondary {
+		add(record)
+	}
+	return out
 }
 
 func (p *Plugin) emitRequestCreated(entry requestEntry, numbered string) {
