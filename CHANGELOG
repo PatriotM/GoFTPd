@@ -17,6 +17,13 @@ Performance
   blocking the upload 226 response.
 
 Data integrity
+- Fixed the VFS recording a 0/short size for a file that is complete on disk. A
+  remerge/re-scan reads the live on-disk size and AddFile would overwrite the
+  correct completed size with it (short/0 if it caught a file mid-write); the
+  size-preservation guard was scoped to .zip payloads only, so .sfv/.rar/.mp3
+  etc. were clobbered. AddFile now refuses to let an evidence-free re-scan (no
+  checksum/xfertime) shrink a completed size, for all file types. This was making
+  a valid .sfv list as 0 bytes, which cbftp skips, so it never raced.
 - passwd, etc/group, and per-group files are now written atomically (temp file
   + rename); group saves are mutex-guarded.
 - Fixed truncated .zip volumes counting toward "complete" on master/slave. A zip
