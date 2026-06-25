@@ -381,11 +381,20 @@ func (t *Transfer) SendFile(path string, position int64, expectedPeer string) pr
 		}
 		if err != nil {
 			if err == io.EOF {
-				if associatedUpload == nil || associatedUpload.isFinished() {
-					break
+				if associatedUpload != nil && !associatedUpload.isFinished() {
+					// Known live upload: keep following it (leech-while-upload).
+					time.Sleep(transferPollTick)
+					continue
 				}
-				time.Sleep(transferPollTick)
-				continue
+				// The matching upload may have registered after this send started.
+				// Re-check at EOF so an FXP pull can follow the growing source file
+				// instead of ending with a truncated or 0-byte copy.
+				if again := t.findAssociatedUpload(path); again != nil && !again.isFinished() {
+					associatedUpload = again
+					time.Sleep(transferPollTick)
+					continue
+				}
+				break
 			}
 			return t.errorStatus(fmt.Sprintf("transfer error: %v", err))
 		}

@@ -27,9 +27,14 @@ Data integrity
 - REQUEST/REQFILL metadata is now flushed to disk immediately and mirrored to a
   readable JSON state file so REQTOP fill counters survive daemon restarts
   instead of depending on the periodic VFS save loop.
-- Fixed intermittent missing .sfv (and .nfo/.diz) on goftpd->goftpd FXP races:
-  a 0-byte critical file is now rejected (so the racer re-uploads) instead of
-  being silently deleted with a 226.
+- Fixed intermittent missing .sfv (and .nfo/.diz) on goftpd->goftpd FXP races.
+  Root cause: when a file was FXP-pulled at the same instant a racer was
+  uploading it to the source, the "leech-while-upload" detection was only checked
+  once at the start of the send, so an upload that registered a moment later was
+  missed and the source shipped a 0-byte copy. The send now re-checks at EOF and
+  streams the file as it lands (no added delay for finished files). A 0-byte
+  .sfv/.nfo/.diz on the destination is also rejected (so the racer re-uploads)
+  rather than silently kept, as a safety net.
 - Consolidated all auth-state backups into one `backup/` folder of timestamped
   snapshots (pruned to the recent window), replacing the backups that were
   scattered as `etc/passwd-`, `etc/users-/`, per-write `.backup` copies, etc.
