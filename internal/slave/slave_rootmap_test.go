@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"goftpd/internal/protocol"
 )
 
 func TestRootsForVirtualPathPrefersSpecificMount(t *testing.T) {
@@ -73,6 +75,33 @@ func TestGetDirForUploadRejectsRootBelowFreeSpaceThreshold(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "free_space_mb") {
 		t.Fatalf("expected free_space_mb error, got %v", err)
+	}
+}
+
+func TestHandleZipIntegrityReturnsFailedCheckForTruncatedZip(t *testing.T) {
+	siteRoot := t.TempDir()
+	zipPath := filepath.Join(siteRoot, "0DAY", "bad.zip")
+	if err := os.MkdirAll(filepath.Dir(zipPath), 0o755); err != nil {
+		t.Fatalf("mkdir zip dir: %v", err)
+	}
+	if err := os.WriteFile(zipPath, []byte("not a real zip"), 0o644); err != nil {
+		t.Fatalf("write truncated zip: %v", err)
+	}
+
+	s := &Slave{
+		roots: []MountedRoot{{Path: siteRoot, MountPath: "/"}},
+	}
+	resp := s.handleZipIntegrity(&protocol.AsyncCommand{
+		Index: "zip-check",
+		Args:  []string{"/0DAY/bad.zip"},
+	})
+
+	got, ok := resp.(*protocol.AsyncResponseZipIntegrity)
+	if !ok {
+		t.Fatalf("expected zip integrity response, got %T: %#v", resp, resp)
+	}
+	if got.OK {
+		t.Fatalf("expected truncated zip to fail integrity")
 	}
 }
 
