@@ -17,6 +17,9 @@ Performance
   blocking the upload 226 response.
 
 Data integrity
+- Published in-progress .sfv uploads in the master VFS as soon as the selected
+  slave accepts RECEIVE. This makes the SFV visible to early LIST/MLSD snapshots
+  from racers instead of waiting for final transfer status.
 - Fixed a remerge purge race that deleted just-uploaded files (incl. the .sfv)
   during a live race. Uploads are added to the VFS, but a concurrent remerge
   marks files unseen at scan start and purges anything still unseen at the end;

@@ -677,6 +677,7 @@ func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group s
 		slaveConn.Close()
 		return 0, 0, fmt.Errorf("receive ack: %w", err)
 	}
+	b.publishUploadStart(filePath, slave.Name(), owner, group, position)
 
 	// Bridge: client -> slave. The slave calculates and returns the authoritative CRC.
 	bridgeStart := time.Now()
@@ -746,6 +747,31 @@ func finalUploadFileSize(status protocol.TransferStatus, position int64) int64 {
 		return status.Transferred + position
 	}
 	return status.Transferred
+}
+
+func (b *Bridge) publishUploadStart(filePath, slaveName, owner, group string, position int64) {
+	if b == nil || b.sm == nil || b.sm.GetVFS() == nil || position > 0 || !isEarlyListSensitiveUpload(filePath) {
+		return
+	}
+
+	// Tiny metadata files are often listed immediately by racers; publish a
+	// non-zero placeholder so early LIST/MLSD snapshots include them.
+	b.sm.GetVFS().AddFile(filePath, VFSFile{
+		Path:         filePath,
+		Size:         1,
+		IsDir:        false,
+		LastModified: time.Now().Unix(),
+		SlaveName:    slaveName,
+		Owner:        owner,
+		Group:        group,
+		Seen:         true,
+	})
+	b.sm.SyncStatusMarkersForPath(filePath, false)
+}
+
+func isEarlyListSensitiveUpload(filePath string) bool {
+	name := strings.ToLower(strings.TrimSpace(path.Base(filePath)))
+	return strings.HasSuffix(name, ".sfv")
 }
 
 func (b *Bridge) repairDownloadedFileSize(filePath string, sizeBytes int64) {
@@ -2554,6 +2580,7 @@ func (b *Bridge) SlaveReceivePassthrough(filePath string, transferIdx int32, sla
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("receive ack: %w", err)
 	}
+	b.publishUploadStart(filePath, slaveName, owner, group, position)
 
 	// Wait for transfer to complete — poll the RemoteTransfer status
 	status, err := slave.WaitTransferStatus(transferIdx, 2*time.Hour)
@@ -2691,6 +2718,7 @@ func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group strin
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("receive ack: %w", err)
 	}
+	b.publishUploadStart(filePath, slave.Name(), owner, group, position)
 
 	status, err := slave.WaitTransferStatus(transferResp.Info.TransferIndex, 2*time.Hour)
 	if err != nil {

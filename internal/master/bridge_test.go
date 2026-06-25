@@ -62,6 +62,48 @@ func TestFinalUploadFileSizeFallsBackToResumeOffset(t *testing.T) {
 	}
 }
 
+func TestEarlyListSensitiveUploadOnlyMatchesSFV(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{path: "/MP3/0618/Release/Release.SFV", want: true},
+		{path: "/MP3/0618/Release/Release.sfv ", want: true},
+		{path: "/MP3/0618/Release/Release.nfo", want: false},
+		{path: "/MP3/0618/Release/Release.r00", want: false},
+	}
+
+	for _, tt := range tests {
+		if got := isEarlyListSensitiveUpload(tt.path); got != tt.want {
+			t.Fatalf("isEarlyListSensitiveUpload(%q) = %v, want %v", tt.path, got, tt.want)
+		}
+	}
+}
+
+func TestPublishUploadStartOnlyPublishesSFVPlaceholder(t *testing.T) {
+	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60)
+	bridge := &Bridge{sm: sm}
+
+	bridge.publishUploadStart("/MP3/0618/Release/Release.sfv", "LOCAL", "steel", "iND", 0)
+	sfv := sm.GetVFS().GetFile("/MP3/0618/Release/Release.sfv")
+	if sfv == nil {
+		t.Fatalf("expected SFV placeholder")
+	}
+	if sfv.Size != 1 || sfv.SlaveName != "LOCAL" || sfv.Owner != "steel" || sfv.Group != "iND" {
+		t.Fatalf("bad SFV placeholder: %+v", sfv)
+	}
+
+	bridge.publishUploadStart("/MP3/0618/Release/Release.r00", "LOCAL", "steel", "iND", 0)
+	if got := sm.GetVFS().GetFile("/MP3/0618/Release/Release.r00"); got != nil {
+		t.Fatalf("expected non-SFV upload to stay unpublished, got %+v", got)
+	}
+
+	bridge.publishUploadStart("/MP3/0618/Release/Resume.sfv", "LOCAL", "steel", "iND", 128)
+	if got := sm.GetVFS().GetFile("/MP3/0618/Release/Resume.sfv"); got != nil {
+		t.Fatalf("expected resumed SFV upload to stay unpublished, got %+v", got)
+	}
+}
+
 func TestCacheSFVKeepsLiveRaceWindow(t *testing.T) {
 	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60)
 	bridge := &Bridge{sm: sm}
