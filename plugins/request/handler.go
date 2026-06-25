@@ -794,7 +794,7 @@ func mergeRequestRecords(primary []plugin.RequestRecord, secondary []plugin.Requ
 
 func mergeRequestFillRecords(primary []plugin.RequestFillRecord, secondary []plugin.RequestFillRecord) []plugin.RequestFillRecord {
 	out := make([]plugin.RequestFillRecord, 0, len(primary)+len(secondary))
-	seen := make(map[string]struct{}, len(primary)+len(secondary))
+	seen := make(map[string]int, len(primary)+len(secondary))
 	add := func(record plugin.RequestFillRecord) {
 		record.Release = strings.TrimSpace(record.Release)
 		record.RequestedBy = firstNonEmpty(record.RequestedBy, "unknown")
@@ -803,14 +803,19 @@ func mergeRequestFillRecords(primary []plugin.RequestFillRecord, secondary []plu
 		if record.Release == "" || record.FilledBy == "" {
 			return
 		}
-		key := strings.ToLower(record.Release) + "\x00" +
-			strings.ToLower(record.RequestedBy) + "\x00" +
-			strings.ToLower(record.FilledBy) + "\x00" +
-			record.Date
-		if _, ok := seen[key]; ok {
+		key := strings.ToLower(record.Release) + "\x00" + strings.ToLower(record.FilledBy)
+		if idx, ok := seen[key]; ok {
+			existing := out[idx]
+			if isWeakRequestUser(existing.RequestedBy) && !isWeakRequestUser(record.RequestedBy) {
+				existing.RequestedBy = record.RequestedBy
+			}
+			if existing.Date == "" && record.Date != "" {
+				existing.Date = record.Date
+			}
+			out[idx] = existing
 			return
 		}
-		seen[key] = struct{}{}
+		seen[key] = len(out)
 		out = append(out, record)
 	}
 	for _, record := range primary {
@@ -820,6 +825,15 @@ func mergeRequestFillRecords(primary []plugin.RequestFillRecord, secondary []plu
 		add(record)
 	}
 	return out
+}
+
+func isWeakRequestUser(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "unknown", "restore":
+		return true
+	default:
+		return false
+	}
 }
 
 func (p *Plugin) emitRequestCreated(entry requestEntry, numbered string) {

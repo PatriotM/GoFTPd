@@ -188,6 +188,69 @@ func TestRequestStateFileHydratesFillStats(t *testing.T) {
 	}
 }
 
+func TestRequestStateHydrateDedupesRestoredFillStats(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "request_state.json")
+	if err := os.WriteFile(statePath, []byte(`{
+  "version": 1,
+  "dir": "/REQUESTS",
+  "requests": [],
+  "fills": [
+    {
+      "Release": "Fire.Birds.1990.MULTi.COMPLETE.UHD.BLURAY-MONUMENT",
+      "RequestedBy": "restore",
+      "FilledBy": "Hawkeye",
+      "Date": "2026-06-24 00:58"
+    },
+    {
+      "Release": "Angels.Egg.1985.ANiME.MULTi.COMPLETE.BLURAY-MONUMENT",
+      "RequestedBy": "restore",
+      "FilledBy": "Hawkeye",
+      "Date": "2026-06-22 04:01"
+    }
+  ]
+}
+`), 0644); err != nil {
+		t.Fatalf("write request state: %v", err)
+	}
+
+	bridge := newRequestTestBridge()
+	bridge.fillData = []plugin.RequestFillRecord{
+		{
+			Release:     "Fire.Birds.1990.MULTi.COMPLETE.UHD.BLURAY-MONUMENT",
+			RequestedBy: "CokxOk",
+			FilledBy:    "Hawkeye",
+			Date:        "2026-06-24 00:58",
+		},
+		{
+			Release:     "Angels.Egg.1985.ANiME.MULTi.COMPLETE.BLURAY-MONUMENT",
+			RequestedBy: "unknown",
+			FilledBy:    "Hawkeye",
+			Date:        "2026-06-22 04:01",
+		},
+	}
+	loaded := New()
+	loaded.svc = &plugin.Services{Bridge: bridge}
+	loaded.stateFile = statePath
+	if err := loaded.hydrateRequestState(); err != nil {
+		t.Fatalf("hydrate request state: %v", err)
+	}
+
+	if len(bridge.fillData) != 2 {
+		t.Fatalf("expected duplicate fill records to collapse, got %+v", bridge.fillData)
+	}
+	for _, fill := range bridge.fillData {
+		if fill.Release == "Fire.Birds.1990.MULTi.COMPLETE.UHD.BLURAY-MONUMENT" && fill.RequestedBy != "CokxOk" {
+			t.Fatalf("expected stronger requester to win, got %+v", fill)
+		}
+	}
+
+	ctx := &requestTestCtx{user: "siteop", group: "iND", flags: "1"}
+	loaded.HandleSiteCommand(ctx, "REQTOP", nil)
+	if !ctx.hasReply("Hawkeye - 2 fill(s)") {
+		t.Fatalf("expected deduped REQTOP count, got %#v", ctx.replies)
+	}
+}
+
 func TestDuplicateRequestRepairsMissingDirectory(t *testing.T) {
 	bridge := newRequestTestBridge()
 	bridge.addDir("/REQUESTS", "GoFTPd", "GoFTPd")
