@@ -361,6 +361,61 @@ func TestVFSPurgeMissingChildrenKeepsProtectedSubtree(t *testing.T) {
 	}
 }
 
+func TestVFSPurgeUnseenKeepsRecentUnseenUpload(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	now := time.Now().Unix()
+	vfs.AddFile("/X265", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	vfs.AddFile("/X265/recent.sfv", VFSFile{
+		Size:         100,
+		Seen:         false,
+		SlaveName:    "LOCAL",
+		LastModified: now - 10,
+	})
+	vfs.AddFile("/X265/old.r00", VFSFile{
+		Size:         100,
+		Seen:         false,
+		SlaveName:    "LOCAL",
+		LastModified: now - remergePurgeRecencyGraceSec - 1,
+	})
+
+	vfs.PurgeUnseen("LOCAL")
+
+	if got := vfs.GetFile("/X265/recent.sfv"); got == nil {
+		t.Fatalf("expected recent unseen upload to survive full purge")
+	}
+	if got := vfs.GetFile("/X265/old.r00"); got != nil {
+		t.Fatalf("expected old unseen ghost to be purged, got %+v", got)
+	}
+}
+
+func TestVFSPurgeUnseenSubtreeKeepsRecentUnseenUpload(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	now := time.Now().Unix()
+	vfs.AddFile("/TV-1080P", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	vfs.AddFile("/TV-1080P/release", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})
+	vfs.AddFile("/TV-1080P/release/recent.sfv", VFSFile{
+		Size:         100,
+		Seen:         false,
+		SlaveName:    "LOCAL",
+		LastModified: now - 10,
+	})
+	vfs.AddFile("/TV-1080P/release/old.r00", VFSFile{
+		Size:         100,
+		Seen:         false,
+		SlaveName:    "LOCAL",
+		LastModified: now - remergePurgeRecencyGraceSec - 1,
+	})
+
+	vfs.PurgeUnseenSubtree("LOCAL", "/TV-1080P")
+
+	if got := vfs.GetFile("/TV-1080P/release/recent.sfv"); got == nil {
+		t.Fatalf("expected recent unseen upload to survive subtree purge")
+	}
+	if got := vfs.GetFile("/TV-1080P/release/old.r00"); got != nil {
+		t.Fatalf("expected old unseen ghost to be purged from subtree, got %+v", got)
+	}
+}
+
 func TestVFSScopedRemergePurgesUnseenSubtreeOnly(t *testing.T) {
 	vfs := NewVirtualFileSystem()
 	vfs.AddFile("/TV-1080P", VFSFile{IsDir: true, Seen: true, SlaveName: "LOCAL"})

@@ -17,6 +17,13 @@ Performance
   blocking the upload 226 response.
 
 Data integrity
+- Fixed a remerge purge race that deleted just-uploaded files (incl. the .sfv)
+  during a live race. Uploads are added to the VFS, but a concurrent remerge
+  marks files unseen at scan start and purges anything still unseen at the end;
+  a file that landed after the slave snapshot but before the purge was wrongly
+  removed. The final purge now spares files modified within the recency grace
+  window (matching the per-directory prune), and completed uploads are recorded
+  as seen. cbftp reports the race done, so the missing file was never re-sent.
 - Fixed the VFS recording a 0/short size for a file that is complete on disk. A
   remerge/re-scan reads the live on-disk size and AddFile would overwrite the
   correct completed size with it (short/0 if it caught a file mid-write); the

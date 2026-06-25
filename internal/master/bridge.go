@@ -393,10 +393,16 @@ func (b *Bridge) ListDir(dirPath string) []core.MasterFileEntry {
 	return entries
 }
 
-// zeroSizeRepairAt debounces the per-directory DB lookup below: dirPath -> last query time.
-var zeroSizeRepairAt sync.Map
+// zeroSizeRepairCache throttles only the per-directory DB query below (not the
+// repair itself): dirPath -> cached verified-present records + fetch time.
+var zeroSizeRepairCache sync.Map
 
-const zeroSizeRepairDebounce = 3 * time.Second
+const zeroSizeRepairTTL = 1 * time.Second
+
+type zeroSizeRepairState struct {
+	at      time.Time
+	records map[string]ReleaseFileRecord
+}
 
 func (b *Bridge) repairZeroSizeListEntries(dirPath string, files []*VFSFile) bool {
 	if b == nil || b.raceDB == nil || b.sm == nil || b.sm.GetVFS() == nil {
@@ -414,27 +420,31 @@ func (b *Bridge) repairZeroSizeListEntries(dirPath string, files []*VFSFile) boo
 		return false
 	}
 
-	// During a race a directory is full of zero-size in-progress files that the
-	// DB can't repair anyway (they're not verified-present yet), and cbftp hammers
-	// LIST. A genuinely stale entry is repaired on the first lookup and then no
-	// longer reads as zero-size, so debouncing the DB query per directory keeps
-	// listings in memory during the race without missing real repairs.
+	// Pull verified-present sizes from the race DB so a completed file that
+	// momentarily reads size 0 in the VFS is never served to a racing client as
+	// 0 bytes -- cbftp will not queue a 0-byte file, so a 0-byte .sfv is silently
+	// dropped from the race. The DB query is throttled per directory by a short
+	// TTL, but the repair still runs from the (cached or fresh) records, so a
+	// just-completed file is restored on the very next listing instead of being
+	// withheld for seconds by a query debounce. Verified sizes are final, so the
+	// cached records are safe to reuse within the TTL.
 	now := time.Now()
-	if last, ok := zeroSizeRepairAt.Load(dirPath); ok {
-		if lt, ok := last.(time.Time); ok && now.Sub(lt) < zeroSizeRepairDebounce {
-			return false
+	var records map[string]ReleaseFileRecord
+	if cached, ok := zeroSizeRepairCache.Load(dirPath); ok {
+		if st, ok := cached.(zeroSizeRepairState); ok && now.Sub(st.at) < zeroSizeRepairTTL {
+			records = st.records
 		}
 	}
-
-	records, err := b.raceDB.VerifiedPresentFiles(dirPath)
-	if err != nil {
-		log.Printf("[Bridge] race DB zero-size listing repair failed for %s: %v", dirPath, err)
-		return false
+	if records == nil {
+		fresh, err := b.raceDB.VerifiedPresentFiles(dirPath)
+		if err != nil {
+			log.Printf("[Bridge] race DB zero-size listing repair failed for %s: %v", dirPath, err)
+			return false
+		}
+		records = fresh
+		zeroSizeRepairCache.Store(dirPath, zeroSizeRepairState{at: now, records: fresh})
 	}
 	if len(records) == 0 {
-		// Nothing in the DB to repair these zero-size entries with (in-progress
-		// uploads): debounce so a race doesn't re-query the DB on every LIST.
-		zeroSizeRepairAt.Store(dirPath, now)
 		return false
 	}
 
@@ -458,14 +468,6 @@ func (b *Bridge) repairZeroSizeListEntries(dirPath string, files []*VFSFile) boo
 		// A file was on disk but read as size 0 in the VFS and we had to fix it
 		// from the DB: exactly the state that makes racing clients skip+retry.
 		metrics.ZeroSizeRepairs.Add(int64(repairedCount))
-	}
-	// Only debounce when nothing was actually repaired (the zero-size files are
-	// in-progress uploads). If a real stale entry WAS fixed, clear the debounce so
-	// the next listing re-checks immediately; a genuine repair is never delayed.
-	if repaired {
-		zeroSizeRepairAt.Delete(dirPath)
-	} else {
-		zeroSizeRepairAt.Store(dirPath, now)
 	}
 	return repaired
 }
@@ -728,6 +730,7 @@ func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group s
 		Group:        group,
 		XferTime:     xferTime,
 		Checksum:     checksum,
+		Seen:         true,
 	})
 	b.recordUploadMetadata(filePath, owner, group, finalSize, xferTime, checksum)
 	b.sm.SyncStatusMarkersForPath(filePath, false)
@@ -786,9 +789,12 @@ func (b *Bridge) writeUploadRecord(rec uploadRecord) {
 	if b == nil || b.raceDB == nil {
 		return
 	}
-	if err := b.raceDB.RecordUpload(filepath.Clean(rec.filePath), rec.owner, rec.group, rec.size, rec.duration, rec.checksum); err != nil {
+	cleanPath := filepath.Clean(rec.filePath)
+	if err := b.raceDB.RecordUpload(cleanPath, rec.owner, rec.group, rec.size, rec.duration, rec.checksum); err != nil {
 		log.Printf("[Bridge] Race DB record upload failed for %s: %v", rec.filePath, err)
+		return
 	}
+	zeroSizeRepairCache.Delete(filepath.Dir(cleanPath))
 }
 
 // DownloadFile routes a download from a slave to the FTP client.
@@ -2578,6 +2584,7 @@ func (b *Bridge) SlaveReceivePassthrough(filePath string, transferIdx int32, sla
 		Group:        group,
 		XferTime:     status.Elapsed,
 		Checksum:     finalChecksum,
+		Seen:         true,
 	})
 	b.recordUploadMetadata(filePath, owner, group, finalSize, status.Elapsed, finalChecksum)
 	b.sm.SyncStatusMarkersForPath(filePath, false)
@@ -2713,6 +2720,7 @@ func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group strin
 		Group:        group,
 		XferTime:     status.Elapsed,
 		Checksum:     finalChecksum,
+		Seen:         true,
 	})
 	b.recordUploadMetadata(filePath, owner, group, finalSize, status.Elapsed, finalChecksum)
 	b.sm.SyncStatusMarkersForPath(filePath, false)

@@ -444,6 +444,7 @@ func (vfs *VirtualFileSystem) resetProtectedDirsLocked() {
 func (vfs *VirtualFileSystem) PurgeUnseen(slaveName string) {
 	vfs.mu.Lock()
 	defer vfs.mu.Unlock()
+	nowUnix := time.Now().Unix()
 	changed := false
 	for path, file := range vfs.files {
 		if vfs.protectedDirs[path] {
@@ -452,6 +453,13 @@ func (vfs *VirtualFileSystem) PurgeUnseen(slaveName string) {
 			continue
 		}
 		if file.SlaveName == slaveName && !file.Seen {
+			// Don't purge a file that was just uploaded: an FXP upload can land
+			// after the slave snapshot but before this purge, so it is still
+			// marked unseen yet legitimately present (incl. the .sfv). If it is
+			// genuinely gone, the next remerge past the grace window reconciles it.
+			if file.LastModified > 0 && nowUnix-file.LastModified < remergePurgeRecencyGraceSec {
+				continue
+			}
 			changed = vfs.deletePathLocked(path) || changed
 		}
 	}
@@ -467,6 +475,7 @@ func (vfs *VirtualFileSystem) PurgeUnseenSubtree(slaveName, rootPath string) {
 
 	rootPath = cleanVFSPath(rootPath)
 	vfs.resetProtectedDirsLocked()
+	nowUnix := time.Now().Unix()
 	changed := false
 	for _, path := range vfs.collectSubtreePathsLocked(rootPath) {
 		if vfs.protectedDirs[path] {
@@ -474,6 +483,11 @@ func (vfs *VirtualFileSystem) PurgeUnseenSubtree(slaveName, rootPath string) {
 		}
 		file := vfs.files[path]
 		if file != nil && file.SlaveName == slaveName && !file.Seen {
+			// Spare a just-uploaded file that landed after the slave snapshot but
+			// before this purge (still unseen, but present); reconciled next pass.
+			if file.LastModified > 0 && nowUnix-file.LastModified < remergePurgeRecencyGraceSec {
+				continue
+			}
 			changed = vfs.deletePathLocked(path) || changed
 		}
 	}
