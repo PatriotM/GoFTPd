@@ -171,9 +171,15 @@ func (vfs *VirtualFileSystem) AddFile(path string, file VFSFile) {
 		if isWeakMetadataValue(file.Group) && !isWeakMetadataValue(existing.Group) {
 			file.Group = existing.Group
 		}
+		// Don't let an evidence-free re-scan SHRINK a size that a completed upload
+		// already recorded. A real upload sets XferTime+Checksum (the slave CRCs
+		// every received file, incl. the .sfv); a remerge/scan carries neither and
+		// reads the live on-disk size, which is short/0 if it catches a file still
+		// being written. Without this, a remerge clobbers a correct size to 0 and
+		// the listing shows the file (e.g. the .sfv) as empty, so cbftp skips it.
+		// Previously this guard was scoped to .zip payloads only.
 		if !file.IsDir && !file.IsSymlink &&
 			!existing.IsDir && !existing.IsSymlink &&
-			zipscript.IsZipPayloadName(filepath.Base(path)) &&
 			file.XferTime == 0 && file.Checksum == 0 &&
 			existing.XferTime > 0 && existing.Checksum != 0 &&
 			existing.Size > file.Size {

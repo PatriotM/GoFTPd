@@ -1055,6 +1055,39 @@ func TestVFSZipPayloadPreservesStrongerCompletedSizeOnWeakOverwrite(t *testing.T
 	}
 }
 
+func TestVFSNonZipPreservesStrongerCompletedSizeOnWeakOverwrite(t *testing.T) {
+	vfs := NewVirtualFileSystem()
+	vfs.AddFile("/MP3/release", VFSFile{IsDir: true, Seen: true})
+	vfs.AddFile("/MP3/release/release.sfv", VFSFile{
+		Seen:         true,
+		Size:         2048,
+		Owner:        "steel",
+		Group:        "iND",
+		XferTime:     750,
+		Checksum:     0x98765432,
+		LastModified: 1,
+	})
+
+	vfs.AddFile("/MP3/release/release.sfv", VFSFile{
+		Seen:         true,
+		Size:         0,
+		Owner:        "GoFTPd",
+		Group:        "root",
+		LastModified: 2,
+	})
+
+	got := vfs.GetFile("/MP3/release/release.sfv")
+	if got == nil {
+		t.Fatalf("expected sfv to remain present")
+	}
+	if got.Size != 2048 {
+		t.Fatalf("expected completed sfv size 2048 to survive weak overwrite, got %d", got.Size)
+	}
+	if got.Checksum != 0x98765432 || got.XferTime != 750 {
+		t.Fatalf("expected transfer metadata to survive weak overwrite, checksum=%08X xfer=%d", got.Checksum, got.XferTime)
+	}
+}
+
 func TestVFSHydrateRaceFileRestoresStrongerZipSize(t *testing.T) {
 	vfs := NewVirtualFileSystem()
 	vfs.AddFile("/0DAY/release", VFSFile{IsDir: true, Seen: true})
