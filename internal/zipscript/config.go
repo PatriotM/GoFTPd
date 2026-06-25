@@ -105,6 +105,7 @@ type AudioConfig struct {
 	YearPath                string          `yaml:"year_path"`
 	GroupPath               string          `yaml:"group_path"`
 	Sort                    AudioSortConfig `yaml:"sort"`
+	CreateM3U               *bool           `yaml:"create_m3u"`
 	CWDMP3Info              *bool           `yaml:"cwd_mp3_info"`
 	STORMP3Info             *bool           `yaml:"stor_mp3_info"`
 	CWDFLACInfo             *bool           `yaml:"cwd_flac_info"`
@@ -266,6 +267,10 @@ func (c *Config) ApplyDefaults() {
 	if c.Audio.STORFLACInfo == nil {
 		enabled := true
 		c.Audio.STORFLACInfo = &enabled
+	}
+	if c.Audio.CreateM3U == nil {
+		enabled := true
+		c.Audio.CreateM3U = &enabled
 	}
 	if len(c.Audio.Sections) == 0 {
 		c.Audio.Sections = []string{"FLAC", "MP3"}
