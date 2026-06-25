@@ -15,10 +15,16 @@ channels: ["#goftpd-chat"]
 reply_target: "channel"
 
 # One login target per site to check.
+# host        : address the bot connects to (use 127.0.0.1 so the goftpd account
+#               only needs a loopback IP and is never exposed publicly).
+# display_host: optional; shown in the IRC announce instead of host. Set it to
+#               your public IP if you want the channel to show the public address
+#               while still connecting over loopback. Falls back to host if unset.
 targets:
   # setup.sh replaces this with your configured site name by default.
   - name: "GoFTPd"
     host: "127.0.0.1"
+    display_host: "your.public.ip"
     port: 21212
   - name: "site2"
     host: "127.0.0.2"

@@ -383,6 +383,11 @@ func createMasterSFVMissingMarker(cfg *Config, bridge MasterBridge, dirPath, fil
 	}
 }
 
+func isZeroByteCriticalFile(fileName string) bool {
+	l := strings.ToLower(strings.TrimSpace(fileName))
+	return strings.HasSuffix(l, ".sfv") || strings.HasSuffix(l, ".nfo") || strings.HasSuffix(l, ".diz")
+}
+
 func handleMasterUploadSFVStatusAndCleanup(s *Session, bridge MasterBridge, uploadDir, filePath, fileName string, checksum uint32, fileSize int64) bool {
 	if s == nil || s.Config == nil || bridge == nil || strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
 		return false
@@ -397,7 +402,6 @@ func handleMasterUploadSFVStatusAndCleanup(s *Session, bridge MasterBridge, uplo
 
 	zipscript.WriteUploadSFVStatus(s.Conn, checksum, expectedCRC, true, fileSize)
 	if checksum == expectedCRC && checksum != 0 {
-		clearMasterSFVMissingMarker(bridge, uploadDir, fileName)
 		return false
 	}
 
@@ -1558,6 +1562,14 @@ func ensureUploadDirsForEvent(s *Session, bridge MasterBridge, uploadDir string)
 		releaseDir = path.Dir(releaseDir)
 	}
 	needNew := !bridge.FileExists(releaseDir)
+	if needNew && s.Config.PluginManager != nil {
+		// Mirror the explicit-MKD releaseguard check. Without this a STOR could
+		// silently auto-create a banned release dir that an explicit MKD just
+		// blocked (cbftp often falls through to STOR after a 550 on MKD).
+		if err := s.Config.PluginManager.ValidateMKDir(s.User, releaseDir); err != nil {
+			return err
+		}
+	}
 	owner := "GoFTPd"
 	group := "GoFTPd"
 	if s.User != nil {

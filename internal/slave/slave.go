@@ -1647,7 +1647,13 @@ func (s *Slave) handleZipIntegrity(ac *protocol.AsyncCommand) interface{} {
 		}
 		ok, err := validateZipIntegrity(fullPath)
 		if err != nil {
-			return &protocol.AsyncResponseError{Index: ac.Index, Message: fmt.Sprintf("zip integrity failed: %v", err)}
+			// The file exists (stat above), so a read/open error here means the
+			// archive itself is corrupt or truncated. Report it as a failed
+			// integrity check (OK=false) so the master deletes it. Returning an
+			// error instead made the master treat a broken zip as "check could not
+			// run" and keep it, which let truncated volumes count toward complete.
+			log.Printf("[Slave] zip integrity check failed for %s: %v", archivePath, err)
+			return &protocol.AsyncResponseZipIntegrity{Index: ac.Index, OK: false}
 		}
 		return &protocol.AsyncResponseZipIntegrity{Index: ac.Index, OK: ok}
 	}

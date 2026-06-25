@@ -17,7 +17,18 @@ import (
 type Target struct {
 	Name string
 	Host string
-	Port int
+	// DisplayHost is shown in the announce instead of Host when set. Use it to
+	// connect over loopback (Host: 127.0.0.1) while still showing the public IP.
+	DisplayHost string
+	Port        int
+}
+
+// shownHost is the address shown in the announce (DisplayHost if set, else Host).
+func (t Target) shownHost() string {
+	if h := strings.TrimSpace(t.DisplayHost); h != "" {
+		return h
+	}
+	return t.Host
 }
 
 type Plugin struct {
@@ -130,22 +141,22 @@ func (p *Plugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 		"channel":  evt.Data["channel"],
 		"sitename": p.siteName,
 		"response": fmt.Sprintf("Checking %s status, please wait ...", p.siteName),
-	}, "BNC: " + fmt.Sprintf("Checking %s status, please wait ...", p.siteName))}
+	}, "BNC: "+fmt.Sprintf("Checking %s status, please wait ...", p.siteName))}
 
 	for i, target := range targets {
 		ok, latency, message := p.checkTarget(target)
 		vars := map[string]string{
 			"index":   fmt.Sprintf("%d", i+1),
 			"name":    target.Name,
-			"host":    target.Host,
+			"host":    target.shownHost(),
 			"port":    fmt.Sprintf("%d", target.Port),
 			"latency": fmt.Sprintf("%d", latency.Milliseconds()),
 			"error":   message,
 		}
 		if ok {
-			lines = append(lines, p.render("BNC_UP", vars, fmt.Sprintf("%d.- %s at %s:%d is UP (login: %dms)", i+1, target.Name, target.Host, target.Port, latency.Milliseconds())))
+			lines = append(lines, p.render("BNC_UP", vars, fmt.Sprintf("%d.- %s at %s:%d is UP (login: %dms)", i+1, target.Name, target.shownHost(), target.Port, latency.Milliseconds())))
 		} else {
-			lines = append(lines, p.render("BNC_DOWN", vars, fmt.Sprintf("%d.- %s at %s:%d is DOWN (%s)", i+1, target.Name, target.Host, target.Port, message)))
+			lines = append(lines, p.render("BNC_DOWN", vars, fmt.Sprintf("%d.- %s at %s:%d is DOWN (%s)", i+1, target.Name, target.shownHost(), target.Port, message)))
 		}
 	}
 	return p.replies(evt, lines...), nil
@@ -231,6 +242,7 @@ func parseTargets(raw interface{}) []Target {
 			}
 		}
 		host, _ := m["host"].(string)
+		displayHost, _ := m["display_host"].(string)
 		name, _ := m["name"].(string)
 		if strings.TrimSpace(name) == "" {
 			name = strings.TrimSpace(host)
@@ -240,9 +252,10 @@ func parseTargets(raw interface{}) []Target {
 			continue
 		}
 		out = append(out, Target{
-			Name: strings.TrimSpace(name),
-			Host: strings.TrimSpace(host),
-			Port: port,
+			Name:        strings.TrimSpace(name),
+			Host:        strings.TrimSpace(host),
+			DisplayHost: strings.TrimSpace(displayHost),
+			Port:        port,
 		})
 	}
 	return out

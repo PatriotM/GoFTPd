@@ -7,8 +7,10 @@
 #   SITE REQWIPE <number|Release.Name-GRP>
 dir: "/REQUESTS"
 
-# Requests and REQTOP fill counters are stored in VFS metadata on `dir`.
-# No .requests or .reqfills sidecar files are written.
+# Requests and REQTOP fill counters are cached in VFS metadata and mirrored to
+# this JSON file. Startup hydrates VFS metadata from the file, so it is readable
+# and easy to back up or manually repair.
+state_file: "userdata/request_state.json"
 
 # Optional: pin request storage to one writable slave. This keeps the request
 # root metadata and REQ-/FILLED-* dirs together instead of using automatic

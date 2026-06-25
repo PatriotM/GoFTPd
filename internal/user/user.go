@@ -686,9 +686,6 @@ func (u *User) saveLocked() error {
 	if err := validateUserfileRewrite(path, currentBytes, currentExists, buf.String()); err != nil {
 		return err
 	}
-	if err := backupExistingUserfile(path, currentBytes, currentExists, mode); err != nil {
-		return err
-	}
 
 	file, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
@@ -797,77 +794,6 @@ func validateUserfileRewrite(path string, currentBytes []byte, currentExists boo
 
 func statIncreased(next, current StatLine) bool {
 	return next.Files > current.Files || next.Bytes > current.Bytes || next.Meta > current.Meta
-}
-
-func backupExistingUserfile(path string, currentBytes []byte, currentExists bool, mode os.FileMode) error {
-	if !currentExists {
-		return nil
-	}
-	if len(bytes.TrimSpace(currentBytes)) == 0 {
-		return fmt.Errorf("refusing to back up empty userfile %s", filepath.Base(path))
-	}
-
-	backupDir := filepath.Join(filepath.Dir(path), ".backup")
-	if err := os.MkdirAll(backupDir, 0700); err != nil {
-		return err
-	}
-	backupPath := filepath.Join(backupDir, filepath.Base(path))
-	linkTmp, err := tempBackupPath(backupDir, filepath.Base(path), ".link")
-	if err == nil {
-		if err := os.Link(path, linkTmp); err == nil {
-			if err := os.Rename(linkTmp, backupPath); err == nil {
-				return nil
-			}
-		}
-		_ = os.Remove(linkTmp)
-	}
-	return copyUserfileBackup(currentBytes, backupDir, backupPath, filepath.Base(path), mode)
-}
-
-func tempBackupPath(dir, name, suffix string) (string, error) {
-	file, err := os.CreateTemp(dir, "."+name+".bak.tmp-*"+suffix)
-	if err != nil {
-		return "", err
-	}
-	tmpPath := file.Name()
-	if err := file.Close(); err != nil {
-		_ = os.Remove(tmpPath)
-		return "", err
-	}
-	if err := os.Remove(tmpPath); err != nil {
-		return "", err
-	}
-	return tmpPath, nil
-}
-
-func copyUserfileBackup(currentBytes []byte, backupDir, backupPath, name string, mode os.FileMode) error {
-	file, err := os.CreateTemp(backupDir, "."+name+".bak.tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpPath := file.Name()
-	cleanup := true
-	defer func() {
-		if cleanup {
-			_ = os.Remove(tmpPath)
-		}
-	}()
-	if _, err := file.Write(currentBytes); err != nil {
-		_ = file.Close()
-		return err
-	}
-	if err := file.Chmod(mode); err != nil {
-		_ = file.Close()
-		return err
-	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpPath, backupPath); err != nil {
-		return err
-	}
-	cleanup = false
-	return nil
 }
 
 func inspectUserfileSafety(text string) userfileSafety {

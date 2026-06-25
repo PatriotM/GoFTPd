@@ -10,7 +10,7 @@ release nuked, etc.) and doing work with the master's VFS bridge.
 - **imdb** - async movie lookup on MKD (via imdbapi.dev), writes `.imdb`
 - **pretime** - async pretime lookup on MKD via SQLite, MySQL, PostgreSQL, or HTTP/JSON sources, emits `NEWPRETIME` / `OLDPRETIME`
 - **pre** - handles SITE PRE and affil management, and emits PRE bandwidth / audio metadata events
-- **request** - handles SITE REQUEST/REQUESTS/REQFILL/REQTOP/REQDEL/REQWIPE and stores request/fill stats in VFS metadata
+- **request** - handles SITE REQUEST/REQUESTS/REQFILL/REQTOP/REQDEL/REQWIPE and mirrors request/fill stats to `userdata/request_state.json`
 - **speedtest** - creates fixed-size test files and emits SPEEDTEST events
 - **slowkick** - monitors live uploads and downloads, aborts/kicks slow transfers, and can briefly tempban the FTP user after a kick
 - **spacekeeper** - combines free-space cleanup and archive-style moves using virtual FTP path rules, with separate switches for each side
