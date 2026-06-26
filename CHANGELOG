@@ -47,6 +47,15 @@ Sitebot
   byte-based leader flip-flop, re-announcing "X takes the lead" on nearly every file.
 
 Data integrity
+- Fixed a release that was never SFV-checked or announced complete even though the
+  .sfv was present on disk. The 0-byte critical-file reject deleted/blocked a good
+  .sfv whenever the master momentarily measured it as 0 bytes, so it was never
+  parsed or tracked. A critical 0-byte file is now only rejected if the SLAVE
+  confirms it has no real content (for a .sfv: the slave parse yields no entries);
+  a real .sfv is kept and parsed. Additionally, any file uploaded into a release
+  whose .sfv exists but was never cached now re-parses the .sfv from the slave
+  (self-healing), so a missed/raced SFV parse can no longer leave a release
+  silently un-checked.
 - Fixed a complete-on-disk file (commonly a .zip) listing at a SHORT size (e.g.
   444k instead of 4.8M), which made cbftp race it short. A leech/duplicate
   transfer could grow a weak VFS entry to a partial offset via UpdateFileTransferSize

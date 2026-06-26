@@ -1648,12 +1648,15 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 
 				if fileSize == 0 {
 					if isZeroByteCriticalFile(fileName) {
-						bridge.DeleteFile(filePath)
-						log.Printf("[MASTER-ZS] Rejected 0-byte critical file %s; requesting re-upload", filePath)
-						fmt.Fprintf(s.Conn, "550 Empty %s rejected, please re-upload.\r\n", fileName)
-						return false
-					}
-					if zipscript.ShouldDeleteZeroByteForDir(s.Config.Zipscript, uploadDir) {
+						if !criticalUploadHasRealContent(bridge, filePath, fileName) {
+							bridge.DeleteFile(filePath)
+							log.Printf("[MASTER-ZS] Rejected 0-byte critical file %s; requesting re-upload", filePath)
+							fmt.Fprintf(s.Conn, "550 Empty %s rejected, please re-upload.\r\n", fileName)
+							return false
+						}
+						// Slave confirms the file has real content despite a 0 measured
+						// size; keep it and fall through to the normal SFV parse/track path.
+					} else if zipscript.ShouldDeleteZeroByteForDir(s.Config.Zipscript, uploadDir) {
 						bridge.DeleteFile(filePath)
 						log.Printf("[MASTER-ZS] Deleted 0-byte file: %s", filePath)
 						fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
@@ -1747,12 +1750,15 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 
 				if fileSize == 0 {
 					if isZeroByteCriticalFile(fileName) {
-						bridge.DeleteFile(filePath)
-						log.Printf("[MASTER-ZS] Rejected 0-byte critical file %s; requesting re-upload", filePath)
-						fmt.Fprintf(s.Conn, "550 Empty %s rejected, please re-upload.\r\n", fileName)
-						return false
-					}
-					if zipscript.ShouldDeleteZeroByteForDir(s.Config.Zipscript, uploadDir) {
+						if !criticalUploadHasRealContent(bridge, filePath, fileName) {
+							bridge.DeleteFile(filePath)
+							log.Printf("[MASTER-ZS] Rejected 0-byte critical file %s; requesting re-upload", filePath)
+							fmt.Fprintf(s.Conn, "550 Empty %s rejected, please re-upload.\r\n", fileName)
+							return false
+						}
+						// Slave confirms the file has real content despite a 0 measured
+						// size; keep it and fall through to the normal SFV parse/track path.
+					} else if zipscript.ShouldDeleteZeroByteForDir(s.Config.Zipscript, uploadDir) {
 						bridge.DeleteFile(filePath)
 						log.Printf("[MASTER-ZS] Deleted 0-byte file: %s", filePath)
 						fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
