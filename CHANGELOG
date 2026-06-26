@@ -34,12 +34,12 @@ Data integrity
   etc. were clobbered. AddFile now refuses to let an evidence-free re-scan (no
   checksum/xfertime) shrink a completed size, for all file types. This was making
   a valid .sfv list as 0 bytes, which cbftp skips, so it never raced.
-- goftpd now generates the <release>.m3u from the SFV when an audio release
-  completes (MP3/FLAC), matching glftpd/pzs-ng. It lists the SFV's audio files,
-  is written to the release's slave before the complete announce/hook fires, and
-  is skipped if the release already ships an .m3u. Toggle with audio.create_m3u
-  (default true). Without this the m3u only existed if a racer uploaded one, so
-  outbound races/link scripts could complete before it arrived.
+- goftpd now generates the <release>.m3u from the SFV when an MP3 release
+  completes, matching glftpd/pzs-ng. It lists the SFV's MP3 files, is written to
+  the release's slave before the complete announce/hook fires, and is skipped if
+  the release already ships an .m3u. Toggle with audio.create_m3u (default true).
+  Without this the m3u only existed if a racer uploaded one, so outbound races
+  and link scripts could complete before it arrived.
 - passwd, etc/group, and per-group files are now written atomically (temp file
   + rename); group saves are mutex-guarded.
 - Fixed truncated .zip volumes counting toward "complete" on master/slave. A zip
