@@ -36,6 +36,12 @@ const (
 	// dataWriteTimeout bounds a single chunk write so a receiver that stops reading
 	// surfaces as an error instead of blocking the send indefinitely.
 	dataWriteTimeout = 60 * time.Second
+	// receiveIdleLimit aborts an upload that has received no new bytes for this
+	// long. The poll-tick read deadline otherwise just resets and spins forever
+	// when no min-speed is configured, so a stalled source would hold the upload
+	// (and any leech-while-upload download following it) open indefinitely. Like
+	// drftpd, killing the stalled upload releases the follower immediately.
+	receiveIdleLimit = 30 * time.Second
 )
 
 // Transfer represents a data transfer on the slave side.
@@ -208,6 +214,7 @@ func (t *Transfer) ReceiveFile(path string, position int64, expectedPeer string)
 	lastStatus := time.Now()
 	firstMinCheck := true
 	lastMinCheck := time.Now()
+	lastProgress := time.Now()
 	nextReadDeadline := time.Now().Add(transferPollTick)
 	_ = t.conn.SetReadDeadline(nextReadDeadline)
 
@@ -225,6 +232,7 @@ func (t *Transfer) ReceiveFile(path string, position int64, expectedPeer string)
 			}
 			t.transferred.Add(int64(n))
 			t.applyMaxSpeed()
+			lastProgress = time.Now()
 		}
 		if time.Since(lastStatus) >= transferStatusTick {
 			t.slave.writeStatusObject(&protocol.AsyncResponseTransferStatus{Status: t.currentStatus(false, "")})
@@ -236,6 +244,13 @@ func (t *Transfer) ReceiveFile(path string, position int64, expectedPeer string)
 		}
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				// Poll tick with no data. Abort if the source has gone silent for
+				// too long so a stalled upload can't hold the slot (and any
+				// leech-while-upload follower) open indefinitely.
+				if time.Since(lastProgress) >= receiveIdleLimit {
+					cleanupFailedReceive(file, fullPath, position)
+					return t.errorStatus("receive idle timeout: no data from source")
+				}
 				nextReadDeadline = time.Now().Add(transferPollTick)
 				_ = t.conn.SetReadDeadline(nextReadDeadline)
 				continue
