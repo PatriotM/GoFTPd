@@ -16,6 +16,16 @@ Performance
 - Per-file -MISSING marker cleanup now runs in the post-upload path instead of
   blocking the upload 226 response.
 
+Reliability
+- Bounded the leech-while-upload "follow" in the slave send path. A download that
+  was following a still-running upload of the same file would spin at EOF every
+  100ms with no limit; if that upload stalled (but had not finished/aborted) the
+  send produced no bytes and the racing client hung until its own timeout, then
+  left the file missing -- a retry succeeded because the upload had completed by
+  then. The follow now gives up after a bounded idle period so the client fails
+  fast and retries cleanly, and each chunk write has a deadline so a receiver that
+  stops reading surfaces as an error instead of blocking the send.
+
 Data integrity
 - Published in-progress .sfv uploads in the master VFS as soon as the selected
   slave accepts RECEIVE. This makes the SFV visible to early LIST/MLSD snapshots

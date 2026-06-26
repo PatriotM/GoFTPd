@@ -26,6 +26,16 @@ const (
 	TransferSending    = 'S' // download from slave to client
 	transferPollTick   = 100 * time.Millisecond
 	transferStatusTick = time.Second
+	// leechFollowIdleLimit bounds how long a download may "follow" a still-running
+	// upload of the same file (leech-while-upload) without receiving any new bytes.
+	// A live upload that has stalled but not finished would otherwise spin here
+	// forever, so the racing client (cbftp) hangs until its own timeout and leaves
+	// the file missing. Giving up cleanly lets it retry, which succeeds once the
+	// upload has completed.
+	leechFollowIdleLimit = 20 * time.Second
+	// dataWriteTimeout bounds a single chunk write so a receiver that stops reading
+	// surfaces as an error instead of blocking the send indefinitely.
+	dataWriteTimeout = 60 * time.Second
 )
 
 // Transfer represents a data transfer on the slave side.
@@ -325,6 +335,7 @@ func (t *Transfer) SendFile(path string, position int64, expectedPeer string) pr
 	lastStatus := time.Now()
 	firstMinCheck := true
 	lastMinCheck := time.Now()
+	lastProgress := time.Now()
 	associatedUpload := t.findAssociatedUpload(path)
 
 	// Snapshot transfer settings once to pick the copy strategy. The zero-copy
@@ -351,6 +362,7 @@ func (t *Transfer) SendFile(path string, position int64, expectedPeer string) pr
 		var n int64
 		var err error
 		if useSendfile {
+			_ = t.conn.SetWriteDeadline(time.Now().Add(dataWriteTimeout))
 			n, err = io.CopyN(t.conn, file, chunkSize)
 			if n > 0 {
 				t.transferred.Add(n)
@@ -359,6 +371,7 @@ func (t *Transfer) SendFile(path string, position int64, expectedPeer string) pr
 			var r int
 			r, err = file.Read(buf)
 			if r > 0 {
+				_ = t.conn.SetWriteDeadline(time.Now().Add(dataWriteTimeout))
 				written, werr := t.conn.Write(buf[:r])
 				if werr != nil {
 					return t.errorStatus(fmt.Sprintf("write error: %v", werr))
@@ -371,6 +384,9 @@ func (t *Transfer) SendFile(path string, position int64, expectedPeer string) pr
 				t.applyMaxSpeed()
 			}
 		}
+		if n > 0 {
+			lastProgress = time.Now()
+		}
 
 		if time.Since(lastStatus) >= transferStatusTick {
 			t.slave.writeStatusObject(&protocol.AsyncResponseTransferStatus{Status: t.currentStatus(false, "")})
@@ -381,16 +397,20 @@ func (t *Transfer) SendFile(path string, position int64, expectedPeer string) pr
 		}
 		if err != nil {
 			if err == io.EOF {
-				if associatedUpload != nil && !associatedUpload.isFinished() {
-					// Known live upload: keep following it (leech-while-upload).
-					time.Sleep(transferPollTick)
-					continue
+				// Find a live upload of this same file to follow (leech-while-upload).
+				// It may have registered after this send started, so re-check here.
+				live := associatedUpload
+				if live == nil || live.isFinished() {
+					live = t.findAssociatedUpload(path)
 				}
-				// The matching upload may have registered after this send started.
-				// Re-check at EOF so an FXP pull can follow the growing source file
-				// instead of ending with a truncated or 0-byte copy.
-				if again := t.findAssociatedUpload(path); again != nil && !again.isFinished() {
-					associatedUpload = again
+				if live != nil && !live.isFinished() {
+					// Following a growing source file. If it has produced no new bytes
+					// for too long the upload is stalled; give up so the client fails
+					// fast and retries instead of hanging until its own timeout.
+					if time.Since(lastProgress) >= leechFollowIdleLimit {
+						return t.errorStatus("source upload stalled while following (leech idle timeout)")
+					}
+					associatedUpload = live
 					time.Sleep(transferPollTick)
 					continue
 				}
