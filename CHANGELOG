@@ -17,6 +17,15 @@ Performance
   blocking the upload 226 response.
 
 Reliability
+- Fixed browsing getting slower the longer the daemon runs (fast after a restart,
+  then seconds to list a small folder). The slave stored a transfer entry for
+  every LISTEN/CONNECT data-channel setup but only removed it when a matching
+  receive/send actually ran; setups that were aborted, superseded, or never
+  connected (very common in FXP racing) leaked forever. That map is range-scanned
+  on every CWD into a race directory (for live-transfer stats), so the leak made
+  browsing progressively slower until a restart. Transfers are now reaped if a
+  receive/send never claims them within a grace window, and aborted-before-start
+  setups are dropped immediately.
 - Bounded the leech-while-upload "follow" in the slave send path. A download that
   was following a still-running upload of the same file would spin at EOF every
   100ms with no limit; if that upload stalled (but had not finished/aborted) the
@@ -32,7 +41,28 @@ Reliability
   leech-while-upload download that was following it and stops a stuck transfer
   from holding the master's completion wait for the full 2h timeout.
 
+Sitebot
+- NEW LEADER is now announced at most once per distinct racer per release, only on
+  a real overtake, and never in a single-racer race. Close parallel racing made the
+  byte-based leader flip-flop, re-announcing "X takes the lead" on nearly every file.
+
 Data integrity
+- Fixed a complete-on-disk file (commonly a .zip) listing at a SHORT size (e.g.
+  444k instead of 4.8M), which made cbftp race it short. A leech/duplicate
+  transfer could grow a weak VFS entry to a partial offset via UpdateFileTransferSize
+  while the authoritative completion for that entry never ran (the duplicate STOR
+  was rejected as "File exists"), leaving the size stuck. UpdateFileTransferSize
+  now refuses to touch an entry that already has a verified completion, and the
+  listing size-repair was widened from zero-size only to any unverified entry whose
+  VFS size is smaller than the race DB's verified size (restored from the DB).
+- Intermittently missing COMPLETE race-end announce. The announce only fired on the
+  hook of an SFV-listed file at the instant completeness flipped true; if that flapped
+  (a finishing parallel sibling still flagged "uploading"), the announce rode onto a
+  trailing non-SFV file (cover/.m3u/.nfo) that the old gate rejected, losing it. The
+  gate now fires on any file once the release is verified complete (dedup unchanged,
+  totals count only SFV files); a CRC-verified file counts present even if a stale
+  live-stat lists it uploading; and a post-hook-queue reap race that could drop the
+  task carrying the announce was closed.
 - Published in-progress .sfv uploads in the master VFS as soon as the selected
   slave accepts RECEIVE. This makes the SFV visible to early LIST/MLSD snapshots
   from racers instead of waiting for final transfer status.

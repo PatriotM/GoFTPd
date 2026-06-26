@@ -1234,7 +1234,15 @@ func emitReleaseUploadEventAndRace(s *Session, bridge MasterBridge, in releaseUp
 	if state.SFVEntries == nil || !state.RaceComplete {
 		return
 	}
-	if state.SFVUpload || zipscript.CanTriggerRaceEndForDir(s.Config.Zipscript, in.UploadDir, state.SFVEntries, in.FileName) {
+	// RaceComplete is already true here, so the release is verified complete. Emit
+	// the COMPLETE on ANY file's hook in an eligible race dir -- not only when the
+	// triggering file is the SFV or an SFV-listed file. Otherwise, if completeness
+	// flipped true on a file whose hook computed it false (a transient flap), the
+	// announce rode on a later trailing non-SFV file (cover/.m3u/.nfo) that the old
+	// SFV-membership gate rejected, losing the COMPLETE for good. markRaceCompleteOnce
+	// still dedups, and total/totalBytes count only SFV files so trailing files
+	// don't change the dedup key.
+	if state.SFVUpload || zipscript.RaceEndDirEligible(s.Config.Zipscript, in.UploadDir) {
 		if err := bridge.SyncReleaseRaceStats(in.UploadDir); err != nil && s.Config.Debug {
 			log.Printf("[MASTER-ZS] release race sync failed for %s: %v", in.UploadDir, err)
 		}

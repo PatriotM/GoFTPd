@@ -2517,7 +2517,8 @@ func emitRaceEndAfter(s *Session, dirPath string, users []VFSRaceUser, groups []
 }
 
 type releasePostHookQueue struct {
-	tasks chan func()
+	tasks   chan func()
+	pending int // in-flight enqueues, guarded by releasePostHookQueuesMu
 }
 
 var (
@@ -2534,6 +2535,12 @@ func enqueueReleasePostHook(dirPath string, task func()) {
 		key = "/"
 	}
 
+	// Reserve a slot under the lock (pending++) BEFORE sending outside the lock.
+	// The consumer only reaps the queue when pending==0 and the channel is empty,
+	// so it cannot delete the queue and exit between our lookup and our send --
+	// which would otherwise drop the task (and the COMPLETE announce it carries)
+	// into an orphaned channel. We send outside the lock so a full buffer can
+	// never stall the STOR hot path while holding the shared mutex.
 	releasePostHookQueuesMu.Lock()
 	q := releasePostHookQueues[key]
 	if q == nil {
@@ -2541,9 +2548,14 @@ func enqueueReleasePostHook(dirPath string, task func()) {
 		releasePostHookQueues[key] = q
 		go runReleasePostHookQueue(key, q)
 	}
+	q.pending++
 	releasePostHookQueuesMu.Unlock()
 
 	q.tasks <- task
+
+	releasePostHookQueuesMu.Lock()
+	q.pending--
+	releasePostHookQueuesMu.Unlock()
 }
 
 func runReleasePostHookQueue(key string, q *releasePostHookQueue) {
@@ -2565,7 +2577,7 @@ func runReleasePostHookQueue(key string, q *releasePostHookQueue) {
 			idle.Reset(30 * time.Second)
 		case <-idle.C:
 			releasePostHookQueuesMu.Lock()
-			if releasePostHookQueues[key] == q && len(q.tasks) == 0 {
+			if releasePostHookQueues[key] == q && len(q.tasks) == 0 && q.pending == 0 {
 				delete(releasePostHookQueues, key)
 				releasePostHookQueuesMu.Unlock()
 				return

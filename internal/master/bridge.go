@@ -409,14 +409,24 @@ func (b *Bridge) repairZeroSizeListEntries(dirPath string, files []*VFSFile) boo
 		return false
 	}
 
-	hasZeroSizeFile := false
+	// Trigger on any "suspect" entry: a zero-size file, or a non-zero file that has
+	// no verified completion recorded (XferTime==0 && Checksum==0). The latter is
+	// either a file still uploading (the DB has no verified record yet, so nothing
+	// is changed) or a stuck partial size left by a leech/duplicate transfer (e.g.
+	// a .zip frozen at 444k) -- which the DB's verified size will correct. A fully
+	// completed file carries a checksum, so a dir of verified files never triggers
+	// the DB query and stays on the zero-cost path.
+	needsRepair := false
 	for _, f := range files {
-		if f != nil && !f.IsDir && !f.IsSymlink && f.Size <= 0 {
-			hasZeroSizeFile = true
+		if f == nil || f.IsDir || f.IsSymlink {
+			continue
+		}
+		if f.Size <= 0 || (f.Checksum == 0 && f.XferTime == 0) {
+			needsRepair = true
 			break
 		}
 	}
-	if !hasZeroSizeFile {
+	if !needsRepair {
 		return false
 	}
 
@@ -451,11 +461,13 @@ func (b *Bridge) repairZeroSizeListEntries(dirPath string, files []*VFSFile) boo
 	repaired := false
 	repairedCount := 0
 	for _, f := range files {
-		if f == nil || f.IsDir || f.IsSymlink || f.Size > 0 {
+		if f == nil || f.IsDir || f.IsSymlink {
 			continue
 		}
 		rec := records[raceDBFileKey(filepath.Base(f.Path))]
-		if rec.SizeBytes <= 0 {
+		// Repair when the authoritative verified size is larger than what the VFS
+		// shows -- covers both a 0-byte entry and a stuck short partial (e.g. 444k).
+		if rec.SizeBytes <= 0 || rec.SizeBytes <= f.Size {
 			continue
 		}
 		if b.sm.GetVFS().HydrateRaceFile(f.Path, rec.Owner, rec.Group, rec.SizeBytes, rec.DurationMs, rec.Checksum) {

@@ -934,6 +934,7 @@ func (s *Slave) handleListen(ac *protocol.AsyncCommand) interface{} {
 	idx := atomic.AddInt32(&s.nextTransferIdx, 1)
 	t := NewTransfer(listener, nil, idx, s, encrypted, sslClientMode)
 	s.transfers.Store(idx, t)
+	time.AfterFunc(transferSetupReapGrace, func() { s.reapUnclaimedTransfer(idx) })
 
 	port := listener.Addr().(*net.TCPAddr).Port
 
@@ -976,6 +977,7 @@ func (s *Slave) handleConnect(ac *protocol.AsyncCommand) interface{} {
 	t := NewTransfer(nil, nil, idx, s, len(ac.Args) > 1 && ac.Args[1] == "true", len(ac.Args) > 2 && ac.Args[2] == "true")
 	t.SetActiveAddress(address)
 	s.transfers.Store(idx, t)
+	time.AfterFunc(transferSetupReapGrace, func() { s.reapUnclaimedTransfer(idx) })
 
 	return &protocol.AsyncResponseTransfer{
 		Index: ac.Index,
@@ -1098,9 +1100,31 @@ func (s *Slave) handleAbort(ac *protocol.AsyncCommand) interface{} {
 	if val, ok := s.transfers.Load(transferIdx); ok {
 		t := val.(*Transfer)
 		t.Abort(reason)
+		// If the transfer was never claimed by a receive/send, no defer will ever
+		// remove it from the map; drop it here so an aborted setup can't leak.
+		if !t.claimed.Load() {
+			s.removeTransfer(transferIdx)
+		}
 	}
 
 	return &protocol.AsyncResponse{Index: ac.Index}
+}
+
+// reapUnclaimedTransfer drops a LISTEN/CONNECT transfer that was set up but never
+// claimed by a receive/send within the grace window (so no defer will ever clean
+// it). Without this the slave's transfers map grows for the daemon's whole uptime
+// and the per-CWD race-stats scan over it gets progressively slower.
+func (s *Slave) reapUnclaimedTransfer(idx int32) {
+	val, ok := s.transfers.Load(idx)
+	if !ok {
+		return
+	}
+	t, ok := val.(*Transfer)
+	if !ok || t == nil || t.claimed.Load() {
+		return
+	}
+	t.Abort("setup timeout: transfer never started")
+	s.removeTransfer(idx)
 }
 
 func (s *Slave) handleTransferStats(ac *protocol.AsyncCommand) interface{} {

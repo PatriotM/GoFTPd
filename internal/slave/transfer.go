@@ -42,6 +42,13 @@ const (
 	// (and any leech-while-upload download following it) open indefinitely. Like
 	// drftpd, killing the stalled upload releases the follower immediately.
 	receiveIdleLimit = 30 * time.Second
+	// transferSetupReapGrace bounds how long a LISTEN/CONNECT transfer may sit in
+	// the slave's transfers map without a matching receive/send claiming it. Such
+	// an entry leaks forever otherwise (master timed out the listen, picked another
+	// slave, client never connected), and the map is range-scanned on every CWD
+	// race-stats request, so the leak makes browsing slower the longer the daemon
+	// runs. The grace is well beyond the normal listen->receive gap.
+	transferSetupReapGrace = 2 * time.Minute
 )
 
 // Transfer represents a data transfer on the slave side.
@@ -65,6 +72,7 @@ type Transfer struct {
 	transferred atomic.Int64
 	checksum    uint32
 	abortReason string
+	claimed     atomic.Bool // set once ReceiveFile/SendFile takes ownership
 	mu          sync.Mutex
 }
 
@@ -149,6 +157,7 @@ func (t *Transfer) SnapshotLiveStat() protocol.TransferLiveStat {
 // ReceiveFile receives data from the FTP client and writes to disk.
 // ().
 func (t *Transfer) ReceiveFile(path string, position int64, expectedPeer string) protocol.TransferStatus {
+	t.claimed.Store(true)
 	t.mu.Lock()
 	t.direction = TransferUnknown
 	t.started = time.Time{}
@@ -302,6 +311,7 @@ func cleanupFailedReceive(file *os.File, fullPath string, position int64) {
 // SendFile sends a file from disk to the FTP client.
 // ().
 func (t *Transfer) SendFile(path string, position int64, expectedPeer string) protocol.TransferStatus {
+	t.claimed.Store(true)
 	t.mu.Lock()
 	t.direction = TransferUnknown
 	t.started = time.Time{}
