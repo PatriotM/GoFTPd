@@ -1780,8 +1780,15 @@ func (vfs *VirtualFileSystem) GetZipRaceStatsFiltered(dirPath string, excludeKey
 }
 
 func raceFileKey(name string) string {
-	name = strings.TrimSpace(filepath.ToSlash(name))
-	name = strings.TrimPrefix(name, "./")
+	name = strings.TrimSpace(filepath.ToSlash(strings.ReplaceAll(name, "\\", "/")))
+	name = strings.TrimPrefix(name, "\ufeff")
+	for strings.HasPrefix(name, "./") {
+		name = strings.TrimPrefix(name, "./")
+	}
+	if idx := strings.LastIndex(name, "/"); idx >= 0 {
+		name = name[idx+1:]
+	}
+	name = strings.TrimPrefix(strings.TrimSpace(name), "\ufeff")
 	return strings.ToLower(name)
 }
 

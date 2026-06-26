@@ -1534,6 +1534,7 @@ func (s *Slave) handleSFVFile(ac *protocol.AsyncCommand) interface{} {
 
 func parseSFVEntryLine(line string) (protocol.SFVEntry, bool) {
 	line = strings.TrimRight(line, "\r\n")
+	line = strings.TrimPrefix(line, "\ufeff")
 	if strings.TrimSpace(line) == "" {
 		return protocol.SFVEntry{}, false
 	}
@@ -1566,6 +1567,7 @@ func parseSFVEntryLine(line string) (protocol.SFVEntry, bool) {
 		sep--
 	}
 	fileName := strings.TrimSpace(line[:sep])
+	fileName = strings.TrimPrefix(fileName, "\ufeff")
 	if fileName == "" {
 		return protocol.SFVEntry{}, false
 	}

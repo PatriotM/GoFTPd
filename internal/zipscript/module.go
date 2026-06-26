@@ -1200,7 +1200,13 @@ func IsMediaInfoFile(fileName string) bool {
 }
 
 func raceEntryKey(fileName string) string {
-	name := strings.TrimSpace(path.Base(strings.ReplaceAll(fileName, "\\", "/")))
+	name := strings.TrimSpace(strings.ReplaceAll(fileName, "\\", "/"))
+	name = strings.TrimPrefix(name, "\ufeff")
+	for strings.HasPrefix(name, "./") {
+		name = strings.TrimPrefix(name, "./")
+	}
+	name = strings.TrimSpace(path.Base(name))
+	name = strings.TrimPrefix(name, "\ufeff")
 	return strings.ToLower(name)
 }
 

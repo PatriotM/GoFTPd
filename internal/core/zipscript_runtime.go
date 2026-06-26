@@ -421,6 +421,27 @@ func criticalUploadHasRealContent(bridge MasterBridge, filePath, fileName string
 	return false
 }
 
+func ensureSFVDataAvailable(cfg *Config, bridge MasterBridge, dirPath string) map[string]uint32 {
+	if bridge == nil {
+		return nil
+	}
+	if sfvEntries := bridge.GetSFVData(dirPath); sfvEntries != nil {
+		return sfvEntries
+	}
+	sfvName := firstSFVNameInDir(bridge, dirPath)
+	if sfvName == "" {
+		return nil
+	}
+	info, err := bridge.GetSFVInfo(path.Join(dirPath, sfvName))
+	if err != nil || len(info.Entries) == 0 {
+		return nil
+	}
+	log.Printf("[MASTER-ZS] Recovered uncached SFV %s: %d entries", sfvName, len(info.Entries))
+	bridge.CacheSFV(dirPath, sfvName, info)
+	verifyExistingPayloadsAfterSFVUpload(cfg, bridge, dirPath)
+	return bridge.GetSFVData(dirPath)
+}
+
 // maybeGenerateReleaseM3U creates an .m3u playlist from the SFV for a completed
 // MP3 release (pzs-ng create_m3u behaviour). goftpd does not otherwise produce
 // an m3u, so without this an outbound race / link script can complete before a
@@ -472,7 +493,7 @@ func handleMasterUploadSFVStatusAndCleanup(s *Session, bridge MasterBridge, uplo
 		return false
 	}
 
-	sfvEntries := bridge.GetSFVData(uploadDir)
+	sfvEntries := ensureSFVDataAvailable(s.Config, bridge, uploadDir)
 	expectedCRC, exists := zipscript.CachedExpectedCRC(sfvEntries, fileName)
 	if !exists {
 		zipscript.WriteUploadNoSFVEntryStatus(s.Conn, sfvEntries, fileName)
@@ -1143,18 +1164,10 @@ func buildReleaseUploadPipelineState(s *Session, bridge MasterBridge, in release
 	}
 	state.SFVEntries = bridge.GetSFVData(in.UploadDir)
 	if state.SFVEntries == nil && !state.SFVUpload {
-		// Self-heal: a .sfv is present on the slave but was never cached (its own
-		// upload-time parse was missed/raced). Parse it now from the slave so the
-		// release is tracked and can be CRC-checked and announced complete, instead
-		// of staying silently un-checked.
-		if sfvName := firstSFVNameInDir(bridge, in.UploadDir); sfvName != "" {
-			if info, err := bridge.GetSFVInfo(path.Join(in.UploadDir, sfvName)); err == nil && len(info.Entries) > 0 {
-				log.Printf("[MASTER-ZS] Recovered uncached SFV %s: %d entries", sfvName, len(info.Entries))
-				bridge.CacheSFV(in.UploadDir, sfvName, info)
-				verifyExistingPayloadsAfterSFVUpload(s.Config, bridge, in.UploadDir)
-				state.SFVEntries = bridge.GetSFVData(in.UploadDir)
-			}
-		}
+		// Self-heal: a .sfv is present on the slave but was never cached (or the
+		// cache was invalidated by weak VFS metadata). Parse it now from the slave
+		// so the release is tracked, CRC-checked, and eligible for COMPLETE.
+		state.SFVEntries = ensureSFVDataAvailable(s.Config, bridge, in.UploadDir)
 	}
 	if state.SFVEntries != nil {
 		syncMasterSFVMissingMarkers(s.Config, bridge, in.UploadDir)

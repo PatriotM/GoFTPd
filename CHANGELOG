@@ -47,6 +47,10 @@ Sitebot
   byte-based leader flip-flop, re-announcing "X takes the lead" on nearly every file.
 
 Data integrity
+- Fixed SFV checks/COMPLETE missing for releases whose .sfv listed payloads with
+  a UTF-8 BOM or path prefix (for example `./disc/file.r00`). The master cached
+  those names differently from the zipscript lookup, so one expected file stayed
+  invisible even though it was present and checksum-valid.
 - Fixed a release that was never SFV-checked or announced complete even though the
   .sfv was present on disk. The 0-byte critical-file reject deleted/blocked a good
   .sfv whenever the master momentarily measured it as 0 bytes, so it was never

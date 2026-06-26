@@ -40,7 +40,7 @@ func TestLocalExpectedCRCForFile(t *testing.T) {
 
 func TestLocalSFVEntriesForDir(t *testing.T) {
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "release.sfv"), []byte("Sample.RAR 11223344\nother.r00 AABBCCDD\n"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "release.sfv"), []byte("\ufeffSample.RAR 11223344\n./disc/other.r00 AABBCCDD\n"), 0644); err != nil {
 		t.Fatalf("write sfv: %v", err)
 	}
 
@@ -50,6 +50,9 @@ func TestLocalSFVEntriesForDir(t *testing.T) {
 	}
 	if crc, ok := CachedExpectedCRC(entries, "sample.rar"); !ok || crc != 0x11223344 {
 		t.Fatalf("expected case-insensitive lookup to work, got %08X %v", crc, ok)
+	}
+	if crc, ok := CachedExpectedCRC(entries, "other.r00"); !ok || crc != 0xAABBCCDD {
+		t.Fatalf("expected path-prefixed SFV entry lookup to work, got %08X %v", crc, ok)
 	}
 }
 

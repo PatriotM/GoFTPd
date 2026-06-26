@@ -1242,8 +1242,8 @@ func TestVFSGetReleaseStatusForSFVUsesNormalizedPresentFileKeys(t *testing.T) {
 	vfs.AddFile("/MP3/release", VFSFile{IsDir: true, Seen: true})
 	vfs.AddFile("/MP3/release/release.sfv", VFSFile{Seen: true, Size: 10, Checksum: 123})
 	vfs.SetSFVDataWithChecksum("/MP3/release", "release.sfv", 123, map[string]uint32{
-		"01-Track.MP3": 1,
-		"02-track.mp3": 2,
+		"\ufeff01-Track.MP3":  1,
+		"./disc/02-track.mp3": 2,
 	})
 	vfs.AddFile("/MP3/release/01-track.mp3", VFSFile{Seen: true, Size: 100, Checksum: 1})
 
