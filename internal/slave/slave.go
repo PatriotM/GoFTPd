@@ -1526,6 +1526,7 @@ func (s *Slave) handleSFVFile(ac *protocol.AsyncCommand) interface{} {
 			SFVName:  filepath.Base(sfvPath),
 			Entries:  entries,
 			Checksum: h.Sum32(),
+			Size:     int64(len(data)),
 		}
 	}
 

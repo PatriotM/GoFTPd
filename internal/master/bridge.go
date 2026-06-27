@@ -1928,7 +1928,7 @@ func (b *Bridge) GetSFVInfo(sfvPath string) (core.SFVInfo, error) {
 			for i, e := range sfv.Entries {
 				entries[i] = core.SFVEntryInfo{FileName: e.FileName, CRC32: e.CRC32}
 			}
-			return core.SFVInfo{Entries: entries, Checksum: sfv.Checksum}, nil
+			return core.SFVInfo{Entries: entries, Checksum: sfv.Checksum, Size: sfv.Size}, nil
 		}
 
 		lastErr = fmt.Errorf("%s: unexpected response type: %T", slave.Name(), resp)
@@ -2308,6 +2308,12 @@ func (b *Bridge) CacheSFV(dirPath string, sfvName string, info core.SFVInfo) {
 		sfvMap[e.FileName] = e.CRC32
 	}
 	b.sm.GetVFS().SetSFVDataWithChecksum(dirPath, sfvName, info.Checksum, sfvMap)
+	if info.Size > 0 || info.Checksum != 0 {
+		sfvPath := path.Join(dirPath, sfvName)
+		if b.sm.GetVFS().HydrateRaceFile(sfvPath, "", "", info.Size, 0, info.Checksum) {
+			b.invalidateReadFileCache(sfvPath)
+		}
+	}
 	if b.raceDB != nil {
 		if err := b.raceDB.SaveSFV(filepath.Clean(dirPath), sfvName, sfvMap); err != nil {
 			log.Printf("[Bridge] Race DB SFV sync failed for %s: %v", dirPath, err)

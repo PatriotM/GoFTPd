@@ -79,6 +79,41 @@ func TestCacheSFVKeepsLiveRaceWindow(t *testing.T) {
 	}
 }
 
+func TestCacheSFVHydratesWeakSFVEntry(t *testing.T) {
+	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60)
+	bridge := &Bridge{sm: sm}
+	dirPath := "/X265/release"
+	sfvPath := dirPath + "/release.sfv"
+	const sfvSize int64 = 123
+	const sfvChecksum uint32 = 0xAABBCCDD
+
+	sm.GetVFS().AddFile(sfvPath, VFSFile{
+		Path:      sfvPath,
+		Size:      0,
+		SlaveName: "LOCAL",
+		Owner:     "steel",
+		Group:     "iND",
+		Seen:      true,
+	})
+	bridge.CacheSFV(dirPath, "release.sfv", core.SFVInfo{
+		Entries:  []core.SFVEntryInfo{{FileName: "file.r00", CRC32: 1}},
+		Checksum: sfvChecksum,
+		Size:     sfvSize,
+	})
+
+	got := sm.GetVFS().GetFile(sfvPath)
+	if got == nil {
+		t.Fatalf("expected sfv entry")
+	}
+	if got.Size != sfvSize || got.Checksum != sfvChecksum {
+		t.Fatalf("expected hydrated sfv size/checksum, got size=%d checksum=%08X", got.Size, got.Checksum)
+	}
+	entries := bridge.ListDir(dirPath)
+	if len(entries) != 1 || entries[0].Name != "release.sfv" || entries[0].Size != sfvSize {
+		t.Fatalf("expected listing to expose hydrated sfv, got %+v", entries)
+	}
+}
+
 func TestPendingSFVUploadVisibleOnlyThroughBridge(t *testing.T) {
 	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60)
 	bridge := &Bridge{sm: sm}

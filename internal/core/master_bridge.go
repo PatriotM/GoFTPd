@@ -272,6 +272,7 @@ type SFVEntryInfo struct {
 type SFVInfo struct {
 	Entries  []SFVEntryInfo
 	Checksum uint32
+	Size     int64
 }
 
 // VFSRaceUser holds per-user race stats from VFS.
