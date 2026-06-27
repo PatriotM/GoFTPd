@@ -422,7 +422,7 @@ zipscript:
       # plus GOFTPD_<KEY> for zipscript race vars such as T_MBYTES/T_FILES/etc.
 
   sfv:
-    force_first: false         # pzs-ng style: allow payload before .sfv; the release is checked once the .sfv lands
+    force_first: true          # require .sfv before top-level payloads in SFV sections
     deny_double_sfv: true      # reject a second .sfv in the same release dir
     restrict_files: true       # once an .sfv exists, payload files should be listed in it
     delete_bad_crc: true       # delete uploaded files that fail SFV CRC

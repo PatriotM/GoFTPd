@@ -47,6 +47,10 @@ Sitebot
   byte-based leader flip-flop, re-announcing "X takes the lead" on nearly every file.
 
 Data integrity
+- Tightened SFV-first enforcement for SFV sections: top-level media/container
+  payloads (`.mkv`, `.mp4`, `.avi`, `.vob`, `.m2ts`, `.zip`) no longer bypass
+  the "upload .sfv first" rule by default. They were treated as outside-SFV
+  extras, which could leave real releases with payload files but no .sfv.
 - Fixed SFV checks/COMPLETE missing for releases whose .sfv listed payloads with
   a UTF-8 BOM or path prefix (for example `./disc/file.r00`). The master cached
   those names differently from the zipscript lookup, so one expected file stayed
