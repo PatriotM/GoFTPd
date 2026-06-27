@@ -37,7 +37,16 @@ type Bridge struct {
 	liveTransferStatsMu    sync.Mutex
 	transferSpeedPolicy    func(username, primaryGroup, transferPath, direction string) (int64, int64, int64)
 
-	uploadRecords chan uploadRecord // async race-DB upload writes, off the 226 path
+	pendingUploads sync.Map          // clean virtual path -> pendingUpload, visible to FTP listings only
+	uploadRecords  chan uploadRecord // async race-DB upload writes, off the 226 path
+}
+
+type pendingUpload struct {
+	path      string
+	slaveName string
+	owner     string
+	group     string
+	started   time.Time
 }
 
 type uploadRecord struct {
@@ -65,6 +74,7 @@ const (
 	readFileCacheTTL          = 2 * time.Second
 	liveTransferStatsCacheTTL = 1 * time.Second
 	bridgeTransferBufferSize  = 4 * 1024 * 1024
+	pendingUploadTTL          = 10 * time.Minute
 )
 
 var bridgeTransferBufferPool = sync.Pool{
@@ -380,17 +390,143 @@ func (b *Bridge) ListDir(dirPath string) []core.MasterFileEntry {
 		vfsFiles = b.sm.GetVFS().ListDirectory(dirPath)
 	}
 	entries := make([]core.MasterFileEntry, 0, len(vfsFiles)+3)
+	seen := make(map[string]struct{}, len(vfsFiles))
 	for _, f := range vfsFiles {
 		if f == nil {
 			continue
 		}
 		entries = append(entries, masterEntryFromVFSFile(f))
+		seen[strings.ToLower(strings.TrimSpace(path.Base(f.Path)))] = struct{}{}
+	}
+	for _, entry := range b.pendingUploadEntriesForDir(dirPath) {
+		if _, ok := seen[strings.ToLower(strings.TrimSpace(entry.Name))]; ok {
+			b.clearPendingUpload(path.Join(dirPath, entry.Name))
+			continue
+		}
+		entries = append(entries, entry)
 	}
 	entries = append(entries, b.virtualNukeEntries(dirPath)...)
 	sort.SliceStable(entries, func(i, j int) bool {
 		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
 	})
 	return entries
+}
+
+func (b *Bridge) notePendingUpload(filePath, slaveName, owner, group string, position int64) {
+	if b == nil || position > 0 || !isPendingUploadListVisible(filePath) {
+		return
+	}
+	cleanPath := cleanBridgePath(filePath)
+	b.pendingUploads.Store(cleanPath, pendingUpload{
+		path:      cleanPath,
+		slaveName: strings.TrimSpace(slaveName),
+		owner:     strings.TrimSpace(owner),
+		group:     strings.TrimSpace(group),
+		started:   time.Now(),
+	})
+}
+
+func (b *Bridge) clearPendingUpload(filePath string) {
+	if b == nil {
+		return
+	}
+	b.pendingUploads.Delete(cleanBridgePath(filePath))
+}
+
+func (b *Bridge) pendingUploadForPath(filePath string) (pendingUpload, bool) {
+	if b == nil {
+		return pendingUpload{}, false
+	}
+	cleanPath := cleanBridgePath(filePath)
+	val, ok := b.pendingUploads.Load(cleanPath)
+	if !ok {
+		return pendingUpload{}, false
+	}
+	pu, ok := val.(pendingUpload)
+	if !ok || time.Since(pu.started) > pendingUploadTTL {
+		b.pendingUploads.Delete(cleanPath)
+		return pendingUpload{}, false
+	}
+	return pu, true
+}
+
+func (b *Bridge) pendingUploadEntriesForDir(dirPath string) []core.MasterFileEntry {
+	if b == nil {
+		return nil
+	}
+	cleanDir := cleanBridgePath(dirPath)
+	now := time.Now()
+	out := make([]core.MasterFileEntry, 0, 1)
+	b.pendingUploads.Range(func(key, value interface{}) bool {
+		pu, ok := value.(pendingUpload)
+		if !ok || now.Sub(pu.started) > pendingUploadTTL {
+			b.pendingUploads.Delete(key)
+			return true
+		}
+		if cleanBridgePath(path.Dir(pu.path)) != cleanDir {
+			return true
+		}
+		out = append(out, pendingUploadEntry(pu))
+		return true
+	})
+	return out
+}
+
+func pendingUploadEntry(pu pendingUpload) core.MasterFileEntry {
+	owner := pu.owner
+	if owner == "" {
+		owner = "GoFTPd"
+	}
+	group := pu.group
+	if group == "" {
+		group = "GoFTPd"
+	}
+	modTime := pu.started.Unix()
+	if modTime <= 0 {
+		modTime = time.Now().Unix()
+	}
+	return core.MasterFileEntry{
+		Name:    path.Base(pu.path),
+		Size:    1,
+		ModTime: modTime,
+		Owner:   owner,
+		Group:   group,
+		Slave:   pu.slaveName,
+	}
+}
+
+func isPendingUploadListVisible(filePath string) bool {
+	name := strings.ToLower(strings.TrimSpace(path.Base(filePath)))
+	return strings.HasSuffix(name, ".sfv")
+}
+
+func cleanBridgePath(filePath string) string {
+	cleanPath := filepath.ToSlash(filepath.Clean(strings.TrimSpace(filePath)))
+	if cleanPath == "." || cleanPath == "" {
+		return "/"
+	}
+	if !strings.HasPrefix(cleanPath, "/") {
+		cleanPath = "/" + cleanPath
+	}
+	return path.Clean(cleanPath)
+}
+
+func (b *Bridge) selectSlaveForDownloadIncludingPending(filePath string) *RemoteSlave {
+	if b == nil || b.sm == nil {
+		return nil
+	}
+	if slave := b.sm.SelectSlaveForDownload(filePath); slave != nil {
+		return slave
+	}
+	pu, ok := b.pendingUploadForPath(filePath)
+	if !ok || strings.TrimSpace(pu.slaveName) == "" {
+		return nil
+	}
+	slave := b.sm.GetSlave(pu.slaveName)
+	if slave == nil || !slave.IsOnline() {
+		return nil
+	}
+	return slave
 }
 
 // zeroSizeRepairCache throttles only the per-directory DB query below (not the
@@ -689,7 +825,8 @@ func (b *Bridge) UploadFile(filePath string, clientData net.Conn, owner, group s
 		slaveConn.Close()
 		return 0, 0, fmt.Errorf("receive ack: %w", err)
 	}
-	b.publishUploadStart(filePath, slave.Name(), owner, group, position)
+	b.notePendingUpload(filePath, slave.Name(), owner, group, position)
+	defer b.clearPendingUpload(filePath)
 
 	// Bridge: client -> slave. The slave calculates and returns the authoritative CRC.
 	bridgeStart := time.Now()
@@ -761,31 +898,6 @@ func finalUploadFileSize(status protocol.TransferStatus, position int64) int64 {
 	return status.Transferred
 }
 
-func (b *Bridge) publishUploadStart(filePath, slaveName, owner, group string, position int64) {
-	if b == nil || b.sm == nil || b.sm.GetVFS() == nil || position > 0 || !isEarlyListSensitiveUpload(filePath) {
-		return
-	}
-
-	// Tiny metadata files are often listed immediately by racers; publish a
-	// non-zero placeholder so early LIST/MLSD snapshots include them.
-	b.sm.GetVFS().AddFile(filePath, VFSFile{
-		Path:         filePath,
-		Size:         1,
-		IsDir:        false,
-		LastModified: time.Now().Unix(),
-		SlaveName:    slaveName,
-		Owner:        owner,
-		Group:        group,
-		Seen:         true,
-	})
-	b.sm.SyncStatusMarkersForPath(filePath, false)
-}
-
-func isEarlyListSensitiveUpload(filePath string) bool {
-	name := strings.ToLower(strings.TrimSpace(path.Base(filePath)))
-	return strings.HasSuffix(name, ".sfv")
-}
-
 func (b *Bridge) repairDownloadedFileSize(filePath string, sizeBytes int64) {
 	if b == nil || b.sm == nil || b.sm.GetVFS() == nil || sizeBytes <= 0 {
 		return
@@ -844,7 +956,7 @@ func (b *Bridge) writeUploadRecord(rec uploadRecord) {
 //  4. Tell slave to SEND the file
 //  5. Bridge data: read from slave, write to clientData
 func (b *Bridge) DownloadFile(filePath string, clientData net.Conn, username, primaryGroup string, position int64, transferType byte) (uint32, error) {
-	slave := b.sm.SelectSlaveForDownload(filePath)
+	slave := b.selectSlaveForDownloadIncludingPending(filePath)
 	if slave == nil {
 		return 0, fmt.Errorf("file not found on any available slave: %s", filePath)
 	}
@@ -921,6 +1033,7 @@ func (b *Bridge) DownloadFile(filePath string, clientData net.Conn, username, pr
 
 // DeleteFile deletes from all slaves and VFS.
 func (b *Bridge) DeleteFile(filePath string) error {
+	b.clearPendingUpload(filePath)
 	vfsFile := b.sm.GetVFS().GetFile(filePath)
 	err := b.sm.DeleteFile(filePath)
 	if err != nil {
@@ -1580,6 +1693,9 @@ func (b *Bridge) Chmod(path string, mode uint32) error {
 func (b *Bridge) GetFileSize(filePath string) int64 {
 	f := b.sm.GetVFS().GetFile(filePath)
 	if f == nil {
+		if _, ok := b.pendingUploadForPath(filePath); ok {
+			return 1
+		}
 		return -1
 	}
 	return f.Size
@@ -1588,6 +1704,9 @@ func (b *Bridge) GetFileSize(filePath string) int64 {
 func (b *Bridge) GetPathEntry(filePath string) (core.MasterFileEntry, bool) {
 	f := b.sm.GetVFS().GetFile(filePath)
 	if f == nil {
+		if pu, ok := b.pendingUploadForPath(filePath); ok {
+			return pendingUploadEntry(pu), true
+		}
 		return core.MasterFileEntry{}, false
 	}
 	return masterEntryFromVFSFile(f), true
@@ -1602,7 +1721,11 @@ func (b *Bridge) ResolvePath(filePath string) string {
 
 // FileExists checks if a path exists in the VFS.
 func (b *Bridge) FileExists(filePath string) bool {
-	return b.sm.GetVFS().FileExists(filePath)
+	if b.sm.GetVFS().FileExists(filePath) {
+		return true
+	}
+	_, ok := b.pendingUploadForPath(filePath)
+	return ok
 }
 
 func (b *Bridge) GetKnownChecksum(filePath string) (uint32, bool) {
@@ -2547,7 +2670,7 @@ func (b *Bridge) SlaveListenForPassthrough(uploadPath string, encrypted bool, ss
 // SlaveListenForDownloadPassthrough asks the slave that owns filePath to open
 // a listener for direct client download.
 func (b *Bridge) SlaveListenForDownloadPassthrough(filePath string, encrypted bool, sslClientMode bool) (string, int, int32, string, error) {
-	slave := b.sm.SelectSlaveForDownload(filePath)
+	slave := b.selectSlaveForDownloadIncludingPending(filePath)
 	if slave == nil {
 		return "", 0, 0, "", fmt.Errorf("file not found on any available slave: %s", filePath)
 	}
@@ -2592,7 +2715,8 @@ func (b *Bridge) SlaveReceivePassthrough(filePath string, transferIdx int32, sla
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("receive ack: %w", err)
 	}
-	b.publishUploadStart(filePath, slaveName, owner, group, position)
+	b.notePendingUpload(filePath, slaveName, owner, group, position)
+	defer b.clearPendingUpload(filePath)
 
 	// Wait for transfer to complete — poll the RemoteTransfer status
 	status, err := slave.WaitTransferStatus(transferIdx, 2*time.Hour)
@@ -2730,7 +2854,8 @@ func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group strin
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("receive ack: %w", err)
 	}
-	b.publishUploadStart(filePath, slave.Name(), owner, group, position)
+	b.notePendingUpload(filePath, slave.Name(), owner, group, position)
+	defer b.clearPendingUpload(filePath)
 
 	status, err := slave.WaitTransferStatus(transferResp.Info.TransferIndex, 2*time.Hour)
 	if err != nil {
@@ -2774,7 +2899,7 @@ func (b *Bridge) SlaveConnectAndReceive(filePath, remoteAddr, owner, group strin
 // SlaveConnectAndSend tells the owning slave to connect out to a remote address (PORT mode passthrough)
 // and send a file directly. The master only orchestrates the control flow.
 func (b *Bridge) SlaveConnectAndSend(filePath, remoteAddr, username, primaryGroup string, position int64, encrypted bool, sslClientMode bool, transferType byte, onReady core.TransferReadyFunc) (uint32, int64, error) {
-	slave := b.sm.SelectSlaveForDownload(filePath)
+	slave := b.selectSlaveForDownloadIncludingPending(filePath)
 	if slave == nil {
 		return 0, 0, fmt.Errorf("file not found on any available slave: %s", filePath)
 	}

@@ -62,48 +62,6 @@ func TestFinalUploadFileSizeFallsBackToResumeOffset(t *testing.T) {
 	}
 }
 
-func TestEarlyListSensitiveUploadOnlyMatchesSFV(t *testing.T) {
-	tests := []struct {
-		path string
-		want bool
-	}{
-		{path: "/MP3/0618/Release/Release.SFV", want: true},
-		{path: "/MP3/0618/Release/Release.sfv ", want: true},
-		{path: "/MP3/0618/Release/Release.nfo", want: false},
-		{path: "/MP3/0618/Release/Release.r00", want: false},
-	}
-
-	for _, tt := range tests {
-		if got := isEarlyListSensitiveUpload(tt.path); got != tt.want {
-			t.Fatalf("isEarlyListSensitiveUpload(%q) = %v, want %v", tt.path, got, tt.want)
-		}
-	}
-}
-
-func TestPublishUploadStartOnlyPublishesSFVPlaceholder(t *testing.T) {
-	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60)
-	bridge := &Bridge{sm: sm}
-
-	bridge.publishUploadStart("/MP3/0618/Release/Release.sfv", "LOCAL", "steel", "iND", 0)
-	sfv := sm.GetVFS().GetFile("/MP3/0618/Release/Release.sfv")
-	if sfv == nil {
-		t.Fatalf("expected SFV placeholder")
-	}
-	if sfv.Size != 1 || sfv.SlaveName != "LOCAL" || sfv.Owner != "steel" || sfv.Group != "iND" {
-		t.Fatalf("bad SFV placeholder: %+v", sfv)
-	}
-
-	bridge.publishUploadStart("/MP3/0618/Release/Release.r00", "LOCAL", "steel", "iND", 0)
-	if got := sm.GetVFS().GetFile("/MP3/0618/Release/Release.r00"); got != nil {
-		t.Fatalf("expected non-SFV upload to stay unpublished, got %+v", got)
-	}
-
-	bridge.publishUploadStart("/MP3/0618/Release/Resume.sfv", "LOCAL", "steel", "iND", 128)
-	if got := sm.GetVFS().GetFile("/MP3/0618/Release/Resume.sfv"); got != nil {
-		t.Fatalf("expected resumed SFV upload to stay unpublished, got %+v", got)
-	}
-}
-
 func TestCacheSFVKeepsLiveRaceWindow(t *testing.T) {
 	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60)
 	bridge := &Bridge{sm: sm}
@@ -118,6 +76,85 @@ func TestCacheSFVKeepsLiveRaceWindow(t *testing.T) {
 	// seed at 1000, so the live window is 100ms and survives the SFV cache.
 	if got := sm.GetReleaseRaceWindowMilliseconds("/X265/release"); got != 100 {
 		t.Fatalf("race window after SFV cache = %dms, want 100ms", got)
+	}
+}
+
+func TestPendingSFVUploadVisibleOnlyThroughBridge(t *testing.T) {
+	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60)
+	bridge := &Bridge{sm: sm}
+	dirPath := "/MP3/0618/Release"
+	filePath := dirPath + "/Release.sfv"
+
+	bridge.notePendingUpload(filePath, "LOCAL", "steel", "iND", 0)
+
+	if got := sm.GetVFS().GetFile(filePath); got != nil {
+		t.Fatalf("pending upload must not create a completed VFS file, got %+v", got)
+	}
+	if meta := sm.GetVFS().GetSFVData(dirPath); meta != nil {
+		t.Fatalf("pending upload must not create readable SFV metadata, got %+v", meta)
+	}
+
+	entries := bridge.ListDir(dirPath)
+	if len(entries) != 1 {
+		t.Fatalf("expected pending sfv to be listed through bridge, got %+v", entries)
+	}
+	if entries[0].Name != "Release.sfv" || entries[0].Size != 1 || entries[0].Slave != "LOCAL" {
+		t.Fatalf("bad pending sfv entry: %+v", entries[0])
+	}
+	if size := bridge.GetFileSize(filePath); size != 1 {
+		t.Fatalf("expected pending sfv size hint 1, got %d", size)
+	}
+	if entry, ok := bridge.GetPathEntry(filePath); !ok || entry.Name != "Release.sfv" {
+		t.Fatalf("expected pending sfv path entry, got %+v %v", entry, ok)
+	}
+	if !bridge.FileExists(filePath) {
+		t.Fatalf("expected pending sfv to exist for FTP command routing")
+	}
+
+	bridge.clearPendingUpload(filePath)
+	if entries := bridge.ListDir(dirPath); len(entries) != 0 {
+		t.Fatalf("expected pending sfv to disappear after clear, got %+v", entries)
+	}
+}
+
+func TestPendingSFVUploadDoesNotOverrideCompletedVFSFile(t *testing.T) {
+	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60)
+	bridge := &Bridge{sm: sm}
+	dirPath := "/MP3/0618/Release"
+	filePath := dirPath + "/Release.sfv"
+
+	sm.GetVFS().AddFile(filePath, VFSFile{
+		Path:      filePath,
+		Size:      2048,
+		SlaveName: "LOCAL",
+		Checksum:  123,
+		XferTime:  50,
+		Seen:      true,
+	})
+	bridge.notePendingUpload(filePath, "LOCAL", "steel", "iND", 0)
+
+	entries := bridge.ListDir(dirPath)
+	if len(entries) != 1 || entries[0].Size != 2048 {
+		t.Fatalf("expected completed VFS file to win over pending overlay, got %+v", entries)
+	}
+	if _, ok := bridge.pendingUploadForPath(filePath); ok {
+		t.Fatalf("expected pending overlay to be cleared once VFS has the real file")
+	}
+}
+
+func TestPendingSFVUploadRoutesDownloadToOwningSlave(t *testing.T) {
+	sm := NewSlaveManager("127.0.0.1", 1099, false, "", "", 60)
+	rs := &RemoteSlave{name: "LOCAL"}
+	rs.online.Store(true)
+	rs.available.Store(true)
+	sm.slaves["LOCAL"] = rs
+
+	bridge := &Bridge{sm: sm}
+	filePath := "/MP3/0618/Release/Release.sfv"
+	bridge.notePendingUpload(filePath, "LOCAL", "steel", "iND", 0)
+
+	if slave := bridge.selectSlaveForDownloadIncludingPending(filePath); slave != rs {
+		t.Fatalf("expected pending sfv to route to LOCAL, got %+v", slave)
 	}
 }
 

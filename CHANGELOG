@@ -47,6 +47,11 @@ Sitebot
   byte-based leader flip-flop, re-announcing "X takes the lead" on nearly every file.
 
 Data integrity
+- Replaced the in-progress `.sfv` fake VFS placeholder with a bridge-level
+  pending-upload overlay. FTP listings can still show a just-started `.sfv` so
+  cbftp queues it, and download routing can target the owning slave, but SFV
+  parsing/completion logic no longer treats that pending file as completed VFS
+  truth until the final transfer status lands.
 - Fixed SFV checks/COMPLETE missing for releases whose .sfv listed payloads with
   a UTF-8 BOM or path prefix (for example `./disc/file.r00`). The master cached
   those names differently from the zipscript lookup, so one expected file stayed
@@ -76,9 +81,6 @@ Data integrity
   totals count only SFV files); a CRC-verified file counts present even if a stale
   live-stat lists it uploading; and a post-hook-queue reap race that could drop the
   task carrying the announce was closed.
-- Published in-progress .sfv uploads in the master VFS as soon as the selected
-  slave accepts RECEIVE. This makes the SFV visible to early LIST/MLSD snapshots
-  from racers instead of waiting for final transfer status.
 - Fixed a remerge purge race that deleted just-uploaded files (incl. the .sfv)
   during a live race. Uploads are added to the VFS, but a concurrent remerge
   marks files unseen at scan start and purges anything still unseen at the end;
