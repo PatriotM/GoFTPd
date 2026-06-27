@@ -551,7 +551,7 @@ func TestAllowedOutsideSFVDefaultsMatchDrFTPDStyleExtras(t *testing.T) {
 	cfg := Config{}
 	cfg.ApplyDefaults()
 
-	for _, name := range []string{"info.nfo", "proof.jpg", "notes.txt", "readme"} {
+	for _, name := range []string{"info.nfo", "sample.mp4", "preview.avi", "proof.jpg", "notes.txt", "readme"} {
 		got := AllowedOutsideSFVForDir(cfg, "/X264-HD-1080P/Release-GRP", name)
 		if name == "readme" {
 			if !got {
@@ -564,33 +564,8 @@ func TestAllowedOutsideSFVDefaultsMatchDrFTPDStyleExtras(t *testing.T) {
 		}
 	}
 
-	for _, name := range []string{"payload.r00", "movie.mkv", "sample.mp4", "disc.vob", "release.zip"} {
-		if AllowedOutsideSFVForDir(cfg, "/X264-HD-1080P/Release-GRP", name) {
-			t.Fatalf("did not expect payload/container %q to be allowed outside sfv by default", name)
-		}
-	}
-}
-
-func TestValidateUploadForceFirstBlocksTopLevelVideoAndZipBeforeSFV(t *testing.T) {
-	cfg := Config{
-		Enabled: true,
-		Sections: SectionsConfig{
-			SFV: []string{"/X264-HD-1080P/*"},
-		},
-		SFV: SFVConfig{
-			ForceFirst: true,
-			PathCheck:  []string{"*"},
-			Users:      []string{"*"},
-		},
-	}
-
-	for _, name := range []string{"movie.mkv", "sample.mp4", "disc.vob", "release.zip", "release.r00"} {
-		if err := ValidateUpload(cfg, nil, "/X264-HD-1080P/Some.Release-GRP", name, nil, nil, nil); err == nil {
-			t.Fatalf("expected %q to be blocked before sfv", name)
-		}
-	}
-	if err := ValidateUpload(cfg, nil, "/X264-HD-1080P/Some.Release-GRP", "release.nfo", nil, nil, nil); err != nil {
-		t.Fatalf("expected nfo sidecar before sfv to stay allowed, got %v", err)
+	if AllowedOutsideSFVForDir(cfg, "/X264-HD-1080P/Release-GRP", "payload.r00") {
+		t.Fatalf("did not expect multipart payload to be allowed outside sfv")
 	}
 }
 

@@ -65,6 +65,12 @@ var defaultAllowedOutsideSFVExts = map[string]bool{
 	"jpeg": true,
 	"png":  true,
 	"diz":  true,
+	"avi":  true,
+	"vob":  true,
+	"m2ts": true,
+	"mkv":  true,
+	"mp4":  true,
+	"zip":  true,
 	"m3u":  true,
 }
 
@@ -390,6 +396,7 @@ func ValidateUpload(cfg Config, uploadUser *user.User, dirPath, fileName string,
 	if sfvEntries != nil {
 		_, listedInSFV = sfvEntries[raceEntryKey(fileName)]
 	}
+	isPayload := IsRacePayloadFileForDir(cfg, dirPath, fileName) || listedInSFV
 	allowedOutsideSFV := AllowedOutsideSFVForDir(cfg, dirPath, fileName)
 	if UsesZipUploadMode(cfg, dirPath, fileName, existingNames) {
 		if strings.EqualFold(path.Base(strings.ReplaceAll(strings.TrimSpace(fileName), "\\", "/")), "file_id.diz") {
@@ -412,11 +419,11 @@ func ValidateUpload(cfg Config, uploadUser *user.User, dirPath, fileName string,
 		}
 	}
 
-	if !hasReadableSFV && !hasNamedSFV && cfg.SFV.ForceFirst && sfvFirstEnforced && !allowedOutsideSFV && !isSFV {
+	if !hasReadableSFV && !hasNamedSFV && cfg.SFV.ForceFirst && sfvFirstEnforced && isPayload && !allowedOutsideSFV && !isSFV {
 		return errors.New("zipscript: upload the .sfv before payload files in this release")
 	}
 
-	if hasReadableSFV && sfvFirstEnforced && !isSFV && !allowedOutsideSFV {
+	if hasReadableSFV && sfvFirstEnforced && !isSFV && isPayload && !allowedOutsideSFV {
 		if sfvRestrictFiles(cfg) && !listedInSFV {
 			return fmt.Errorf("zipscript: %q is not listed in the .sfv", fileName)
 		}
@@ -774,7 +781,7 @@ func IsRacePayloadFileForDir(cfg Config, dirPath, fileName string) bool {
 		return false
 	}
 	name := strings.ToLower(strings.TrimSpace(fileName))
-	if strings.HasSuffix(name, ".rar") || strings.HasSuffix(name, ".zip") || isSceneMultipartExt(normalizedExt(name)) {
+	if strings.HasSuffix(name, ".rar") || isSceneMultipartExt(normalizedExt(name)) {
 		return true
 	}
 	if UsesZip(cfg, dirPath) && IsZipPayloadName(name) {
