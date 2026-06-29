@@ -20,11 +20,12 @@ type releaseState struct {
 	HasSFV        bool
 	FirstRar      bool
 	Created       bool
-	Completed     bool
-	HalfwayDone   bool
-	CurrentLeader string
-	StatsLines    []string
-	LastSeen      time.Time
+	Completed       bool
+	HalfwayDone     bool
+	CurrentLeader   string
+	AnnouncedLeader map[string]bool
+	StatsLines      []string
+	LastSeen        time.Time
 }
 
 type pendingPretime struct {
@@ -146,6 +147,7 @@ func resetRaceOutputState(st *releaseState) {
 	st.Completed = false
 	st.HalfwayDone = false
 	st.CurrentLeader = ""
+	st.AnnouncedLeader = nil
 	st.StatsLines = nil
 }
 
@@ -831,9 +833,17 @@ func (p *AnnouncePlugin) OnEvent(evt *event.Event) ([]plugin.Output, error) {
 					outs = append(outs, plugin.Output{Type: "RACE", Text: p.render("RACE_RAR", joinVars, fmt.Sprintf("RACE: [%s] %s%s - %s joined the race at %s.", section, vars["subdir_prefix"], rel, evt.User, joinSpeed))})
 				}
 			}
-			// NEW LEADER: announce when the leading user changes (skip single-user races)
+			// NEW LEADER: announce when the leading user changes. Skip single-racer
+			// races (len(st.Users) <= 1), never announce the first leader (no prior
+			// leader to overtake), and announce each distinct leader AT MOST ONCE per
+			// release -- otherwise close parallel racing makes the byte-based leader
+			// flip-flop and re-announces "X takes the lead" on nearly every file.
 			if leader := vars["leader_name"]; leader != "" && leader != st.CurrentLeader && len(st.Users) > 1 {
-				if st.CurrentLeader != "" {
+				if st.CurrentLeader != "" && !st.AnnouncedLeader[leader] {
+					if st.AnnouncedLeader == nil {
+						st.AnnouncedLeader = map[string]bool{}
+					}
+					st.AnnouncedLeader[leader] = true
 					leftText := strings.TrimSpace(vars["t_filesleft"])
 					if leftText != "" {
 						leftText = " - " + leftText + " files left."

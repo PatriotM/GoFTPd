@@ -1648,12 +1648,15 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 
 				if fileSize == 0 {
 					if isZeroByteCriticalFile(fileName) {
-						bridge.DeleteFile(filePath)
-						log.Printf("[MASTER-ZS] Rejected 0-byte critical file %s; requesting re-upload", filePath)
-						fmt.Fprintf(s.Conn, "550 Empty %s rejected, please re-upload.\r\n", fileName)
-						return false
-					}
-					if zipscript.ShouldDeleteZeroByteForDir(s.Config.Zipscript, uploadDir) {
+						if !criticalUploadHasRealContent(bridge, filePath, fileName) {
+							bridge.DeleteFile(filePath)
+							log.Printf("[MASTER-ZS] Rejected 0-byte critical file %s; requesting re-upload", filePath)
+							fmt.Fprintf(s.Conn, "550 Empty %s rejected, please re-upload.\r\n", fileName)
+							return false
+						}
+						// Slave confirms the file has real content despite a 0 measured
+						// size; keep it and fall through to the normal SFV parse/track path.
+					} else if zipscript.ShouldDeleteZeroByteForDir(s.Config.Zipscript, uploadDir) {
 						bridge.DeleteFile(filePath)
 						log.Printf("[MASTER-ZS] Deleted 0-byte file: %s", filePath)
 						fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
@@ -1747,12 +1750,15 @@ func (s *Session) processCommand(cmd string, args []string, tlsConfig *tls.Confi
 
 				if fileSize == 0 {
 					if isZeroByteCriticalFile(fileName) {
-						bridge.DeleteFile(filePath)
-						log.Printf("[MASTER-ZS] Rejected 0-byte critical file %s; requesting re-upload", filePath)
-						fmt.Fprintf(s.Conn, "550 Empty %s rejected, please re-upload.\r\n", fileName)
-						return false
-					}
-					if zipscript.ShouldDeleteZeroByteForDir(s.Config.Zipscript, uploadDir) {
+						if !criticalUploadHasRealContent(bridge, filePath, fileName) {
+							bridge.DeleteFile(filePath)
+							log.Printf("[MASTER-ZS] Rejected 0-byte critical file %s; requesting re-upload", filePath)
+							fmt.Fprintf(s.Conn, "550 Empty %s rejected, please re-upload.\r\n", fileName)
+							return false
+						}
+						// Slave confirms the file has real content despite a 0 measured
+						// size; keep it and fall through to the normal SFV parse/track path.
+					} else if zipscript.ShouldDeleteZeroByteForDir(s.Config.Zipscript, uploadDir) {
 						bridge.DeleteFile(filePath)
 						log.Printf("[MASTER-ZS] Deleted 0-byte file: %s", filePath)
 						fmt.Fprintf(s.Conn, "226 Transfer complete.\r\n")
@@ -2517,7 +2523,8 @@ func emitRaceEndAfter(s *Session, dirPath string, users []VFSRaceUser, groups []
 }
 
 type releasePostHookQueue struct {
-	tasks chan func()
+	tasks   chan func()
+	pending int // in-flight enqueues, guarded by releasePostHookQueuesMu
 }
 
 var (
@@ -2534,6 +2541,12 @@ func enqueueReleasePostHook(dirPath string, task func()) {
 		key = "/"
 	}
 
+	// Reserve a slot under the lock (pending++) BEFORE sending outside the lock.
+	// The consumer only reaps the queue when pending==0 and the channel is empty,
+	// so it cannot delete the queue and exit between our lookup and our send --
+	// which would otherwise drop the task (and the COMPLETE announce it carries)
+	// into an orphaned channel. We send outside the lock so a full buffer can
+	// never stall the STOR hot path while holding the shared mutex.
 	releasePostHookQueuesMu.Lock()
 	q := releasePostHookQueues[key]
 	if q == nil {
@@ -2541,9 +2554,14 @@ func enqueueReleasePostHook(dirPath string, task func()) {
 		releasePostHookQueues[key] = q
 		go runReleasePostHookQueue(key, q)
 	}
+	q.pending++
 	releasePostHookQueuesMu.Unlock()
 
 	q.tasks <- task
+
+	releasePostHookQueuesMu.Lock()
+	q.pending--
+	releasePostHookQueuesMu.Unlock()
 }
 
 func runReleasePostHookQueue(key string, q *releasePostHookQueue) {
@@ -2565,7 +2583,7 @@ func runReleasePostHookQueue(key string, q *releasePostHookQueue) {
 			idle.Reset(30 * time.Second)
 		case <-idle.C:
 			releasePostHookQueuesMu.Lock()
-			if releasePostHookQueues[key] == q && len(q.tasks) == 0 {
+			if releasePostHookQueues[key] == q && len(q.tasks) == 0 && q.pending == 0 {
 				delete(releasePostHookQueues, key)
 				releasePostHookQueuesMu.Unlock()
 				return

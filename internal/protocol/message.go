@@ -227,6 +227,7 @@ type AsyncResponseSFVInfo struct {
 	SFVName  string     // name of the .sfv file
 	Entries  []SFVEntry // filename→CRC32 entries
 	Checksum uint32     // CRC32 of the SFV file itself
+	Size     int64      // byte size of the SFV file itself
 }
 
 func (ar *AsyncResponseSFVInfo) GetIndex() string { return ar.Index }

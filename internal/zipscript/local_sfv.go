@@ -121,6 +121,7 @@ func CreateLocalSFVMissingMarker(cfg Config, dirPath, fileName string) {
 
 func ParseLocalSFVEntryLine(line string) (string, uint32, bool) {
 	line = strings.TrimRight(line, "\r\n")
+	line = strings.TrimPrefix(line, "\ufeff")
 	if strings.TrimSpace(line) == "" {
 		return "", 0, false
 	}
@@ -154,6 +155,7 @@ func ParseLocalSFVEntryLine(line string) (string, uint32, bool) {
 	}
 
 	fileName := strings.TrimSpace(line[:sep])
+	fileName = strings.TrimPrefix(fileName, "\ufeff")
 	if fileName == "" {
 		return "", 0, false
 	}

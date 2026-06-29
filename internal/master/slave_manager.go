@@ -1727,6 +1727,7 @@ func (sm *SlaveManager) scheduleRemergeSFVParse(rs *RemoteSlave, sfvPath string)
 			sfvMap[strings.ToLower(path.Base(entry.FileName))] = entry.CRC32
 		}
 		sm.vfs.SetSFVDataWithChecksum(dirPath, sfvName, sfvResp.Checksum, sfvMap)
+		sm.vfs.HydrateRaceFile(sfvPath, "", "", sfvResp.Size, 0, sfvResp.Checksum)
 		sm.syncMissingMarkersAfterRemerge(rs, dirPath, sfvMap)
 		sm.syncStatusMarkersForRelease(dirPath)
 		sm.scheduleRemergeReleaseChecksumRefresh(rs, dirPath, sfvMap)

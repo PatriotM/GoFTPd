@@ -16,7 +16,78 @@ Performance
 - Per-file -MISSING marker cleanup now runs in the post-upload path instead of
   blocking the upload 226 response.
 
+Reliability
+- Fixed browsing getting slower the longer the daemon runs (fast after a restart,
+  then seconds to list a small folder). The slave stored a transfer entry for
+  every LISTEN/CONNECT data-channel setup but only removed it when a matching
+  receive/send actually ran; setups that were aborted, superseded, or never
+  connected (very common in FXP racing) leaked forever. That map is range-scanned
+  on every CWD into a race directory (for live-transfer stats), so the leak made
+  browsing progressively slower until a restart. Transfers are now reaped if a
+  receive/send never claims them within a grace window, and aborted-before-start
+  setups are dropped immediately.
+- Bounded the leech-while-upload "follow" in the slave send path. A download that
+  was following a still-running upload of the same file would spin at EOF every
+  100ms with no limit; if that upload stalled (but had not finished/aborted) the
+  send produced no bytes and the racing client hung until its own timeout, then
+  left the file missing -- a retry succeeded because the upload had completed by
+  then. The follow now gives up after a bounded idle period so the client fails
+  fast and retries cleanly, and each chunk write has a deadline so a receiver that
+  stops reading surfaces as an error instead of blocking the send.
+- Uploads now self-abort after an idle period with no new bytes (drftpd-style),
+  instead of only when an explicit min-speed is configured. A stalled source
+  previously held the upload slot open indefinitely (the poll-tick read deadline
+  just reset and spun); now the dead upload is released, which also frees any
+  leech-while-upload download that was following it and stops a stuck transfer
+  from holding the master's completion wait for the full 2h timeout.
+
+Sitebot
+- NEW LEADER is now announced at most once per distinct racer per release, only on
+  a real overtake, and never in a single-racer race. Close parallel racing made the
+  byte-based leader flip-flop, re-announcing "X takes the lead" on nearly every file.
+
 Data integrity
+- Replaced the in-progress `.sfv` fake VFS placeholder with a bridge-level
+  pending-upload overlay. FTP listings can still show a just-started `.sfv` so
+  cbftp queues it, and download routing can target the owning slave, but SFV
+  parsing/completion logic no longer treats that pending file as completed VFS
+  truth until the final transfer status lands.
+- Fixed SFV checks/COMPLETE missing for releases whose .sfv listed payloads with
+  a UTF-8 BOM or path prefix (for example `./disc/file.r00`). The master cached
+  those names differently from the zipscript lookup, so one expected file stayed
+  invisible even though it was present and checksum-valid.
+- Fixed a release that was never SFV-checked or announced complete even though the
+  .sfv was present on disk. The 0-byte critical-file reject deleted/blocked a good
+  .sfv whenever the master momentarily measured it as 0 bytes, so it was never
+  parsed or tracked. A critical 0-byte file is now only rejected if the SLAVE
+  confirms it has no real content (for a .sfv: the slave parse yields no entries);
+  a real .sfv is kept and parsed. Additionally, any file uploaded into a release
+  whose .sfv exists but was never cached now re-parses the .sfv from the slave
+  (self-healing), so a missed/raced SFV parse can no longer leave a release
+  silently un-checked.
+- Fixed a complete-on-disk file (commonly a .zip) listing at a SHORT size (e.g.
+  444k instead of 4.8M), which made cbftp race it short. A leech/duplicate
+  transfer could grow a weak VFS entry to a partial offset via UpdateFileTransferSize
+  while the authoritative completion for that entry never ran (the duplicate STOR
+  was rejected as "File exists"), leaving the size stuck. UpdateFileTransferSize
+  now refuses to touch an entry that already has a verified completion, and the
+  listing size-repair was widened from zero-size only to any unverified entry whose
+  VFS size is smaller than the race DB's verified size (restored from the DB).
+- Intermittently missing COMPLETE race-end announce. The announce only fired on the
+  hook of an SFV-listed file at the instant completeness flipped true; if that flapped
+  (a finishing parallel sibling still flagged "uploading"), the announce rode onto a
+  trailing non-SFV file (cover/.m3u/.nfo) that the old gate rejected, losing it. The
+  gate now fires on any file once the release is verified complete (dedup unchanged,
+  totals count only SFV files); a CRC-verified file counts present even if a stale
+  live-stat lists it uploading; and a post-hook-queue reap race that could drop the
+  task carrying the announce was closed.
+- Fixed a remerge purge race that deleted just-uploaded files (incl. the .sfv)
+  during a live race. Uploads are added to the VFS, but a concurrent remerge
+  marks files unseen at scan start and purges anything still unseen at the end;
+  a file that landed after the slave snapshot but before the purge was wrongly
+  removed. The final purge now spares files modified within the recency grace
+  window (matching the per-directory prune), and completed uploads are recorded
+  as seen. cbftp reports the race done, so the missing file was never re-sent.
 - Fixed the VFS recording a 0/short size for a file that is complete on disk. A
   remerge/re-scan reads the live on-disk size and AddFile would overwrite the
   correct completed size with it (short/0 if it caught a file mid-write); the
@@ -24,6 +95,12 @@ Data integrity
   etc. were clobbered. AddFile now refuses to let an evidence-free re-scan (no
   checksum/xfertime) shrink a completed size, for all file types. This was making
   a valid .sfv list as 0 bytes, which cbftp skips, so it never raced.
+- goftpd now generates the <release>.m3u from the SFV when an MP3 release
+  completes, matching glftpd/pzs-ng. It lists the SFV's MP3 files, is written to
+  the release's slave before the complete announce/hook fires, and is skipped if
+  the release already ships an .m3u. Toggle with audio.create_m3u (default true).
+  Without this the m3u only existed if a racer uploaded one, so outbound races
+  and link scripts could complete before it arrived.
 - passwd, etc/group, and per-group files are now written atomically (temp file
   + rename); group saves are mutex-guarded.
 - Fixed truncated .zip volumes counting toward "complete" on master/slave. A zip

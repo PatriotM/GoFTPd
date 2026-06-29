@@ -237,6 +237,14 @@ func (vfs *VirtualFileSystem) UpdateFileTransferSize(path string, sizeBytes int6
 	if file == nil || file.IsDir {
 		return false
 	}
+	// Never let an in-flight transfer's running size touch an entry that already
+	// has a verified completion (real upload sets XferTime+Checksum). Otherwise a
+	// leech download that follows a file and stops at a partial offset can grow a
+	// fresh/weak entry to that partial and leave it stuck there (e.g. a .zip listing
+	// 444k instead of its real size), which cbftp then races short.
+	if file.XferTime > 0 && file.Checksum != 0 {
+		return false
+	}
 	if sizeBytes <= file.Size {
 		return false
 	}
@@ -444,6 +452,7 @@ func (vfs *VirtualFileSystem) resetProtectedDirsLocked() {
 func (vfs *VirtualFileSystem) PurgeUnseen(slaveName string) {
 	vfs.mu.Lock()
 	defer vfs.mu.Unlock()
+	nowUnix := time.Now().Unix()
 	changed := false
 	for path, file := range vfs.files {
 		if vfs.protectedDirs[path] {
@@ -452,6 +461,13 @@ func (vfs *VirtualFileSystem) PurgeUnseen(slaveName string) {
 			continue
 		}
 		if file.SlaveName == slaveName && !file.Seen {
+			// Don't purge a file that was just uploaded: an FXP upload can land
+			// after the slave snapshot but before this purge, so it is still
+			// marked unseen yet legitimately present (incl. the .sfv). If it is
+			// genuinely gone, the next remerge past the grace window reconciles it.
+			if file.LastModified > 0 && nowUnix-file.LastModified < remergePurgeRecencyGraceSec {
+				continue
+			}
 			changed = vfs.deletePathLocked(path) || changed
 		}
 	}
@@ -467,6 +483,7 @@ func (vfs *VirtualFileSystem) PurgeUnseenSubtree(slaveName, rootPath string) {
 
 	rootPath = cleanVFSPath(rootPath)
 	vfs.resetProtectedDirsLocked()
+	nowUnix := time.Now().Unix()
 	changed := false
 	for _, path := range vfs.collectSubtreePathsLocked(rootPath) {
 		if vfs.protectedDirs[path] {
@@ -474,6 +491,11 @@ func (vfs *VirtualFileSystem) PurgeUnseenSubtree(slaveName, rootPath string) {
 		}
 		file := vfs.files[path]
 		if file != nil && file.SlaveName == slaveName && !file.Seen {
+			// Spare a just-uploaded file that landed after the slave snapshot but
+			// before this purge (still unseen, but present); reconciled next pass.
+			if file.LastModified > 0 && nowUnix-file.LastModified < remergePurgeRecencyGraceSec {
+				continue
+			}
 			changed = vfs.deletePathLocked(path) || changed
 		}
 	}
@@ -1758,8 +1780,15 @@ func (vfs *VirtualFileSystem) GetZipRaceStatsFiltered(dirPath string, excludeKey
 }
 
 func raceFileKey(name string) string {
-	name = strings.TrimSpace(filepath.ToSlash(name))
-	name = strings.TrimPrefix(name, "./")
+	name = strings.TrimSpace(filepath.ToSlash(strings.ReplaceAll(name, "\\", "/")))
+	name = strings.TrimPrefix(name, "\ufeff")
+	for strings.HasPrefix(name, "./") {
+		name = strings.TrimPrefix(name, "./")
+	}
+	if idx := strings.LastIndex(name, "/"); idx >= 0 {
+		name = name[idx+1:]
+	}
+	name = strings.TrimPrefix(strings.TrimSpace(name), "\ufeff")
 	return strings.ToLower(name)
 }
 
@@ -1958,17 +1987,21 @@ func (vfs *VirtualFileSystem) computeRaceStateFilteredLocked(dirPath string, exc
 	}
 	for sfvFile, expectedCRC := range meta.SFVEntries {
 		key := raceFileKey(sfvFile)
-		if excludeKeys[key] {
-			continue
-		}
 		f := presentFiles[key]
 		if f == nil {
 			continue
 		}
 		checksumVerified := expectedCRC == 0 || (f.Checksum != 0 && f.Checksum == expectedCRC)
 		if !checksumVerified {
+			// Not yet CRC-verified: skip an in-progress / unverifiable file, whether
+			// or not a live-stat lists it as uploading.
 			continue
 		}
+		// CRC-verified means the file has fully completed, so count it even if a
+		// lagging live-stat still lists it in excludeKeys ("uploading"). Otherwise
+		// completeness flaps false at the instant the last file lands -- which would
+		// lose the COMPLETE announce -- and a duplicate re-upload of an already-good
+		// file would wrongly un-complete the release.
 		cache.Present++
 		cache.TotalBytes += f.Size
 

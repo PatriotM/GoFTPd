@@ -388,12 +388,112 @@ func isZeroByteCriticalFile(fileName string) bool {
 	return strings.HasSuffix(l, ".sfv") || strings.HasSuffix(l, ".nfo") || strings.HasSuffix(l, ".diz")
 }
 
+// criticalUploadHasRealContent reports whether a critical metadata file the master
+// measured as 0 bytes actually has usable content on the slave. The passthrough
+// transfer size can momentarily read 0 for a file that is complete on disk; if we
+// delete it then, a good .sfv is dropped and the release is never SFV-checked or
+// announced complete. For an .sfv we ask the slave to parse it (authoritative,
+// reads the real file) -- if it yields entries, the file is real and must be kept.
+func firstSFVNameInDir(bridge MasterBridge, dirPath string) string {
+	if bridge == nil {
+		return ""
+	}
+	for _, e := range bridge.ListDir(dirPath) {
+		if e.IsDir || e.IsSymlink {
+			continue
+		}
+		if strings.EqualFold(path.Ext(e.Name), ".sfv") {
+			return e.Name
+		}
+	}
+	return ""
+}
+
+func criticalUploadHasRealContent(bridge MasterBridge, filePath, fileName string) bool {
+	if bridge == nil {
+		return false
+	}
+	if strings.HasSuffix(strings.ToLower(strings.TrimSpace(fileName)), ".sfv") {
+		if info, err := bridge.GetSFVInfo(filePath); err == nil && len(info.Entries) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func ensureSFVDataAvailable(cfg *Config, bridge MasterBridge, dirPath string) map[string]uint32 {
+	if bridge == nil {
+		return nil
+	}
+	if sfvEntries := bridge.GetSFVData(dirPath); sfvEntries != nil {
+		return sfvEntries
+	}
+	sfvName := firstSFVNameInDir(bridge, dirPath)
+	if sfvName == "" {
+		return nil
+	}
+	info, err := bridge.GetSFVInfo(path.Join(dirPath, sfvName))
+	if err != nil || len(info.Entries) == 0 {
+		return nil
+	}
+	log.Printf("[MASTER-ZS] Recovered uncached SFV %s: %d entries", sfvName, len(info.Entries))
+	bridge.CacheSFV(dirPath, sfvName, info)
+	verifyExistingPayloadsAfterSFVUpload(cfg, bridge, dirPath)
+	return bridge.GetSFVData(dirPath)
+}
+
+// maybeGenerateReleaseM3U creates an .m3u playlist from the SFV for a completed
+// MP3 release (pzs-ng create_m3u behaviour). goftpd does not otherwise produce
+// an m3u, so without this an outbound race / link script can complete before a
+// racer uploads one. No-op when disabled, the section is not MP3, there is no
+// SFV, or the release already has an .m3u.
+func maybeGenerateReleaseM3U(s *Session, bridge MasterBridge, dirPath string) {
+	if s == nil || s.Config == nil || bridge == nil {
+		return
+	}
+	cfg := s.Config.Zipscript
+	if !zipscript.CreateM3UEnabled(cfg, dirPath) {
+		return
+	}
+
+	entries := bridge.ListDir(dirPath)
+	names := make([]string, 0, len(entries))
+	sfvName := ""
+	for _, e := range entries {
+		if e.IsDir || e.IsSymlink {
+			continue
+		}
+		names = append(names, e.Name)
+		if sfvName == "" && strings.EqualFold(path.Ext(e.Name), ".sfv") {
+			sfvName = e.Name
+		}
+	}
+	if sfvName == "" {
+		return
+	}
+
+	m3uName, body, ok := zipscript.BuildReleaseM3U(cfg, sfvName, names, bridge.GetSFVData(dirPath))
+	if !ok {
+		return
+	}
+	m3uPath := path.Join(dirPath, m3uName)
+	if err := bridge.WriteFile(m3uPath, body); err != nil {
+		if s.Config.Debug {
+			log.Printf("[MASTER-ZS] m3u generation failed for %s: %v", dirPath, err)
+		}
+		return
+	}
+	if s.Config.Debug {
+		log.Printf("[MASTER-ZS] generated %s for %s", m3uName, dirPath)
+	}
+}
+
 func handleMasterUploadSFVStatusAndCleanup(s *Session, bridge MasterBridge, uploadDir, filePath, fileName string, checksum uint32, fileSize int64) bool {
 	if s == nil || s.Config == nil || bridge == nil || strings.HasSuffix(strings.ToLower(fileName), ".sfv") {
 		return false
 	}
 
-	sfvEntries := bridge.GetSFVData(uploadDir)
+	sfvEntries := ensureSFVDataAvailable(s.Config, bridge, uploadDir)
 	expectedCRC, exists := zipscript.CachedExpectedCRC(sfvEntries, fileName)
 	if !exists {
 		zipscript.WriteUploadNoSFVEntryStatus(s.Conn, sfvEntries, fileName)
@@ -1063,6 +1163,12 @@ func buildReleaseUploadPipelineState(s *Session, bridge MasterBridge, in release
 		}
 	}
 	state.SFVEntries = bridge.GetSFVData(in.UploadDir)
+	if state.SFVEntries == nil && !state.SFVUpload {
+		// Self-heal: a .sfv is present on the slave but was never cached (or the
+		// cache was invalidated by weak VFS metadata). Parse it now from the slave
+		// so the release is tracked, CRC-checked, and eligible for COMPLETE.
+		state.SFVEntries = ensureSFVDataAvailable(s.Config, bridge, in.UploadDir)
+	}
 	if state.SFVEntries != nil {
 		syncMasterSFVMissingMarkers(s.Config, bridge, in.UploadDir)
 		bridge.SyncStatusMarkersForPath(in.UploadDir, true)
@@ -1188,10 +1294,21 @@ func emitReleaseUploadEventAndRace(s *Session, bridge MasterBridge, in releaseUp
 	if state.SFVEntries == nil || !state.RaceComplete {
 		return
 	}
-	if state.SFVUpload || zipscript.CanTriggerRaceEndForDir(s.Config.Zipscript, in.UploadDir, state.SFVEntries, in.FileName) {
+	// RaceComplete is already true here, so the release is verified complete. Emit
+	// the COMPLETE on ANY file's hook in an eligible race dir -- not only when the
+	// triggering file is the SFV or an SFV-listed file. Otherwise, if completeness
+	// flipped true on a file whose hook computed it false (a transient flap), the
+	// announce rode on a later trailing non-SFV file (cover/.m3u/.nfo) that the old
+	// SFV-membership gate rejected, losing the COMPLETE for good. markRaceCompleteOnce
+	// still dedups, and total/totalBytes count only SFV files so trailing files
+	// don't change the dedup key.
+	if state.SFVUpload || zipscript.RaceEndDirEligible(s.Config.Zipscript, in.UploadDir) {
 		if err := bridge.SyncReleaseRaceStats(in.UploadDir); err != nil && s.Config.Debug {
 			log.Printf("[MASTER-ZS] release race sync failed for %s: %v", in.UploadDir, err)
 		}
+		// Generate the MP3 .m3u from the SFV before the complete announce/hook fires,
+		// so outbound races and link scripts always find it (like glftpd/pzs-ng).
+		maybeGenerateReleaseM3U(s, bridge, in.UploadDir)
 		if state.AudioFields == nil {
 			emitOrPrimeReleaseAudioInfo(s, bridge, in.UploadDir)
 		}
